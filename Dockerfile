@@ -1,7 +1,7 @@
 # ================================
 # 阶段一：构建前端
 # ================================
-FROM node:18-slim AS frontend-builder
+FROM docker.m.daocloud.io/library/node:18-slim AS frontend-builder
 
 # 使用国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
@@ -31,7 +31,7 @@ RUN npx vite build
 # ================================
 # 阶段二：构建最终镜像
 # ================================
-FROM python:3.10-slim
+FROM docker.m.daocloud.io/library/python:3.10-slim
 
 WORKDIR /app
 
@@ -53,7 +53,7 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 
 # 先仅复制依赖清单以最大化层缓存；--extra prod 额外安装 gunicorn
 COPY backend/pyproject.toml backend/uv.lock ./backend/
-RUN cd backend && uv sync --locked --extra prod --python 3.10
+RUN cd backend && uv sync --extra prod --python 3.10
 
 # 将 venv 加入 PATH，后续 uvx / gunicorn / uvicorn 均使用它
 ENV PATH="/opt/venv/bin:$PATH"

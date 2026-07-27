@@ -1,5 +1,5 @@
 [project]
-name = "tripstar-backend"
+name = "backend"
 version = "0.1.0"
 description = "游伴 AI 旅行助手后端"
 requires-python = ">=3.10"
