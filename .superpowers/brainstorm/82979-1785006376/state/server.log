@@ -1,3 +1,0 @@
-{"type":"server-started","port":60086,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:60086/?key=2787afc4ba3d70cb7487aeefef18cdf0fbd3f838050a603cf364a21f980575bb","screen_dir":"/Users/liangjiaquan/gitReposition/TripStar/.superpowers/brainstorm/82979-1785006376/content","state_dir":"/Users/liangjiaquan/gitReposition/TripStar/.superpowers/brainstorm/82979-1785006376/state","idle_timeout_ms":14400000}
-{"type":"screen-added","file":"/Users/liangjiaquan/gitReposition/TripStar/.superpowers/brainstorm/82979-1785006376/content/weather-day-cards.html"}
-{"type":"server-stopped","reason":"idle timeout"}

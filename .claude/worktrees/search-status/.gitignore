@@ -1,9 +1,0 @@
-data/
-.env
-.omc/
-backend/.omc/
-frontend/.omc/
-backend/runtime_settings.json
-__pycache__/
-node_modules/
-frontend/dist/
