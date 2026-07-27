@@ -7,3 +7,14 @@ backend/runtime_settings.json
 __pycache__/
 node_modules/
 frontend/dist/
+data
+design
+docs
+output
+.playwright-cli
+.playwright-mcp
+.jbeval
+.codegraph
+.claude
+.superpowers
+.idea
