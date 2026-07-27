@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>游伴 · 方向 B —— 一笔成伴</title>
+
+<!--
+  ============================================================================
+  方向 B · 单线融合意象 · 设计推敲记录
+  参照标杆：Airbnb「Bélo」(2014, DesignStudio) —— 一笔连续有机线条，把「头/人 ·
+  地点 · 心 · 字母A」四义融进一个不可拆分的符号；温暖珊瑚单色。
+  迁移的是「方法」而非「形」：用一条连续圆润的线，把「两个旅伴 + 一条路」熔成一个符号。
+  硬红线：不得画成心形、不得是 Bélo 变体；熔出的符号第一眼要读出「二」与「同行」。
+
+  ── 三种「一条线怎么走」的小样，按 16px 可辨识 / 单线流畅 / 二人一眼可读 择优 ──
+
+  小样①「双拱之路」(选中→深化)
+     起笔：左侧路端(圆头) → 绕行：爬升绽成左旅伴(圆拱)，落到中间浅谷「依偎」，
+     再升成右旅伴(略高圆拱) → 收笔：向右延伸成路(圆头)。
+     同一条线：低处读「路」，两次隆起读「人」，一线双义 = 最正统的 Bélo 手法。
+     两拱不等高 → 两个「个体」而非克隆。16px 退化成「路上两点」仍读得出「二 + 同行」。
+
+  小样②「双水滴依偎」(弃)
+     两枚水滴顶部相依、尾部下汇成路。弃因：顶部相依极易读成「心形」(踩红线)，
+     且「路」沦为负形，在 16px 会彻底消失。
+
+  小样③「气球连线」(弃)
+     路作地平线，两处升起细线各绽一个闭环(头)。弃因：闭环在 16px 糊死填实，
+     「气球」联想偏离「人」；虽有 Bélo 的负空间魔法，但太脆、不耐缩。
+
+  ── 深化决策 ──
+  选①。渲染为「单条粗描边路径」(stroke 72 / 512 ≈ 14%，round cap+join)以还原 Bélo
+  的「一笔画成」手绘温度；两拱顶点与谷底皆用水平切线 → 圆润饱满；右拱比左拱高 26 单位
+  → 两个个体；左右路尾圆头外延 → 明确「路 · 旅程」。仅珊瑚红 #D4625E 单色担纲。
+  form 来自内容：线在低处是他们脚下的「路」，隆起两次成「两个旅伴」，谷底浅而不断 =
+  「依偎同行」——路与人本是同一笔，不可拆分。
+  ============================================================================
+-->
+
+<style>
+  :root{
+    /* 品牌色板（仅用 spec 内实测色，禁止新色） */
+    --coral:   #D4625E;   /* 珊瑚红 · 主色，担纲 */
+    --caramel: #C17F59;   /* 焦糖棕 */
+    --peach:   #E8A87C;   /* 桃橙 */
+    --amber:   #E8B059;   /* 琥珀金 */
+    --sage:    #8FB996;   /* 鼠尾草绿 · 慎用 */
+    --cream:   #FAF7F2;   /* 奶油底 */
+    --milk:    #fffcf5;   /* 米白 */
+    --ink:     #3D3229;   /* 深棕 · 文字 */
+    --ink2:    #5C4B3E;   /* 次深棕 */
+    --hair:    rgba(92,75,62,.14);   /* 发丝分隔线（棕系低透明，非新色） */
+    --shadow:  rgba(61,50,41,.10);
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; }
+  body{
+    background:
+      radial-gradient(1200px 520px at 50% -8%, rgba(232,168,124,.16), transparent 60%),
+      var(--cream);
+    color:var(--ink);
+    font-family:"Inter","PingFang SC","Noto Sans SC","Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    line-height:1.55;
+    padding:64px 40px 88px;
+  }
+  .wrap{ max-width:1180px; margin:0 auto; }
+
+  /* ── 页头 ── */
+  .kicker{
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+    font-size:12px; letter-spacing:.28em; text-transform:uppercase;
+    color:var(--caramel); font-weight:600; margin:0 0 18px;
+  }
+  .kicker .dot{ color:var(--coral); }
+  h1{
+    font-family:Georgia,"Songti SC","Noto Serif SC",serif;
+    font-weight:600; font-size:52px; line-height:1.08; letter-spacing:.01em;
+    margin:0 0 14px; color:var(--ink);
+  }
+  h1 em{ font-style:normal; color:var(--coral); }
+  .lede{
+    font-size:16.5px; color:var(--ink2); max-width:720px; margin:0;
+  }
+  .lede b{ color:var(--ink); font-weight:600; }
+  .rule{ height:1px; background:var(--hair); border:0; margin:44px 0; }
+
+  /* ── 区块通用 ── */
+  section{ margin:0 0 52px; }
+  .sec-label{
+    font-family:"SF Mono",ui-monospace,Menlo,monospace;
+    font-size:11.5px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--caramel); margin:0 0 20px; display:flex; align-items:center; gap:12px;
+  }
+  .sec-label::after{ content:""; flex:1; height:1px; background:var(--hair); }
+
+  /* ── Hero ── */
+  .hero{
+    display:grid; grid-template-columns:1.05fr .95fr; gap:34px; align-items:stretch;
+  }
+  .card{
+    background:var(--milk); border:1px solid var(--hair); border-radius:22px;
+    box-shadow:0 18px 44px -28px var(--shadow);
+  }
+  .hero-main{
+    display:flex; align-items:center; justify-content:center; padding:40px;
+    position:relative; overflow:hidden;
+    /* 透明底提示：柔和棋盘 */
+    background-image:
+      linear-gradient(45deg, rgba(92,75,62,.045) 25%, transparent 25%, transparent 75%, rgba(92,75,62,.045) 75%),
+      linear-gradient(45deg, rgba(92,75,62,.045) 25%, transparent 25%, transparent 75%, rgba(92,75,62,.045) 75%);
+    background-size:26px 26px; background-position:0 0,13px 13px;
+    background-color:var(--milk);
+  }
+  .hero-main .badge{
+    position:absolute; top:16px; left:18px;
+    font-family:"SF Mono",ui-monospace,Menlo,monospace; font-size:11px;
+    letter-spacing:.14em; color:var(--ink2); background:rgba(255,252,245,.86);
+    border:1px solid var(--hair); padding:4px 10px; border-radius:999px;
+  }
+  .icon{ color:var(--coral); display:block; }
+  .icon svg{ display:block; width:100%; height:100%; }
+  .hero-main .icon{ width:340px; height:340px; }
+
+  .hero-side{ padding:36px 34px; display:flex; flex-direction:column; gap:20px; justify-content:center; }
+  .hero-side h3{
+    font-family:Georgia,"Songti SC",serif; font-weight:600; font-size:23px; margin:0; color:var(--ink);
+  }
+  .hero-side p{ margin:0; font-size:15px; color:var(--ink2); }
+  .stroke-story{
+    display:flex; gap:14px; align-items:flex-start; font-size:14.5px; color:var(--ink2);
+  }
+  .stroke-story .n{
+    flex:none; width:26px; height:26px; border-radius:50%;
+    background:rgba(212,98,94,.12); color:var(--coral); font-weight:700;
+    display:flex; align-items:center; justify-content:center; font-size:13px;
+    font-family:"SF Mono",ui-monospace,Menlo,monospace;
+  }
+  .swatch-row{ display:flex; gap:10px; margin-top:4px; }
+  .swatch{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink2);
+    font-family:"SF Mono",ui-monospace,Menlo,monospace; }
+  .chip{ width:16px; height:16px; border-radius:5px; border:1px solid var(--hair); }
+
+  /* ── App 形态 + 双底测试 ── */
+  .grid3{ display:grid; grid-template-columns:repeat(3,1fr); gap:26px; }
+  .tile-wrap{ display:flex; flex-direction:column; align-items:center; gap:16px;
+    background:var(--milk); border:1px solid var(--hair); border-radius:22px; padding:34px 26px;
+    box-shadow:0 18px 44px -30px var(--shadow); }
+  .caption{ font-size:13px; color:var(--ink2); text-align:center; }
+  .caption b{ color:var(--ink); font-weight:600; display:block; margin-bottom:2px; font-size:13.5px; }
+
+  /* iOS 圆角矩形 App 图标 */
+  .app-tile{
+    width:196px; height:196px; border-radius:45px; /* ≈22.9% 超椭圆近似 */
+    background:var(--coral);
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 22px 40px -20px rgba(212,98,94,.55), inset 0 1px 0 rgba(255,255,255,.22);
+  }
+  .app-tile .icon{ width:132px; height:132px; color:var(--milk); } /* 珊瑚底 + 奶油标 */
+
+  /* favicon 双底：白底 / 奶油底 */
+  .bg-test{ width:196px; height:196px; border-radius:24px; display:flex; align-items:center; justify-content:center;
+    border:1px solid var(--hair); }
+  .bg-white{ background:#ffffff; }
+  .bg-cream{ background:var(--cream); }
+  .bg-test .icon{ width:120px; height:120px; }
+
+  /* ── 缩放测试 64/32/16 ── */
+  .scale-strip{ display:flex; align-items:flex-end; gap:46px; flex-wrap:wrap;
+    background:var(--milk); border:1px solid var(--hair); border-radius:22px; padding:38px 44px;
+    box-shadow:0 18px 44px -30px var(--shadow); }
+  .scale-item{ display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .scale-item .icon{ color:var(--coral); }
+  .s64 .icon{ width:64px; height:64px; }
+  .s32 .icon{ width:32px; height:32px; }
+  .s16 .icon{ width:16px; height:16px; }
+  .scale-item .tag{ font-family:"SF Mono",ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--ink2); letter-spacing:.08em; }
+  .scale-note{ margin-left:auto; max-width:300px; font-size:13.5px; color:var(--ink2); align-self:center; }
+  .scale-note b{ color:var(--ink); font-weight:600; }
+
+  /* ── 浏览器标签页模拟 ── */
+  .tabs-demo{ display:grid; grid-template-columns:1fr 1fr; gap:26px; }
+  .browser{ border:1px solid var(--hair); border-radius:16px; overflow:hidden;
+    box-shadow:0 18px 44px -30px var(--shadow); }
+  .browser.light .chrome{ background:#f1ece4; }
+  .browser.cream .chrome{ background:#efe7db; }
+  .chrome{ padding:12px 14px 0; }
+  .tabbar{ display:flex; gap:8px; align-items:flex-end; }
+  .tab{ display:flex; align-items:center; gap:8px; padding:9px 14px; border-radius:11px 11px 0 0;
+    font-size:13px; color:var(--ink2); max-width:200px; }
+  .tab.active{ color:var(--ink); font-weight:600; box-shadow:0 -1px 0 var(--hair); }
+  .browser.light .tab.active{ background:#ffffff; }
+  .browser.cream .tab.active{ background:var(--cream); }
+  .tab.idle{ opacity:.55; }
+  .tab .fav{ width:16px; height:16px; color:var(--coral); flex:none; }
+  .tab .fav svg{ display:block; width:100%; height:100%; }
+  .tab .x{ margin-left:6px; opacity:.5; font-size:14px; line-height:1; }
+  .viewport{ height:104px; display:flex; align-items:center; justify-content:center; }
+  .browser.light .viewport{ background:#ffffff; }
+  .browser.cream .viewport{ background:var(--cream); }
+  .viewport span{ font-size:12.5px; color:rgba(92,75,62,.5);
+    font-family:"SF Mono",ui-monospace,Menlo,monospace; letter-spacing:.12em; }
+  .browser-cap{ text-align:center; font-size:12.5px; color:var(--ink2); margin-top:12px;
+    font-family:"SF Mono",ui-monospace,Menlo,monospace; letter-spacing:.06em; }
+
+  /* ── 页脚设计说明 ── */
+  .note{ margin-top:8px; background:linear-gradient(180deg, rgba(212,98,94,.05), rgba(255,252,245,0));
+    border:1px solid var(--hair); border-left:3px solid var(--coral); border-radius:14px;
+    padding:26px 30px; display:flex; flex-direction:column; gap:12px; }
+  .note .row{ display:flex; gap:16px; align-items:baseline; font-size:15px; }
+  .note .k{ flex:none; width:132px; font-family:"SF Mono",ui-monospace,Menlo,monospace;
+    font-size:12px; letter-spacing:.12em; color:var(--coral); text-transform:uppercase; padding-top:2px; }
+  .note .v{ color:var(--ink); }
+  .note .v b{ color:var(--coral); font-weight:600; }
+  .foot{ margin-top:40px; font-size:12px; color:rgba(92,75,62,.55);
+    font-family:"SF Mono",ui-monospace,Menlo,monospace; letter-spacing:.1em; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 页头 -->
+  <p class="kicker">游伴 YOUBAN<span class="dot"> · </span>APP ICON EXPLORATION<span class="dot"> · </span>DIRECTION B</p>
+  <h1>方向 B —— <em>一笔成伴</em></h1>
+  <p class="lede">
+    迁移 Airbnb「Bélo」的方法而非形：用<b>一条连续、圆润、有机的线</b>，把
+    <b>两个旅伴</b>与<b>一条路</b>熔成一个不可拆分的符号。线在低处是脚下的路，
+    隆起两次成两个同行的人——路与人，本是同一笔。
+  </p>
+
+  <hr class="rule" />
+
+  <!-- 1 · 主图标 -->
+  <section>
+    <p class="sec-label">01 · 主图标 512</p>
+    <div class="hero">
+      <div class="card hero-main">
+        <span class="badge">viewBox 0 0 512 512 · 透明底</span>
+        <!-- 主符号：单条粗描边路径，一笔连续 -->
+        <div class="icon">
+          <svg viewBox="0 0 512 512" role="img" aria-label="游伴图标：一条线，两个旅伴与一条路">
+            <path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318"
+                  fill="none" stroke="currentColor" stroke-width="72"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="card hero-side">
+        <h3>线怎么走</h3>
+        <div class="stroke-story"><span class="n">1</span><div><b style="color:var(--ink)">起笔</b>　左下角落笔，先是一段脚下的路。</div></div>
+        <div class="stroke-story"><span class="n">2</span><div><b style="color:var(--ink)">绕行</b>　升起成左旅伴，落进中间浅谷相依，再升成略高的右旅伴（两人不等高＝两个个体）。</div></div>
+        <div class="stroke-story"><span class="n">3</span><div><b style="color:var(--ink)">收笔</b>　向右滑出、圆头收尾——路，继续往前。</div></div>
+        <p style="margin-top:6px">全程<b style="color:var(--ink)">不提笔</b>：谷底浅而不断，两人依偎、与路同源。</p>
+        <div class="swatch-row">
+          <span class="swatch"><span class="chip" style="background:var(--coral)"></span>#D4625E 珊瑚 · 单色担纲</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · App 形态 + 双底 favicon -->
+  <section>
+    <p class="sec-label">02 · App 形态 &amp; 白/奶油双底成立</p>
+    <div class="grid3">
+      <div class="tile-wrap">
+        <div class="app-tile">
+          <div class="icon">
+            <svg viewBox="0 0 512 512" role="img" aria-label="游伴 App 图标"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="caption"><b>iOS App 图标</b>珊瑚底 · 奶油标 · 圆角 22.9%</div>
+      </div>
+
+      <div class="tile-wrap">
+        <div class="bg-test bg-white">
+          <div class="icon" style="color:var(--coral)">
+            <svg viewBox="0 0 512 512" role="img" aria-label="游伴 favicon 白底"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="caption"><b>白底</b>浏览器浅色主题</div>
+      </div>
+
+      <div class="tile-wrap">
+        <div class="bg-test bg-cream">
+          <div class="icon" style="color:var(--coral)">
+            <svg viewBox="0 0 512 512" role="img" aria-label="游伴 favicon 奶油底"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="caption"><b>奶油底 #FAF7F2</b>浏览器暖色主题</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · 缩放测试 -->
+  <section>
+    <p class="sec-label">03 · 缩放测试 64 / 32 / 16</p>
+    <div class="scale-strip">
+      <div class="scale-item s64">
+        <div class="icon"><svg viewBox="0 0 512 512" aria-label="64px"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <span class="tag">64 px</span>
+      </div>
+      <div class="scale-item s32">
+        <div class="icon"><svg viewBox="0 0 512 512" aria-label="32px"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <span class="tag">32 px</span>
+      </div>
+      <div class="scale-item s16">
+        <div class="icon"><svg viewBox="0 0 512 512" aria-label="16px"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <span class="tag">16 px · favicon</span>
+      </div>
+      <p class="scale-note">粗描边 72/512 ≈ 14%，16px 下仍是 <b>2.25px 实线</b>。细节退化时，两拱缩成<b>路上两点</b>——「二 + 同行」不丢。</p>
+    </div>
+  </section>
+
+  <!-- 4 · 标签页模拟 -->
+  <section>
+    <p class="sec-label">04 · 浏览器标签页</p>
+    <div class="tabs-demo">
+      <div>
+        <div class="browser light">
+          <div class="chrome">
+            <div class="tabbar">
+              <div class="tab active">
+                <span class="fav"><svg viewBox="0 0 512 512" aria-label="游伴 favicon"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                游伴 · 和 AI 聊出行程
+                <span class="x">×</span>
+              </div>
+              <div class="tab idle">其它网站</div>
+            </div>
+          </div>
+          <div class="viewport"><span>白底 · 浅色主题</span></div>
+        </div>
+        <p class="browser-cap">白底 tab</p>
+      </div>
+
+      <div>
+        <div class="browser cream">
+          <div class="chrome">
+            <div class="tabbar">
+              <div class="tab active">
+                <span class="fav"><svg viewBox="0 0 512 512" aria-label="游伴 favicon"><path d="M95 350 C135 306 133 184 181 182 C217 181 229 272 245 272 C269 272 285 156 315 156 C365 156 395 286 417 318" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                游伴 · 和 AI 聊出行程
+                <span class="x">×</span>
+              </div>
+              <div class="tab idle">其它网站</div>
+            </div>
+          </div>
+          <div class="viewport"><span>奶油底 · 暖色主题</span></div>
+        </div>
+        <p class="browser-cap">奶油底 tab</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · 设计说明 -->
+  <section>
+    <p class="sec-label">05 · 设计说明</p>
+    <div class="note">
+      <div class="row"><span class="k">构成逻辑</span><span class="v">一条<b>不提笔的连续线</b>：低处是路，两次隆起成两个旅伴，谷底浅而不断＝依偎同行——路与人是同一笔，不可拆分。</span></div>
+      <div class="row"><span class="k">form 来源</span><span class="v">form 直接长自「<b>两个旅伴 + 一条路</b>」：线走完，路与两个人同时显形；两拱不等高＝两个个体，而非一个人、也非克隆。</span></div>
+      <div class="row"><span class="k">方法参照</span><span class="v">迁移 Airbnb「Bélo」的<b>一线多义 · 单色自信 · 有机温度</b>，非抄形；刻意避开心形与 Bélo 变体。</span></div>
+    </div>
+  </section>
+
+  <p class="foot">游伴 YOUBAN · DIRECTION B · 珊瑚单色 #D4625E · 仅用 spec 品牌色板 · inline SVG 无外部依赖</p>
+
+</div>
+</body>
+</html>

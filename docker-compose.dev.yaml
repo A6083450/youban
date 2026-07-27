@@ -1,0 +1,32 @@
+services:
+  trip-planner-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: helloagents-trip-planner-dev
+    ports:
+      - "7860:7860"   # 后端 API
+      - "5173:5173"   # 前端 Vite HMR
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-gpt-4}
+      - LLM_TIMEOUT=600
+      - VITE_AMAP_WEB_KEY=${VITE_AMAP_WEB_KEY:-your_amap_web_api_key_here}
+      - VITE_AMAP_WEB_JS_KEY=${VITE_AMAP_WEB_JS_KEY:-your_amap_web_js_api_key_here}
+      - DATA_DIR=/app/data
+      - HOST=0.0.0.0
+      - PORT=7860
+      - LOG_LEVEL=INFO
+    volumes:
+      # 挂载本地代码，支持热加载
+      - ./backend:/app/backend
+      - ./frontend/src:/app/frontend/src
+      - ./frontend/public:/app/frontend/public
+      - ./frontend/index.html:/app/frontend/index.html
+      - ./frontend/vite.config.ts:/app/frontend/vite.config.ts
+      - ./frontend/package.json:/app/frontend/package.json
+      - ./frontend/tsconfig.json:/app/frontend/tsconfig.json
+      - ./frontend/tsconfig.node.json:/app/frontend/tsconfig.node.json
+      - ./data:/app/data
+    restart: unless-stopped

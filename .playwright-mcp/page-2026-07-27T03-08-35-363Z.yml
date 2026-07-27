@@ -1,0 +1,8 @@
+- main [ref=e4]:
+  - generic [ref=e6]:
+    - img "游伴" [ref=e7]
+    - heading "游伴" [level=1] [ref=e8]
+    - paragraph [ref=e9]: 输入昵称,开启你的专属旅程
+    - textbox "你的昵称" [ref=e10]
+    - button "进入游伴" [disabled] [ref=e11]
+    - paragraph [ref=e13]: 无需密码,同一昵称即可找回你的行程与记忆

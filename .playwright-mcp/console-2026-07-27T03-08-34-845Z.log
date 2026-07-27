@@ -1,0 +1,16 @@
+[     443ms] [LOG] 发送请求: GET /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:130
+[     477ms] [LOG] 收到响应: 200 /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:140
+[   23473ms] [LOG] 发送请求: GET /api/auth/me @ http://127.0.0.1:4178/src/services/api.ts:130
+[   23473ms] [LOG] 发送请求: GET /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:130
+[   23504ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:4178/api/auth/me:0
+[   23505ms] [ERROR] 响应错误: 404 Request failed with status code 404 @ http://127.0.0.1:4178/src/services/api.ts:144
+[   23505ms] [LOG] 发送请求: GET /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:130
+[   23506ms] [LOG] 收到响应: 200 /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:140
+[   23511ms] [LOG] 收到响应: 200 /api/trip/history @ http://127.0.0.1:4178/src/services/api.ts:140
+[  161156ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:4178/@vite/client:963
+[  161156ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034
+[  162159ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034
+[  163161ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034
+[  164163ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034
+[  165165ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034
+[  166168ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4178/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4178/@vite/client:1034

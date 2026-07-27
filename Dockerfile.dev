@@ -1,0 +1,53 @@
+# ================================
+# 开发模式 Dockerfile
+# 支持热加载 (HMR + uvicorn --reload)
+# ================================
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 安装系统依赖及 Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc curl nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# 使用国内镜像源
+RUN npm config set registry https://registry.npmmirror.com
+
+# 安装 uv 包管理器
+RUN pip install --no-cache-dir uv -i https://mirrors.aliyun.com/pypi/simple/
+
+# 使用 uv 管理后端依赖
+# venv 建在 /opt/venv（代码目录之外），dev 模式卷挂载 ./backend 时不会覆盖依赖
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=0 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+
+# 先仅复制依赖清单以最大化层缓存（dev 用 uvicorn --reload，无需 gunicorn）
+COPY backend/pyproject.toml backend/uv.lock ./backend/
+RUN cd backend && uv sync --locked --python 3.10
+
+# 将 venv 加入 PATH，后续 uvx / uvicorn 均使用它
+ENV PATH="/opt/venv/bin:$PATH"
+
+# 预下载 amap-mcp-server
+RUN uvx amap-mcp-server --help || true
+
+# 安装前端依赖（安装到 frontend 目录下）
+RUN mkdir -p /app/frontend
+COPY frontend/package.json frontend/package-lock.json* /app/frontend/
+RUN cd /app/frontend && npm install --registry=https://registry.npmmirror.com
+
+# 复制启动脚本
+COPY start-dev.sh ./start-dev.sh
+RUN chmod +x ./start-dev.sh
+
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data
+
+# 暴露端口：后端 API + 前端 HMR
+EXPOSE 7860 5173
+
+CMD ["./start-dev.sh"]

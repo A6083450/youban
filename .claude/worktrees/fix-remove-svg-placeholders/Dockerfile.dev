@@ -1,0 +1,35 @@
+# ================================
+# 开发环境 Dockerfile（热加载）
+# 前后端源码通过 volume 挂载，修改代码后重启容器即可
+# ================================
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 安装系统依赖及 Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc curl nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 uv 包管理器
+RUN pip install --no-cache-dir uv -i https://mirrors.aliyun.com/pypi/simple/
+
+# 复制后端依赖并安装
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+
+# 安装 uvicorn（带 reload 支持）
+RUN uv pip install --system --no-cache "uvicorn[standard]" -i https://mirrors.aliyun.com/pypi/simple/
+
+# 安装前端依赖（利用 Docker cache，只在 package.json 变化时重新安装）
+COPY frontend/package.json frontend/package-lock.json* /app/frontend/
+RUN cd /app/frontend && npm install --registry=https://registry.npmmirror.com
+
+# 复制启动脚本
+COPY start-dev.sh /app/start-dev.sh
+RUN chmod +x /app/start-dev.sh
+
+EXPOSE 7860
+EXPOSE 5173
+
+CMD ["/app/start-dev.sh"]

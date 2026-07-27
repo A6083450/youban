@@ -1,0 +1,36 @@
+[project]
+name = "tripstar-backend"
+version = "0.1.0"
+description = "游伴 AI 旅行助手后端"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx[socks]>=0.27.0",
+    "aiohttp>=3.10.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.9",
+    "loguru>=0.7.0",
+    "fastmcp>=2.0.0",
+    "uv>=0.8.0",
+    "python-dateutil>=2.8.2",
+    "huggingface-hub>=0.25.0",
+    "pypinyin>=0.55.0",
+    "PyExecJS>=1.5.1",
+    "requests>=2.31.0",
+    "langgraph>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "mem0ai>=2.0.0",
+]
+
+[project.optional-dependencies]
+# 生产部署用（gunicorn + uvicorn worker）；本地开发用 uvicorn --reload，无需安装
+prod = [
+    "gunicorn>=23.0.0",
+]
+
+[tool.uv]
+# backend 是应用而非可安装库，仅管理依赖，不构建自身
+package = false
