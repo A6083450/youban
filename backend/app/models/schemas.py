@@ -1,8 +1,19 @@
 """数据模型定义"""
 
+import re
 from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import date
+
+
+REFERENCE_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def normalize_reference_time(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized if REFERENCE_TIME_PATTERN.fullmatch(normalized) else None
 
 
 # ============ 请求模型 ============
@@ -107,6 +118,13 @@ class Attraction(BaseModel):
     ticket_price: int = Field(default=0, description="门票价格(元)")
     reservation_required: Optional[bool] = Field(default=False, description="是否需要提前预约")
     reservation_tips: Optional[str] = Field(default="", description="预约提示信息")
+    start_time: Optional[str] = Field(default=None, description="参考开始时间 HH:MM")
+    end_time: Optional[str] = Field(default=None, description="参考结束时间 HH:MM")
+
+    @field_validator("start_time", "end_time", mode="before")
+    @classmethod
+    def parse_attraction_time(cls, value):
+        return normalize_reference_time(value)
 
 
 class Meal(BaseModel):
@@ -117,6 +135,12 @@ class Meal(BaseModel):
     location: Optional[Location] = Field(default=None, description="经纬度坐标")
     description: Optional[str] = Field(default=None, description="描述")
     estimated_cost: int = Field(default=0, description="预估费用(元)")
+    time: Optional[str] = Field(default=None, description="参考用餐时间 HH:MM")
+
+    @field_validator("time", mode="before")
+    @classmethod
+    def parse_meal_time(cls, value):
+        return normalize_reference_time(value)
 
 
 class Hotel(BaseModel):
@@ -138,12 +162,18 @@ class DayPlan(BaseModel):
     city: str = Field(default="", description="当日所在城市")
     is_transfer_day: bool = Field(default=False, description="是否为城际移动日")
     transfer_info: Optional[str] = Field(default="", description="城际交通信息")
+    transfer_time: Optional[str] = Field(default=None, description="城际移动参考出发时间 HH:MM")
     description: str = Field(..., description="当日行程描述")
     transportation: str = Field(..., description="交通方式")
     accommodation: str = Field(..., description="住宿")
     hotel: Optional[Hotel] = Field(default=None, description="推荐酒店")
     attractions: List[Attraction] = Field(default=[], description="景点列表")
     meals: List[Meal] = Field(default=[], description="餐饮列表")
+
+    @field_validator("transfer_time", mode="before")
+    @classmethod
+    def parse_transfer_time(cls, value):
+        return normalize_reference_time(value)
 
 
 class WeatherInfo(BaseModel):
@@ -183,6 +213,29 @@ class Budget(BaseModel):
     total: int = Field(default=0, description="总费用")
 
 
+class TripBlueprintStage(BaseModel):
+    title: str = ""
+    cities: List[str] = Field(default_factory=list)
+    day_indices: List[int] = Field(default_factory=list)
+    theme: str = ""
+    rationale: str = ""
+    highlights: List[str] = Field(default_factory=list)
+    transition: str = ""
+
+    @field_validator("highlights", mode="before")
+    @classmethod
+    def limit_highlights(cls, value):
+        return value[:3] if isinstance(value, list) else value
+
+
+class TripBlueprint(BaseModel):
+    title: str = ""
+    summary: str = ""
+    logic: str = ""
+    pace: str = ""
+    stages: List[TripBlueprintStage] = Field(default_factory=list)
+
+
 class TripPlan(BaseModel):
     """旅行计划"""
     city: str = Field(..., description="主城市(兼容)/首个城市")
@@ -193,6 +246,21 @@ class TripPlan(BaseModel):
     weather_info: List[WeatherInfo] = Field(default=[], description="天气信息")
     overall_suggestions: str = Field(..., description="总体建议")
     budget: Optional[Budget] = Field(default=None, description="预算信息")
+    blueprint: Optional[TripBlueprint] = Field(default=None, description="旅行蓝图")
+
+    @model_validator(mode="after")
+    def discard_invalid_blueprint(self):
+        if self.blueprint is None:
+            return self
+        expected = {day.day_index for day in self.days}
+        referenced = [
+            day_index
+            for stage in self.blueprint.stages
+            for day_index in stage.day_indices
+        ]
+        if not expected or len(referenced) != len(set(referenced)) or set(referenced) != expected:
+            self.blueprint = None
+        return self
 
 
 # ============ 知识图谱数据模型 ============

@@ -24,6 +24,10 @@
         {{ t('login.enter') }}
       </a-button>
       <p class="login-hint">{{ t('login.hint') }}</p>
+      <div class="login-share-divider">
+        <span>{{ t('shareCode.entryTitle') }}</span>
+      </div>
+      <ShareCodeEntry />
     </div>
   </div>
 </template>
@@ -34,6 +38,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { loginWithNickname } from '@/stores/auth'
+import ShareCodeEntry from '@/components/ShareCodeEntry.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -110,4 +115,26 @@ const submit = async () => {
   color: #a39c93 !important;
 }
 .login-hint { margin: 16px 0 0; color: #a39c93; font-size: 12px; }
+.login-share-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 16px;
+  color: #6b5d52;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.login-share-divider::before,
+.login-share-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(61, 50, 41, 0.1);
+}
+
+@media (max-width: 420px) {
+  .login-page { padding: 16px; }
+  .login-card { padding: 32px 20px; }
+}
 </style>

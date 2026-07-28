@@ -254,7 +254,7 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 <style scoped>
 .agent-dock {
   position: fixed;
-  left: 50%;
+  left: calc(50% + var(--desktop-sidebar-width) / 2);
   bottom: 24px;
   transform: translateX(-50%);
   z-index: 1000;
@@ -533,6 +533,7 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 
 @media (max-width: 768px) {
   .agent-dock {
+    left: 50%;
     bottom: 12px;
     width: calc(100vw - 20px);
   }

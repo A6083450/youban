@@ -1,5 +1,5 @@
 <template>
-  <div class="result-container">
+  <div class="result-container" :class="{ 'result-container--readonly': props.readonly }">
     <div class="lower-shade"></div>
 
     <main class="result-main">
@@ -7,22 +7,26 @@
         <div class="top-switch-nav">
           <div class="top-switch-menu-wrap">
             <a-menu class="top-switch-menu" mode="horizontal" :disabled-overflow="true" :selected-keys="[activeSection]" @click="scrollToSection">
-              <a-menu-item key="overview">
+              <a-menu-item key="overview" :aria-selected="activeSection === 'overview'">
                 <span>{{ t('result.side.overview') }}</span>
               </a-menu-item>
-              <a-menu-item key="budget" v-if="tripPlan.budget">
-                <span>{{ t('result.side.budget') }}</span>
-              </a-menu-item>
-              <a-menu-item key="map">
-                <span>{{ t('result.side.map') }}</span>
-              </a-menu-item>
-              <a-menu-item key="days">
-                <span>{{ t('result.side.days') }}</span>
-              </a-menu-item>
-              <a-menu-item key="knowledge-graph">
+              <a-menu-item key="knowledge-graph" :aria-selected="activeSection === 'knowledge-graph'">
                 <span>{{ t('result.side.graph') }}</span>
               </a-menu-item>
-              <a-menu-item key="weather" v-if="tripPlan.weather_info && tripPlan.weather_info.length > 0">
+              <a-menu-item key="days" :aria-selected="activeSection === 'days'">
+                <span>{{ t('result.side.days') }}</span>
+              </a-menu-item>
+              <a-menu-item key="map" :aria-selected="activeSection === 'map'">
+                <span>{{ t('result.side.map') }}</span>
+              </a-menu-item>
+              <a-menu-item key="budget" v-if="tripPlan.budget" :aria-selected="activeSection === 'budget'">
+                <span>{{ t('result.side.budget') }}</span>
+              </a-menu-item>
+              <a-menu-item
+                key="weather"
+                v-if="tripPlan.weather_info && tripPlan.weather_info.length > 0"
+                :aria-selected="activeSection === 'weather'"
+              >
                 <span>{{ t('result.side.weather') }}</span>
               </a-menu-item>
             </a-menu>
@@ -30,6 +34,16 @@
 
           <div class="top-switch-actions">
             <a-space :size="4" wrap>
+              <a-button
+                v-if="!props.readonly && planId"
+                type="default"
+                class="action-btn"
+                :loading="sharePublishing"
+                @click="openShareModal"
+              >
+                <ShareAltOutlined class="action-icon" />
+                {{ t('result.share.button') }}
+              </a-button>
               <a-button type="default" @click="exportAsImage" class="action-btn">
                 <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {{ t('result.exportImage') }}
@@ -38,12 +52,26 @@
           </div>
         </div>
 
+        <a-alert
+          v-if="props.readonly"
+          type="info"
+          show-icon
+          :message="t('result.share.readonlyBanner')"
+          class="readonly-banner"
+        >
+          <template #action>
+            <a-button type="link" size="small" @click="goBack">
+              {{ t('result.share.readonlyCta') }}
+            </a-button>
+          </template>
+        </a-alert>
+
       <!-- 主内容区 -->
-        <a-card
+        <section
           v-show="activeSection === 'overview'"
           id="overview"
-          :bordered="false"
-          class="overview-card section-shellless"
+          class="overview-card"
+          :aria-label="t('result.side.overview')"
         >
           <div v-if="overviewAttractions.length > 0" class="overview-grid">
             <OverviewAttractionCard
@@ -51,13 +79,14 @@
               :key="`${item.dayArrayIndex}-${item.order}-${item.name}`"
               :item="item"
               :image-src="getAttractionImage(item.name, index)"
+              :visual-index="index"
               @image-error="handleImageError"
               @select-day="goToDayFromOverview"
             />
           </div>
           <a-empty v-else :description="t('common.noData')" />
           <div class="overview-meta">
-            <span class="overview-meta-item" style="color: #D97757; font-weight: 700;">
+            <span class="overview-meta-item overview-meta-item--accent">
               {{ t('result.dateRange', { start: tripPlan.start_date, end: tripPlan.end_date }) }}
             </span>
             <span v-if="planId" class="overview-meta-item">
@@ -67,7 +96,7 @@
               {{ tripPlan.overall_suggestions }}
             </span>
           </div>
-        </a-card>
+        </section>
 
         <!-- 顶部信息区:预算/地图 -->
         <div class="top-info-section" v-show="['budget', 'map'].includes(activeSection)">
@@ -103,17 +132,21 @@
                 </div>
 
                 <div v-if="filteredBudgetItems.length > 0" class="budget-detail-list">
-                  <div class="budget-detail-row budget-detail-header">
+                  <div
+                    class="budget-detail-row budget-detail-header"
+                    :class="{ 'budget-detail-row--readonly': props.readonly }"
+                  >
                     <span>{{ t('result.budget.detailType') }}</span>
                     <span>{{ t('result.budget.detailDay') }}</span>
                     <span>{{ t('result.budget.detailName') }}</span>
                     <span>{{ t('result.budget.detailAmount') }}</span>
-                    <span>{{ t('result.budget.detailAction') }}</span>
+                    <span v-if="!props.readonly">{{ t('result.budget.detailAction') }}</span>
                   </div>
                   <div
                     v-for="item in filteredBudgetItems"
                     :key="item.id"
                     class="budget-detail-row"
+                    :class="{ 'budget-detail-row--readonly': props.readonly }"
                   >
                     <span class="budget-detail-type">{{ getBudgetTypeLabel(item.type) }}</span>
                     <span class="budget-detail-day">
@@ -121,7 +154,7 @@
                     </span>
                     <span class="budget-detail-name">{{ item.name }}</span>
                     <span class="budget-detail-amount">¥{{ formatBudgetAmount(item.amount) }}</span>
-                    <span class="budget-action-wrap">
+                    <span v-if="!props.readonly" class="budget-action-wrap">
                       <button
                         type="button"
                         class="budget-icon-btn budget-edit-btn"
@@ -180,7 +213,7 @@
                 </div>
               </div>
 
-              <div class="budget-pending-wrap">
+              <div v-if="!props.readonly" class="budget-pending-wrap">
                 <div class="budget-pending-title">{{ t('result.budget.pendingTitle') }}</div>
                 <div v-if="pendingBudgetItems.length === 0" class="budget-pending-empty">
                   {{ t('result.budget.pendingEmpty') }}
@@ -230,151 +263,19 @@
           </div>
         </div>
 
-        <!-- 行程脉络 -->
-        <a-card v-show="activeSection === 'knowledge-graph'" id="knowledge-graph" :bordered="false" class="flow-card section-shellless">
+        <!-- 旅行蓝图 -->
+        <section v-show="activeSection === 'knowledge-graph'" id="knowledge-graph" class="flow-card">
           <TripFlow :trip-plan="tripPlan" @select-day="goToDayFromOverview" />
-        </a-card>
+        </section>
 
-        <!-- 每日行程:可折叠 -->
-        <a-card v-show="activeSection === 'days'" :bordered="false" class="days-card section-shellless">
-          <a-collapse v-model:activeKey="activeDays" accordion>
-            <a-collapse-panel
-              v-for="(day, index) in tripPlan.days"
-              :key="index"
-              :id="`day-${index}`"
-            >
-              <template #header>
-                <div class="day-header">
-                  <span class="day-title">{{ t('common.dayNumber', { day: index + 1 }) }}</span>
-                  <span v-if="day.city" class="day-city-tag">{{ day.city }}</span>
-                  <span v-if="day.is_transfer_day" class="day-transfer-tag">{{ t('result.transferDay') }}</span>
-                  <span class="day-attr-count">{{ t('result.attractionCount', { count: day.attractions.length }) }}</span>
-                  <span class="day-date">{{ day.date }}</span>
-                </div>
-              </template>
-
-              <!-- 城际移动信息 -->
-              <div v-if="day.is_transfer_day && day.transfer_info" class="transfer-info-banner">
-                <span class="transfer-info-icon">🚄</span>
-                <span class="transfer-info-label">{{ t('result.transferInfo') }}:</span>
-                <span class="transfer-info-text">{{ day.transfer_info }}</span>
-              </div>
-
-              <!-- 行程基本信息 -->
-              <div class="day-info">
-                <div class="info-row">
-                  <span class="label">{{ t('result.dayDescription') }}</span>
-                  <span class="value">{{ day.description }}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">{{ t('result.dayTransport') }}</span>
-                  <span class="value">{{ day.transportation }}</span>
-                </div>
-                <div class="info-row">
-                  <span class="label">{{ t('result.dayAccommodation') }}</span>
-                  <span class="value">{{ day.accommodation }}</span>
-                </div>
-              </div>
-
-              <!-- 景点安排:时间轴卡片 -->
-              <a-divider orientation="left">{{ t('result.attractionTitle') }}</a-divider>
-              <div class="attr-timeline-list">
-                <div
-                  v-for="(item, index) in day.attractions"
-                  :key="`${day.day_index}-${index}-${item.name}`"
-                  class="attr-card"
-                >
-                  <div class="attr-order-dot">{{ index + 1 }}</div>
-
-                  <div class="attr-image-wrapper">
-                    <img
-                      v-if="getAttractionImage(item.name, index)"
-                      :src="getAttractionImage(item.name, index)"
-                      :alt="item.name"
-                      class="attr-image"
-                      loading="lazy"
-                      @error="handleImageError(item.name)"
-                    />
-                    <div v-else class="image-placeholder">{{ item.name }}</div>
-                    <div class="attr-img-badges">
-                      <span v-if="item.rating" class="attr-badge attr-badge--rating">⭐ {{ item.rating }}</span>
-                      <span v-if="item.ticket_price" class="attr-badge attr-badge--price">¥{{ item.ticket_price }}</span>
-                    </div>
-                  </div>
-
-                  <div class="attr-info">
-                    <div class="attr-head">
-                      <h4 class="attr-name">{{ item.name }}</h4>
-                    </div>
-
-                    <div class="attr-meta">
-                      <span class="attr-meta-addr" :title="item.address">📍 {{ item.address }}</span>
-                      <span class="attr-chip">⏱ {{ item.visit_duration }}{{ t('result.minuteUnit') }}</span>
-                    </div>
-                    <p
-                      class="attr-desc"
-                      :class="{ expanded: isDescExpanded(`${day.day_index}-${index}`) }"
-                    >{{ item.description }}</p>
-                    <button
-                      v-if="item.description && item.description.length > 60"
-                      type="button"
-                      class="attr-desc-toggle"
-                      @click="toggleDesc(`${day.day_index}-${index}`)"
-                    >
-                      {{ isDescExpanded(`${day.day_index}-${index}`) ? t('result.collapse') : t('result.expand') }}
-                    </button>
-                    <div v-if="item.reservation_required" class="attr-reservation">
-                      <span class="attr-reservation-label">📋 {{ t('result.reservationRequired') }}</span>
-                      <span v-if="item.reservation_tips" class="attr-reservation-tips">{{ item.reservation_tips }}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 酒店推荐 -->
-              <a-divider v-if="day.hotel" orientation="left">{{ t('result.hotelTitle') }}</a-divider>
-              <div v-if="day.hotel" class="hotel-info-card">
-                <div class="hotel-info-head">
-                  <span class="hotel-info-icon">🏨</span>
-                  <span class="hotel-info-name">{{ day.hotel.name }}</span>
-                  <span class="hotel-info-price">{{ day.hotel.price_range }}</span>
-                </div>
-                <div class="hotel-info-grid">
-                  <div class="hotel-info-item">
-                    <span class="hotel-info-label">📍 {{ t('result.fieldAddress') }}</span>
-                    <span class="hotel-info-value">{{ day.hotel.address }}</span>
-                  </div>
-                  <div class="hotel-info-item">
-                    <span class="hotel-info-label">🏷️ {{ t('result.fieldType') }}</span>
-                    <span class="hotel-info-value">{{ day.hotel.type }}</span>
-                  </div>
-                  <div class="hotel-info-item">
-                    <span class="hotel-info-label">⭐ {{ t('result.fieldRating') }}</span>
-                    <span class="hotel-info-value">{{ day.hotel.rating }}</span>
-                  </div>
-                  <div class="hotel-info-item">
-                    <span class="hotel-info-label">📏 {{ t('result.fieldDistance') }}</span>
-                    <span class="hotel-info-value">{{ day.hotel.distance }}</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 餐饮安排 -->
-              <a-divider v-if="day.meals && day.meals.length" orientation="left">{{ t('result.mealsTitle') }}</a-divider>
-              <div v-if="day.meals && day.meals.length" class="meal-cards">
-                <div v-for="meal in day.meals" :key="meal.type" class="meal-card">
-                  <div class="meal-card-head">
-                    <span class="meal-icon">{{ mealIcon(meal.type) }}</span>
-                    <span class="meal-type">{{ getMealLabel(meal.type) }}</span>
-                    <span v-if="meal.estimated_cost" class="meal-cost">¥{{ meal.estimated_cost }}</span>
-                  </div>
-                  <div class="meal-name">{{ meal.name }}</div>
-                  <div v-if="meal.description" class="meal-desc">{{ meal.description }}</div>
-                </div>
-              </div>
-            </a-collapse-panel>
-          </a-collapse>
-        </a-card>
+        <!-- 每日行程 -->
+        <section v-show="activeSection === 'days'" class="days-card">
+          <DailyItinerary
+            :trip-plan="tripPlan"
+            :attraction-photos="attractionPhotos"
+            @image-error="handleImageError"
+          />
+        </section>
 
         <a-card
           v-show="activeSection === 'weather' && tripPlan.weather_info && tripPlan.weather_info.length > 0"
@@ -417,10 +318,16 @@
     </a-back-top>
 
     <PlanChatPanel
+      v-if="!props.readonly"
       :trip-plan="tripPlan"
       :plan-id="planId"
       @apply-plan="applyAgentPlan"
       @restore-plan="applyAgentPlan"
+    />
+    <SharePlanModal
+      v-if="!props.readonly"
+      v-model:open="shareModalOpen"
+      :share-code="shareCode"
     />
   </div>
 </template>
@@ -430,32 +337,56 @@ import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import { ShareAltOutlined } from '@ant-design/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { Loader as GoogleMapsLoader } from '@googlemaps/js-api-loader'
 import html2canvas from 'html2canvas'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
+import SharePlanModal from '@/components/SharePlanModal.vue'
 import WeatherDayCard from '@/components/WeatherDayCard.vue'
 import TripFlow from '@/components/TripFlow.vue'
-import type { TripPlan, TripPlanResponse, Attraction, Meal, Hotel, WeatherInfo } from '@/types'
+import DailyItinerary from '@/components/DailyItinerary.vue'
+import type {
+  Attraction,
+  Hotel,
+  Meal,
+  ShareLoadErrorKind,
+  TripPlan,
+  TripPlanResponse,
+  WeatherInfo,
+} from '@/types'
 import {
+  createTripShare,
   getRuntimeApiBaseUrl,
   getRuntimeMapJsKey,
   getRuntimeGoogleMapsApiKey,
   getBackendRuntimeSettings,
+  getSharedTripPlan,
   pollTaskStatus,
   RUNTIME_SETTINGS_UPDATED_EVENT,
+  SharedTripPlanError,
+  TripShareCreationError,
 } from '@/services/api'
 import { canUseCachedPlan } from '@/utils/planConversation.js'
+import { normalizeReferenceTime, resolveTripBlueprint } from '@/utils/tripPresentation.js'
 
-const props = defineProps<{ planId?: string }>()
+const props = withDefaults(defineProps<{ planId?: string; readonly?: boolean }>(), {
+  readonly: false,
+})
+const emit = defineEmits<{
+  (event: 'share-load-error', kind: ShareLoadErrorKind): void
+}>()
 const router = useRouter()
 const { t, locale } = useI18n()
 const tripPlan = ref<TripPlan | null>(null)
 const planId = ref('')
 const attractionPhotos = ref<Record<string, string>>({})
 const activeSection = ref('overview')
-const activeDays = ref<number[]>([0]) // 默认展开第一天
+const pendingDayScrollIndex = ref<number | null>(null)
+const shareModalOpen = ref(false)
+const sharePublishing = ref(false)
+const shareCode = ref('')
 let map: any = null
 let googleMap: google.maps.Map | null = null
 let googleMarkers: google.maps.Marker[] = []
@@ -465,6 +396,25 @@ let googleDirectionsRenderers: google.maps.DirectionsRenderer[] = []
 const mapProviderType = ref<'google' | 'amap'>('amap')
 const mapLoading = ref(false)
 const mapLoadingText = ref('')
+
+const openShareModal = async (): Promise<void> => {
+  if (!planId.value || sharePublishing.value) return
+
+  sharePublishing.value = true
+  try {
+    const publication = await createTripShare(planId.value)
+    shareCode.value = publication.share_code
+    shareModalOpen.value = true
+  } catch (error: unknown) {
+    message.error(
+      error instanceof TripShareCreationError
+        ? error.message
+        : t('result.share.createFailed'),
+    )
+  } finally {
+    sharePublishing.value = false
+  }
+}
 
 type OverviewAttractionItem = {
   name: string
@@ -750,7 +700,7 @@ const loadPlanById = async (targetPlanId: string) => {
   pendingBudgetItems.value = []
   attractionPhotos.value = {}
   activeSection.value = 'overview'
-  activeDays.value = [0]
+  pendingDayScrollIndex.value = null
 
   const data = sessionStorage.getItem('tripPlan')
   const storedPlanId = String(sessionStorage.getItem('planId') || '')
@@ -759,6 +709,19 @@ const loadPlanById = async (targetPlanId: string) => {
   planId.value = targetPlanId
   if (targetPlanId) {
     sessionStorage.setItem('planId', targetPlanId)
+  }
+
+  if (props.readonly) {
+    try {
+      const task = await getSharedTripPlan(targetPlanId)
+      if (task?.status === 'completed' && task.result) {
+        await restoreTripPlanFromResponse(task.result)
+      }
+    } catch (error: unknown) {
+      const kind = error instanceof SharedTripPlanError ? error.kind : 'network'
+      emit('share-load-error', kind)
+    }
+    return
   }
 
   if (data && canUseCachedData) {
@@ -804,6 +767,22 @@ watch(
 
 watch(activeSection, async (section) => {
   if (!tripPlan.value) return
+  await nextTick()
+  const main = document.querySelector<HTMLElement>('.main-area')
+  const targetIndex = pendingDayScrollIndex.value
+  if (section === 'days' && targetIndex !== null && main) {
+    const target = document.getElementById(`daily-day-${targetIndex}`)
+    const navigation = document.querySelector<HTMLElement>('.top-switch-nav')
+    if (target && navigation) {
+      const offset = target.getBoundingClientRect().top - navigation.getBoundingClientRect().bottom
+      main.scrollTo({ top: Math.max(0, main.scrollTop + offset - 12), behavior: 'auto' })
+    } else {
+      main.scrollTo({ top: 0, behavior: 'auto' })
+    }
+    pendingDayScrollIndex.value = null
+  } else {
+    main?.scrollTo({ top: 0, behavior: 'auto' })
+  }
   if (section === 'map') await ensureMapReady()
 })
 
@@ -823,7 +802,7 @@ const scrollToSection = ({ key }: { key: string }) => {
   if (key.startsWith('day-')) {
     const dayIndex = Number(key.replace('day-', ''))
     if (!Number.isNaN(dayIndex)) {
-      activeDays.value = [dayIndex]
+      pendingDayScrollIndex.value = dayIndex
       activeSection.value = 'days'
       return
     }
@@ -832,20 +811,8 @@ const scrollToSection = ({ key }: { key: string }) => {
   activeSection.value = key
 }
 
-// 展开某天后,把该天标题滚到吸顶导航下方,避免上方天数收起导致内容跳动
-watch(activeDays, async (val) => {
-  if (activeSection.value !== 'days') return
-  const idx = Array.isArray(val) ? val[0] : val
-  if (idx === undefined || idx === null) return
-  await nextTick()
-  // 等折叠动画进行到位后再定位
-  setTimeout(() => {
-    document.getElementById(`day-${idx}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, 200)
-})
-
 const goToDayFromOverview = (dayArrayIndex: number) => {
-  activeDays.value = [dayArrayIndex]
+  pendingDayScrollIndex.value = dayArrayIndex
   activeSection.value = 'days'
 }
 
@@ -857,29 +824,6 @@ const getMealLabel = (type: string): string => {
     snack: t('result.meals.snack')
   }
   return labels[type] || type
-}
-
-// 餐次图标
-const mealIcon = (type: string): string => {
-  const icons: Record<string, string> = {
-    breakfast: '🍳',
-    lunch: '🍜',
-    dinner: '🌙',
-    snack: '🍡',
-  }
-  return icons[type] || '🍽️'
-}
-
-// 景点描述展开/收起
-const expandedDescs = ref<Set<string>>(new Set())
-
-const isDescExpanded = (key: string): boolean => expandedDescs.value.has(key)
-
-const toggleDesc = (key: string) => {
-  const next = new Set(expandedDescs.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  expandedDescs.value = next
 }
 
 const toBudgetNumber = (value: unknown): number => {
@@ -1269,6 +1213,46 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
     snack: t('result.meals.snack'),
   }
 
+  const blueprint = resolveTripBlueprint(tp)
+  const blueprintStagesHTML = blueprint.stages.map((stage, index) => {
+    const firstDay = stage.day_indices[0]
+    const lastDay = stage.day_indices.at(-1)
+    const dayRange = firstDay === undefined || lastDay === undefined
+      ? ''
+      : t('result.blueprint.dayRange', { start: firstDay + 1, end: lastDay + 1 })
+    const title = stage.title || stage.cities.join(' / ') || `${index + 1}`
+    const highlights = stage.highlights
+      .slice(0, 3)
+      .map((highlight) => `<span style="font-size:12px;color:#3D3229;background:#F5F0E8;padding:4px 8px;border-radius:4px;">${escapeHtml(highlight)}</span>`)
+      .join('')
+
+    return `
+      <div style="flex:1;min-width:210px;border:1px solid #EBE3D8;border-top:3px solid #D97757;border-radius:6px;background:#FFFFFF;padding:16px;box-sizing:border-box;">
+        <div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;font-size:12px;font-weight:700;color:#C4603D;">
+          <span>${String(index + 1).padStart(2, '0')}</span>
+          <span>${escapeHtml(dayRange)}</span>
+        </div>
+        <h4 style="margin:0;font-size:17px;font-weight:700;color:#3D3229;line-height:1.4;">${escapeHtml(title)}</h4>
+        ${stage.cities.length ? `<p style="margin:5px 0 0;font-size:12px;color:#6B5D52;">${escapeHtml(stage.cities.join(' / '))}</p>` : ''}
+        ${stage.theme ? `<p style="margin:8px 0 0;font-size:13px;font-weight:600;color:#C4603D;">${escapeHtml(stage.theme)}</p>` : ''}
+        ${stage.rationale ? `<p style="margin:8px 0 0;font-size:13px;color:#6B5D52;line-height:1.6;">${escapeHtml(stage.rationale)}</p>` : ''}
+        ${highlights ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">${highlights}</div>` : ''}
+        ${stage.transition ? `<p style="margin:12px 0 0;padding-top:10px;border-top:1px solid #EBE3D8;font-size:12px;color:#6B5D52;line-height:1.5;">${escapeHtml(stage.transition)}</p>` : ''}
+      </div>`
+  }).join('')
+
+  const blueprintHTML = blueprint.stages.length ? `
+    <div style="margin-bottom:30px;">
+      <div style="margin-bottom:14px;">
+        <p style="margin:0 0 5px;font-size:12px;font-weight:700;color:#C4603D;">${escapeHtml(t('result.blueprint.eyebrow'))}</p>
+        <h3 style="margin:0;font-size:21px;font-weight:700;color:#3D3229;">${escapeHtml(blueprint.title || t('result.blueprint.legacyTitle'))}</h3>
+        ${blueprint.summary ? `<p style="margin:8px 0 0;font-size:13px;color:#6B5D52;line-height:1.6;">${escapeHtml(blueprint.summary)}</p>` : ''}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;">${blueprintStagesHTML}</div>
+      ${blueprint.logic ? `<p style="margin:14px 0 0;padding:12px 0;border-top:1px solid #EBE3D8;font-size:13px;color:#6B5D52;line-height:1.6;"><b style="color:#3D3229;">${escapeHtml(t('result.blueprint.planningLogic'))}</b> ${escapeHtml(blueprint.logic)}</p>` : ''}
+      ${blueprint.pace ? `<p style="margin:0;padding:8px 0;font-size:13px;color:#6B5D52;"><b style="color:#3D3229;">${escapeHtml(t('result.blueprint.pace'))}</b> ${escapeHtml(blueprint.pace)}</p>` : ''}
+    </div>` : ''
+
   // 每日行程 HTML
   let daysHTML = ''
   tp.days.forEach((day, index) => {
@@ -1276,11 +1260,17 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
     day.attractions.forEach((a, ai) => {
       const photoUrl = a.image_url || attractionPhotos.value[a.name] || ''
       const durationText = t('result.export.durationLine', { duration: a.visit_duration || '—' })
+      const startTime = normalizeReferenceTime(a.start_time)
+      const endTime = normalizeReferenceTime(a.end_time)
+      const referenceTime = startTime
+        ? `${startTime}${endTime ? `–${endTime}` : ''}`
+        : t('result.daily.timePending')
       // 图片自适应：不压缩不裁剪，保持原始比例
       const imgTag = photoUrl
         ? `<img src="${photoUrl}" style="width:100%;height:auto;max-height:360px;object-fit:contain;border-radius:10px;margin-bottom:10px;" crossorigin="anonymous" />`
         : `<div style="width:100%;height:110px;background:linear-gradient(135deg,#E8D5C4,#D4B59A);border-radius:10px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:600;text-align:center;padding:0 12px;box-sizing:border-box;">${a.name}</div>`
       const metaPills =
+        `<span style="font-size:12px;color:#A66A47;background:#F5EDE4;padding:3px 10px;border-radius:20px;">${escapeHtml(referenceTime)}</span>` +
         `<span style="font-size:12px;color:#A66A47;background:#F5EDE4;padding:3px 10px;border-radius:20px;">${durationText}</span>` +
         (a.ticket_price ? `<span style="font-size:12px;color:#A66A47;background:#F5EDE4;padding:3px 10px;border-radius:20px;">¥${a.ticket_price}</span>` : '')
       attractionsHTML += `
@@ -1301,7 +1291,8 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
     if (day.meals && day.meals.length) {
       let mealPills = ''
       day.meals.forEach(m => {
-        mealPills += `<span style="background:#F5EDE4;color:#5C4B3E;font-size:12px;padding:6px 12px;border-radius:8px;"><b style="color:#A66A47;">${mealLabels[m.type] || m.type}</b> ${m.name || t('result.export.noMealRecommendation')}${m.estimated_cost ? ` · ¥${m.estimated_cost}` : ''}</span>`
+        const mealTime = normalizeReferenceTime(m.time) || t('result.daily.timePending')
+        mealPills += `<span style="background:#F5EDE4;color:#5C4B3E;font-size:12px;padding:6px 12px;border-radius:8px;"><b style="color:#A66A47;">${escapeHtml(mealTime)} · ${escapeHtml(mealLabels[m.type] || m.type)}</b> ${escapeHtml(m.name || t('result.export.noMealRecommendation'))}${m.estimated_cost ? ` · ¥${m.estimated_cost}` : ''}</span>`
       })
       mealsHTML = `
         <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #EBE3D8;">
@@ -1310,12 +1301,18 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
         </div>`
     }
 
+    const transferTime = normalizeReferenceTime(day.transfer_time) || t('result.daily.timePending')
+    const transferHTML = day.is_transfer_day && day.transfer_info
+      ? `<div style="margin-bottom:14px;padding:10px 12px;border-left:3px solid #D97757;background:#F5F0E8;font-size:13px;color:#6B5D52;line-height:1.6;"><b style="color:#3D3229;">${escapeHtml(transferTime)} · ${escapeHtml(t('result.daily.transfer'))}</b> ${escapeHtml(day.transfer_info)}</div>`
+      : ''
+
     daysHTML += `
       <div style="margin-bottom:26px;">
         <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #EBE3D8;">
           <span style="font-size:20px;font-weight:700;color:#C17F59;">${t('result.export.dayTitle', { day: index + 1 })}</span>
           ${day.date ? `<span style="font-size:13px;color:#8B7D6B;">${day.date}</span>` : ''}
         </div>
+        ${transferHTML}
         <div style="display:flex;flex-wrap:wrap;gap:14px;">
           ${attractionsHTML}
         </div>
@@ -1434,6 +1431,7 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
         })}</p>
         ${tp.overall_suggestions ? `<p style="margin:16px auto 0;max-width:580px;font-size:13px;color:#8B7D6B;line-height:1.7;">${tp.overall_suggestions}</p>` : ''}
       </div>
+      ${blueprintHTML}
       ${daysHTML}
       ${mapHTML}
       ${hotelHTML}
@@ -2183,7 +2181,7 @@ const drawGoogleRoutes = async (attractions: any[]) => {
 const initAMap = async () => {
   try {
     mapProviderType.value = 'amap'
-    const mapJsKey = getRuntimeMapJsKey()
+    const mapJsKey = getRuntimeMapJsKey() || (await getBackendRuntimeSettings()).vite_amap_web_js_key
     if (!mapJsKey) {
       mapLoading.value = false
       message.warning('请先在设置中配置高德地图 JS Key')
@@ -2420,6 +2418,8 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 /* ===== Landing 同款视觉基底 - 结果页 ===== */
 
 .result-container {
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   background: linear-gradient(180deg, #FAF7F2 0%, #F5F0E8 58%, #EDE6DA 100%);
   color: #3D3229;
@@ -2448,10 +2448,14 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 .result-main {
   position: relative;
   z-index: 2;
+  width: 100%;
+  min-width: 0;
   padding: 20px 20px 44px;
 }
 
 .content-wrapper {
+  width: 100%;
+  min-width: 0;
   max-width: 1240px;
   margin: 0 auto;
   display: block;
@@ -2461,6 +2465,8 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   backdrop-filter: blur(18px);
   box-shadow: 0 24px 80px rgba(61, 50, 41, 0.1);
   padding: 20px;
+  container-name: result-content;
+  container-type: inline-size;
 }
 
 .top-switch-nav {
@@ -2563,6 +2569,10 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   font-size: 13px !important;
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(217, 119, 87, 0.35) !important;
+}
+
+.readonly-banner {
+  margin-bottom: 16px;
 }
 
 .empty-state-panel {
@@ -2762,6 +2772,9 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: break-word;
+  word-break: auto-phrase;
+  text-wrap: balance;
 }
 
 .attr-desc.expanded {
@@ -2998,12 +3011,15 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 /* 顶部信息区布局 */
 .top-info-section {
   display: flex;
+  width: 100%;
+  min-width: 0;
   gap: 20px;
   margin-bottom: 20px;
 }
 
 .left-info {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -3016,12 +3032,17 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   min-height: 520px;
 }
 
-/* 行程概览卡片 */
+/* 行程概览瀑布流 */
 .overview-card {
+  width: 100%;
+  min-width: 0;
   margin-bottom: 20px;
 }
 
 .section-shellless {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -3037,6 +3058,8 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 }
 
 :deep(.section-shellless > .ant-card-body) {
+  min-width: 0;
+  max-width: 100%;
   padding: 0 !important;
   background: rgba(255, 255, 255, 0.55);
   border-radius: 14px;
@@ -3045,27 +3068,51 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 .overview-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 18px;
+  gap: 8px 16px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .overview-meta-item {
   display: inline-flex;
   align-items: center;
-  padding: 3px 12px;
-  /* border-radius: 999px;
-  border: 1px solid rgba(61, 50, 41, 0.12);
-  background: rgba(255, 255, 255, 0.4); */
-  color: rgba(61, 50, 41, 0.7);
+  min-width: 0;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.overview-meta-item--accent {
+  color: var(--accent-primary);
+  font-weight: 700;
 }
 
 .overview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 18px;
-  padding: 12px 2px 14px;
+  width: 100%;
+  min-width: 0;
+  column-count: 5;
+  column-gap: 16px;
+  padding: 4px 0 12px;
+}
+
+@container result-content (max-width: 1120px) {
+  .overview-grid {
+    column-count: 4;
+  }
+}
+
+@container result-content (max-width: 900px) {
+  .overview-grid {
+    column-count: 3;
+  }
+}
+
+@container result-content (max-width: 640px) {
+  .overview-grid {
+    column-count: 2;
+  }
 }
 
 
@@ -3122,6 +3169,7 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 }
 
 .budget-detail-list {
+  max-width: 100%;
   border: 1px solid rgba(61, 50, 41, 0.1);
   border-radius: 12px;
   overflow: hidden;
@@ -3140,6 +3188,10 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 
 .budget-detail-row:last-child {
   border-bottom: none;
+}
+
+.budget-detail-row--readonly {
+  grid-template-columns: 112px 96px minmax(0, 1fr) 120px;
 }
 
 .budget-detail-header {
@@ -3211,6 +3263,28 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 
 .right-budget-summary {
   flex: 0 0 360px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+@container result-content (max-width: 900px) {
+  .top-info-section {
+    flex-direction: column;
+  }
+
+  .right-budget-summary {
+    flex-basis: auto;
+    width: 100%;
+  }
+
+  .budget-detail-list {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .budget-detail-row {
+    min-width: 620px;
+  }
 }
 
 .budget-summary-panel {
@@ -3345,17 +3419,10 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   padding: 0;
 }
 
-/* 行程脉络卡片 */
-.flow-card {
-  margin-top: 20px;
-}
-
-.flow-card :deep(.ant-card-body) {
-  padding: 0;
-}
-
-/* 每日行程卡片 */
+/* 蓝图与每日行程直接使用结果框架,不再嵌套卡片壳 */
+.flow-card,
 .days-card {
+  min-width: 0;
   margin-top: 20px;
 }
 
@@ -3451,6 +3518,9 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 .info-row .value {
   color: #3D3229;
   flex: 1;
+  overflow-wrap: break-word;
+  word-break: auto-phrase;
+  text-wrap: pretty;
 }
 
 /* 卡片样式 - 玻璃拟态浅色 */
@@ -3650,7 +3720,10 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
     margin: -14px -14px 12px;
     padding: 8px 14px 0;
     border-radius: 22px 22px 0 0;
-    top: 52px; /* 让出移动端顶栏高度 */
+    top: 0;
+    z-index: 40;
+    background: var(--surface-elevated);
+    box-shadow: 0 8px 18px rgba(61, 50, 41, 0.08);
   }
 
   .top-switch-actions {
@@ -3750,17 +3823,17 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 
   .overview-meta {
     gap: 8px;
-    margin-bottom: 14px;
+    margin-top: 4px;
+    padding-top: 12px;
   }
 
   .overview-meta-item {
     width: 100%;
-    border-radius: 12px;
   }
 
   .overview-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 12px;
+    column-count: 2;
+    column-gap: 10px;
   }
 
   .budget-toolbar {
@@ -3789,6 +3862,47 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
     min-width: 620px;
   }
 
+}
+
+@media (max-width: 480px) {
+  :deep(.ant-collapse-header) {
+    align-items: flex-start !important;
+    padding: 12px !important;
+  }
+
+  .day-header {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  .day-title,
+  .day-city-tag,
+  .day-transfer-tag,
+  .day-attr-count,
+  .day-date {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .day-city-tag {
+    margin-left: 0;
+  }
+
+  .day-date {
+    flex-basis: 100%;
+    margin-left: 0;
+    font-size: 12px;
+  }
+
+  .day-info .info-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .day-info .info-row .label {
+    min-width: 0;
+  }
 }
 
 </style>

@@ -8892,6 +8892,15 @@ License - nucleoapp.com/license/
 /* all icon font classes list here */
 /* ===== Agent 对话体验设计变量 ===== */
 :root {
+  --surface-page: #FAF7F2;
+  --surface-soft: #F5F0E8;
+  --surface-elevated: #FFFFFF;
+  --text-primary: #3D3229;
+  --text-secondary: #6B5D52;
+  --accent-primary: #D97757;
+  --accent-strong: #C4603D;
+  --border-subtle: rgba(61, 50, 41, 0.1);
+  --status-success: #3A9C7A;
   --chat-user-bubble: linear-gradient(135deg, #D97757 0%, #C4603D 100%);
   --chat-ai-bg: #ffffff;
   --chat-ai-border: rgba(100, 80, 60, 0.12);

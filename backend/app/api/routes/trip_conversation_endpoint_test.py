@@ -176,6 +176,145 @@ class TripConversationEndpointTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 403)
 
+    def test_share_rejects_an_unpublished_task_id(self):
+        plan_id = "shared-plan"
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "result": {"success": True, "data": {"city": "Shared City"}},
+            "request_payload": {"free_text_input": "private prompt"},
+        }
+
+        with self.assertRaises(trip.HTTPException) as raised:
+            asyncio.run(trip.get_shared_plan(plan_id))
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_share_returns_only_a_completed_plan_for_its_share_token(self):
+        plan_id = "shared-plan"
+        share_token = "f" * 32
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "share_token": share_token,
+            "result": {"success": True, "data": {"city": "Shared City"}},
+            "request_payload": {"free_text_input": "private prompt"},
+        }
+
+        result = asyncio.run(trip.get_shared_plan(share_token))
+
+        self.assertEqual(
+            result,
+            {
+                "plan_id": plan_id,
+                "status": "completed",
+                "result": {"success": True, "data": {"city": "Shared City"}},
+            },
+        )
+
+    def test_owner_can_create_share_token_for_a_completed_plan(self):
+        plan_id = "owned-share-plan"
+        share_token = "a" * 32
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "result": {"success": True, "data": {"city": "Shared City"}},
+        }
+
+        with self.isolated_dependencies(), patch.object(
+            trip.secrets,
+            "token_hex",
+            return_value=share_token,
+        ):
+            result = asyncio.run(trip.create_shared_plan(plan_id, x_user_id="owner-user"))
+
+        self.assertEqual(result, {"plan_id": plan_id, "share_code": share_token})
+        self.assertEqual(trip._tasks[plan_id]["share_token"], share_token)
+
+    def test_share_creation_rejects_a_different_user(self):
+        plan_id = "private-share-plan"
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "result": {"success": True, "data": {"city": "Private City"}},
+        }
+
+        with self.assertRaises(trip.HTTPException) as raised:
+            asyncio.run(trip.create_shared_plan(plan_id, x_user_id="other-user"))
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(trip._tasks[plan_id]["share_token"], "")
+
+    def test_share_creation_rejects_a_plan_that_is_not_completed(self):
+        plan_id = "processing-share-plan"
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "processing",
+        }
+
+        with self.assertRaises(trip.HTTPException) as raised:
+            asyncio.run(trip.create_shared_plan(plan_id, x_user_id="owner-user"))
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_share_creation_reuses_the_persisted_token(self):
+        plan_id = "published-plan"
+        share_token = "b" * 32
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "share_token": share_token,
+            "result": {"success": True, "data": {"city": "Published City"}},
+        }
+
+        with self.isolated_dependencies(), patch.object(
+            trip.secrets,
+            "token_hex",
+            return_value="c" * 32,
+        ):
+            result = asyncio.run(trip.create_shared_plan(plan_id, x_user_id="owner-user"))
+
+        self.assertEqual(result["share_code"], share_token)
+
+    def test_share_token_survives_task_persistence(self):
+        plan_id = "persisted-share-plan"
+        share_token = "d" * 32
+        task = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "completed",
+            "share_token": share_token,
+            "result": {"success": True, "data": {"city": "Persistent City"}},
+        }
+
+        with self.isolated_dependencies() as tasks_dir:
+            trip._persist_task_state(plan_id, task)
+            payload = json.loads((tasks_dir / f"{plan_id}.json").read_text(encoding="utf-8"))
+            restored = trip._normalize_loaded_task(plan_id, payload)
+
+        self.assertEqual(payload["share_token"], share_token)
+        self.assertEqual(restored["share_token"], share_token)
+
+    def test_share_rejects_a_plan_that_is_not_completed(self):
+        plan_id = "processing-plan"
+        trip._tasks[plan_id] = {
+            **trip._create_task_state(plan_id),
+            "user_id": "owner-user",
+            "status": "processing",
+            "request_payload": {"free_text_input": "private prompt"},
+        }
+
+        with self.assertRaises(trip.HTTPException) as raised:
+            asyncio.run(trip.get_shared_plan(plan_id))
+
+        self.assertEqual(raised.exception.status_code, 404)
+
     def test_status_keeps_legacy_unowned_tasks_readable(self):
         plan_id = "legacy-plan"
         trip._tasks[plan_id] = {

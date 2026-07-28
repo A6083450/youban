@@ -36,6 +36,7 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
       "city": "当天所在城市",
       "is_transfer_day": false,
       "transfer_info": "",
+      "transfer_time": "08:30",
       "description": "第1天行程概述",
       "transportation": "交通方式",
       "accommodation": "住宿类型",
@@ -59,13 +60,15 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
           "category": "景点类别",
           "ticket_price": 60,
           "reservation_required": false,
-          "reservation_tips": ""
+          "reservation_tips": "",
+          "start_time": "09:00",
+          "end_time": "11:00"
         }
       ],
       "meals": [
-        {"type": "breakfast", "name": "早餐推荐", "description": "早餐描述", "estimated_cost": 30},
-        {"type": "lunch", "name": "午餐推荐", "description": "午餐描述", "estimated_cost": 50},
-        {"type": "dinner", "name": "晚餐推荐", "description": "晚餐描述", "estimated_cost": 80}
+        {"type": "breakfast", "name": "早餐推荐", "description": "早餐描述", "estimated_cost": 30, "time": "08:00"},
+        {"type": "lunch", "name": "午餐推荐", "description": "午餐描述", "estimated_cost": 50, "time": "12:00"},
+        {"type": "dinner", "name": "晚餐推荐", "description": "晚餐描述", "estimated_cost": 80, "time": "18:00"}
       ]
     }
   ],
@@ -89,6 +92,21 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
     "total_transportation": 200,
     "total_inter_city_transport": 0,
     "total": 2060
+  },
+  "blueprint": {
+    "title": "旅行主题",
+    "summary": "旅程如何展开的摘要",
+    "logic": "路线与体力安排理由",
+    "pace": "阶段一 → 阶段二 → 阶段三",
+    "stages": [{
+      "title": "阶段标题",
+      "cities": ["城市"],
+      "day_indices": [0, 1],
+      "theme": "阶段体验主题",
+      "rationale": "为什么这样安排",
+      "highlights": ["代表体验1", "代表体验2"],
+      "transition": "如何衔接下一阶段"
+    }]
   }
 }
 ```
@@ -116,10 +134,12 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
 9. **景点图片**: 不需要在JSON中填写 image_url 字段，图片由前端根据景点名称自动从高德地图获取。
 10. **多城市行程要求**:
     - 每个 day 对象中必须包含 "city" 字段标明当天所在城市
-    - 城市切换当天设置 "is_transfer_day": true，并在 "transfer_info" 中**仅给出交通方式建议和大致时长**（如"建议乘坐高铁，约2-3小时"），**禁止编造具体车次、班次号、出发时间、到达时间等不可验证的信息**
+    - 城市切换当天设置 "is_transfer_day": true，并在 "transfer_info" 中**仅给出交通方式建议和大致时长**（如"建议乘坐高铁，约2-3小时"）。
     - 城际移动日的景点数量可适当减少为1-2个
     - budget 中的 "total_inter_city_transport" 统计城际交通费用(单城市时为0)
     - "cities" 数组列出所有途经城市(单城市时只有一个元素)
+11. transfer_time、景点 start_time/end_time 和餐饮 time 都是 HH:MM 格式的**参考时间**，仅用于安排节奏，不是实时班次、到达或预约确认；不得编造火车/航班号、具体班次、座位、实时出到达信息或任何预约结果。
+12. 必须生成完整 blueprint：所有 day_index 必须恰好出现一次；每个 stage 的 highlights 最多 3 项；blueprint 只说明旅行主题、阶段、路线和体力逻辑，不得复制酒店名称、住宿信息、餐饮推荐或菜品等明细。
 """
 
 

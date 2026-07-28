@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:layout": "playwright test e2e/layout-overflow.spec.ts"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
@@ -23,6 +24,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@types/google.maps": "^3.58.1",
     "@types/node": "^22.10.5",
     "@types/qrcode": "^1.5.6",

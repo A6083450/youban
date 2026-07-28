@@ -1,10 +1,13 @@
 """旅行规划 API 路由 - WebSocket 同步 + 轮询兼容模式"""
 
+# noqa: SIZE_OK -- 既有路由模块集中管理共享的任务内存与持久化状态，本次仅收敛分享权限边界。
+
 import asyncio
 import json
 import math
 import os
 import re
+import secrets
 import shutil
 import traceback
 import uuid
@@ -75,6 +78,7 @@ def _create_task_state(task_id: str) -> Dict[str, Any]:
         "result": None,
         "error": None,
         "user_id": "",
+        "share_token": "",
         "request_payload": None,
         "subscribers": [],  # list[asyncio.Queue]
     }
@@ -106,6 +110,7 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
             "result": payload.get("result"),
             "error": payload.get("error"),
             "user_id": payload.get("user_id", ""),
+            "share_token": payload.get("share_token", ""),
             "request_payload": payload.get("request_payload"),
         }
     )
@@ -136,6 +141,7 @@ def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
             "result": _serialize_result(task.get("result")),
             "error": task.get("error"),
             "user_id": task.get("user_id", ""),
+            "share_token": task.get("share_token", ""),
             "request_payload": task.get("request_payload"),
         }
         target = _task_file_path(task_id)
@@ -1327,6 +1333,60 @@ async def _delete_trip_plan(task_id: str, task: Dict[str, Any] | None = None):
             print(f"⚠️  清理缓存图片失败: {e}")
 
     return {"success": True, "removed_images": removed_images}
+
+
+@router.post(
+    "/share/{task_id}",
+    summary="发布旅行计划",
+    description="由计划拥有者为已完成的行程生成可公开访问的高熵分享码",
+)
+async def create_shared_plan(
+    task_id: str,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="计划不存在")
+    _require_task_owner(task, x_user_id, admin_token=x_admin_token)
+    if task.get("status") != "completed" or not task.get("result"):
+        raise HTTPException(status_code=409, detail="计划尚未完成，暂时无法分享")
+
+    share_token = str(task.get("share_token") or "") or secrets.token_hex(16)
+    task["share_token"] = share_token
+    _persist_task_state(task_id, task)
+    return {
+        "plan_id": task.get("plan_id", task_id),
+        "share_code": share_token,
+    }
+
+
+@router.get(
+    "/share/{share_token}",
+    summary="读取公开分享计划",
+    description="凭公开分享令牌读取已完成的最终行程，不返回用户信息、创建对话或任务过程数据",
+)
+async def get_shared_plan(share_token: str):
+    matched = next(
+        (
+            (task_id, task)
+            for task_id, task in _tasks.items()
+            if secrets.compare_digest(str(task.get("share_token") or ""), share_token)
+        ),
+        None,
+    )
+    if matched is None:
+        raise HTTPException(status_code=404, detail="分享计划不存在或尚未完成")
+
+    task_id, task = matched
+    if task.get("status") != "completed" or not task.get("result"):
+        raise HTTPException(status_code=404, detail="分享计划不存在或尚未完成")
+
+    return {
+        "plan_id": task.get("plan_id", task_id),
+        "status": "completed",
+        "result": _serialize_result(task.get("result")),
+    }
 
 
 @router.get(

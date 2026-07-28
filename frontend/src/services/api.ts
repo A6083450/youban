@@ -3,8 +3,11 @@ import type {
   AdminTripItem,
   BackendRuntimeSettings,
   ChatMessage,
+  CreateTripShareResponse,
   ParsedTripDraft,
   RuntimeSettings,
+  SharedTripPlanResponse,
+  ShareLoadErrorKind,
   TripChatEditResponse,
   TripConfirmReplyResponse,
   TripFormData,
@@ -385,6 +388,48 @@ export async function pollTaskStatus(taskId: string): Promise<any> {
   }
 }
 
+export class SharedTripPlanError extends Error {
+  constructor(public readonly kind: ShareLoadErrorKind) {
+    super(kind)
+    this.name = 'SharedTripPlanError'
+  }
+}
+
+export class TripShareCreationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TripShareCreationError'
+  }
+}
+
+export async function createTripShare(planId: string): Promise<CreateTripShareResponse> {
+  try {
+    const response = await apiClient.post<CreateTripShareResponse>(
+      `/api/trip/share/${encodeURIComponent(planId)}`,
+    )
+    return response.data
+  } catch (error: unknown) {
+    const detail = axios.isAxiosError<{ detail?: string }>(error)
+      ? error.response?.data?.detail || error.message
+      : ''
+    throw new TripShareCreationError(detail || t('result.share.createFailed'))
+  }
+}
+
+export async function getSharedTripPlan(shareCode: string): Promise<SharedTripPlanResponse> {
+  try {
+    const response = await apiClient.get<SharedTripPlanResponse>(
+      `/api/trip/share/${encodeURIComponent(shareCode)}`,
+    )
+    return response.data
+  } catch (error: unknown) {
+    const kind: ShareLoadErrorKind = axios.isAxiosError(error) && error.response?.status === 404
+      ? 'notFound'
+      : 'network'
+    throw new SharedTripPlanError(kind)
+  }
+}
+
 export async function getTripHistory(limit = 8): Promise<TripHistoryItem[]> {
   try {
     const response = await apiClient.get<TripHistoryResponse>('/api/trip/history', {
@@ -731,4 +776,3 @@ export async function deleteUserMemory(memoryId: string): Promise<void> {
 }
 
 export default apiClient
-

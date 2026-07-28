@@ -5,6 +5,7 @@
     :footer="null"
     centered
     :width="360"
+    :z-index="1100"
     @update:open="(v: boolean) => emit('update:open', v)"
   >
     <div class="share-modal-body">
@@ -20,6 +21,29 @@
           <a-button type="primary" size="small" @click="copyLink">
             {{ t('result.share.copy') }}
           </a-button>
+        </div>
+      </div>
+
+      <div class="share-code-block">
+        <span class="share-link-label">{{ t('result.share.codeLabel') }}</span>
+        <div class="share-link-row">
+          <input
+            class="share-link-input share-code-input"
+            :aria-label="t('result.share.codeLabel')"
+            :value="shareCode"
+            readonly
+            @focus="(e) => (e.target as HTMLInputElement).select()"
+          />
+          <a-tooltip :title="t('result.share.copyCode')">
+            <a-button
+              size="small"
+              class="share-code-copy"
+              :aria-label="t('result.share.copyCode')"
+              @click="copyCode"
+            >
+              <CopyOutlined />
+            </a-button>
+          </a-tooltip>
         </div>
       </div>
 
@@ -39,17 +63,18 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import { CopyOutlined } from '@ant-design/icons-vue'
 import QRCode from 'qrcode'
 
-const props = defineProps<{ open: boolean; planId: string }>()
+const props = defineProps<{ open: boolean; shareCode: string }>()
 const emit = defineEmits<{ (e: 'update:open', value: boolean): void }>()
 const { t } = useI18n()
 
-const shareUrl = computed(() => `${window.location.origin}/share/${props.planId}`)
+const shareUrl = computed(() => `${window.location.origin}/share/${props.shareCode}`)
 const qrDataUrl = ref('')
 
 const generateQr = async () => {
-  if (!props.planId) {
+  if (!props.shareCode) {
     qrDataUrl.value = ''
     return
   }
@@ -62,27 +87,43 @@ const generateQr = async () => {
 }
 
 watch(
-  () => [props.open, props.planId],
+  () => [props.open, props.shareCode],
   () => {
     if (props.open) generateQr()
   },
   { immediate: true }
 )
 
+const copyWithTextarea = (value: string) => {
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  try {
+    textarea.select()
+    if (!document.execCommand('copy')) throw new Error('copy command failed')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+const copyText = async (value: string) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch {
+      copyWithTextarea(value)
+      return
+    }
+  }
+  copyWithTextarea(value)
+}
+
 const copyLink = async () => {
   try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(shareUrl.value)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = shareUrl.value
-      textarea.style.position = 'fixed'
-      textarea.style.left = '-9999px'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-    }
+    await copyText(shareUrl.value)
     message.success(t('result.share.copied'))
   } catch (error) {
     console.error('复制链接失败:', error)
@@ -90,10 +131,20 @@ const copyLink = async () => {
   }
 }
 
+const copyCode = async () => {
+  try {
+    await copyText(props.shareCode)
+    message.success(t('result.share.codeCopied'))
+  } catch (error) {
+    console.error('复制分享码失败:', error)
+    message.error(t('result.share.codeCopyFailed'))
+  }
+}
+
 const downloadQr = () => {
   if (!qrDataUrl.value) return
   const link = document.createElement('a')
-  link.download = `tripstar_share_${props.planId}.png`
+  link.download = `tripstar_share_${props.shareCode}.png`
   link.href = qrDataUrl.value
   link.click()
 }
@@ -126,6 +177,17 @@ const downloadQr = () => {
   font-size: 13px;
   color: #3D3229;
   background: #FAF7F2;
+}
+.share-code-input {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.share-code-copy {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: #c4603d;
+  border-color: rgba(217, 119, 87, 0.35);
 }
 .share-qr-block {
   display: flex;

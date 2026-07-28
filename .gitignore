@@ -1,12 +1,15 @@
 data/
 .env
 .omc/
+.omo/
 backend/.omc/
 frontend/.omc/
 backend/runtime_settings.json
 __pycache__/
 node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
 data
 design
 docs

@@ -22,6 +22,8 @@ export interface Attraction {
   ticket_price?: number
   reservation_required?: boolean
   reservation_tips?: string
+  start_time?: string
+  end_time?: string
 }
 
 export interface Meal {
@@ -31,6 +33,7 @@ export interface Meal {
   location?: Location
   description?: string
   estimated_cost?: number
+  time?: string
 }
 
 export interface Hotel {
@@ -59,12 +62,31 @@ export interface DayPlan {
   city?: string
   is_transfer_day?: boolean
   transfer_info?: string
+  transfer_time?: string
   description: string
   transportation: string
   accommodation: string
   hotel?: Hotel
   attractions: Attraction[]
   meals: Meal[]
+}
+
+export interface TripBlueprintStage {
+  title: string
+  cities: string[]
+  day_indices: number[]
+  theme: string
+  rationale: string
+  highlights: string[]
+  transition: string
+}
+
+export interface TripBlueprint {
+  title: string
+  summary: string
+  logic: string
+  pace: string
+  stages: TripBlueprintStage[]
 }
 
 export interface WeatherInfo {
@@ -87,6 +109,7 @@ export interface TripPlan {
   weather_info: WeatherInfo[]
   overall_suggestions: string
   budget?: Budget
+  blueprint?: TripBlueprint
 }
 
 export interface TripFormData {
@@ -112,6 +135,19 @@ export interface TripPlanResponse {
   data?: TripPlan
   graph_data?: KnowledgeGraphData
 }
+
+export interface SharedTripPlanResponse {
+  plan_id: string
+  status: 'completed'
+  result: TripPlanResponse
+}
+
+export interface CreateTripShareResponse {
+  plan_id: string
+  share_code: string
+}
+
+export type ShareLoadErrorKind = 'notFound' | 'network'
 
 export interface TripHistoryItem {
   plan_id: string

@@ -32,6 +32,11 @@
         </button>
       </div>
 
+      <div class="sidebar-share-code">
+        <div class="sidebar-share-code__title">{{ t('shareCode.sidebarTitle') }}</div>
+        <ShareCodeEntry compact />
+      </div>
+
       <div class="sidebar-section-title">{{ t('sidebar.plans') }}</div>
       <div class="sidebar-list">
         <div v-if="plansLoading" class="sidebar-hint">{{ t('common.loading') }}</div>
@@ -107,6 +112,7 @@ import { setAppLocale, type AppLocale } from '@/i18n'
 import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
+import ShareCodeEntry from '@/components/ShareCodeEntry.vue'
 import { AUTH_UPDATED_EVENT } from '@/stores/auth'
 import type { TripHistoryItem } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
@@ -130,9 +136,10 @@ const switchLocale = (value: string) => {
 
 // 后台页面：独立布局，不显示侧边栏/顶栏
 const isAdminRoute = computed(() => route.name === 'Admin')
+const isShareRoute = computed(() => route.name === 'Share')
 
-// 登录页同样走无侧栏布局:未登录时不暴露任何计划数据
-const isBareRoute = computed(() => isAdminRoute.value || route.name === 'Login')
+// 登录和公开分享页走无侧栏布局:不暴露当前用户或历史计划
+const isBareRoute = computed(() => isAdminRoute.value || isShareRoute.value || route.name === 'Login')
 
 // 移动端抽屉
 const mobileMenuOpen = ref(false)
@@ -215,20 +222,25 @@ onUnmounted(() => {
 }
 
 .app-shell {
+  --desktop-sidebar-width: 260px;
+
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   display: flex;
   height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
 }
 
 /* ─── 固定左侧栏（Codex 式会话列表） ─── */
 .sidebar {
-  width: 260px;
+  width: var(--desktop-sidebar-width);
   flex-shrink: 0;
-  height: 100vh;
+  height: 100%;
   position: sticky;
   top: 0;
   background: #fff;
@@ -277,6 +289,22 @@ onUnmounted(() => {
 .new-plan-plus {
   font-size: 18px;
   line-height: 1;
+}
+
+.sidebar-share-code {
+  margin: 0 12px 16px;
+  padding: 12px;
+  background: #faf7f2;
+  border: 1px solid rgba(61, 50, 41, 0.1);
+  border-radius: 8px;
+}
+
+.sidebar-share-code__title {
+  margin-bottom: 8px;
+  color: #3d3229;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .sidebar-section-title {
@@ -441,6 +469,8 @@ onUnmounted(() => {
 .main-area {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   background: #f9f9f9;
   display: flex;
   flex-direction: column;

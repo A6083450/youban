@@ -8,7 +8,9 @@ import os
 import json
 import httpx
 from typing import List, Optional, Dict, Any
+from pydantic import ValidationError
 from ..config import get_settings
+from ..models.schemas import TripPlan
 
 # ============ System Prompt ============
 SYSTEM_PROMPT = """你是一个专业且贴心的私人旅行管家「旅途星辰AI」。
@@ -167,9 +169,11 @@ EDIT_SYSTEM_PROMPT = """你是专业且贴心的私人旅行管家「游伴AI」
    - 基于【当前旅行计划】JSON 生成修改后的完整计划,放入 updated_plan。
    - 必须保持原有 JSON schema 与所有未涉及字段完全不变。
    - 不得修改 city、cities、start_date、end_date、weather_info。
-   - 只允许调整 days 内的 attractions、hotel、meals、description、transportation、accommodation,以及 overall_suggestions。
+   - 只允许调整 days 内的 attractions、hotel、meals、description、transportation、accommodation、transfer_time，以及 overall_suggestions 和 blueprint；景点可调整 start_time/end_time，餐饮可调整 time。
    - 不要增删 days 数组元素;每天 attractions 至少保留 1 个。
    - 涉及费用时用合理估值填写 ticket_price / estimated_cost(数字);budget 字段保持原样即可(前端会自动重算)。
+   - transfer_time、景点 start_time/end_time 和餐饮 time 都是 HH:MM 格式的**参考时间**，仅用于安排节奏，不是实时班次、到达或预约确认；不得编造火车/航班号、具体班次、座位、实时出到达信息或任何预约结果。
+   - 修改 blueprint 时，所有 day_index 必须恰好出现一次；每个 stage 的 highlights 最多 3 项；blueprint 只说明旅行主题、阶段、路线和体力逻辑，不得复制酒店名称、住宿信息、餐饮推荐或菜品等明细。
    - changes 用简短中文逐条列出实际改动(如"已将第2天的钟楼替换为碑林博物馆");无实际改动则为 []。
    - reply 简要说明改了什么。
 3. 修改要求无法满足时(如超出天数范围):updated_plan 为 null,changes 为 [],在 reply 中解释原因并给出替代建议。"""
@@ -221,7 +225,11 @@ def _validate_updated_plan(plan: Any, original: Dict[str, Any]) -> Optional[Dict
     for key in ('city', 'cities', 'start_date', 'end_date', 'weather_info'):
         if key in original:
             plan[key] = original[key]
-    return plan
+    try:
+        validated = TripPlan(**plan)
+    except ValidationError:
+        return None
+    return validated.model_dump(mode="json")
 
 
 async def chat_edit_trip(
