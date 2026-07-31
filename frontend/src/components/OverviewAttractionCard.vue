@@ -49,6 +49,19 @@ const { t } = useI18n()
 </script>
 
 <style scoped lang="scss">
+/* 入场动画:backwards 填充保证延迟期间不可见,结束后不留 transform;
+   --i 由父级传入(上限 12),v-show 恢复时动画随父级自动重播 */
+@keyframes card-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .overview-card-item {
   width: 100%;
   min-width: 0;
@@ -59,6 +72,14 @@ const { t } = useI18n()
   background: transparent;
   box-shadow: none;
   break-inside: avoid;
+  animation: card-rise 0.35s ease backwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-card-item {
+    animation: none;
+  }
 }
 
 .card-img {

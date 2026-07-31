@@ -80,6 +80,7 @@
               :item="item"
               :image-src="getAttractionImage(item.name, index)"
               :visual-index="index"
+              :style="{ '--i': Math.min(index, 12) }"
               @image-error="handleImageError"
               @select-day="goToDayFromOverview"
             />
