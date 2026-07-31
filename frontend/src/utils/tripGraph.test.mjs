@@ -94,3 +94,17 @@ test('multi-city plan creates root node and per-city nodes', () => {
 test('returns null option when no days', () => {
   assert.equal(buildGraphOption(buildTripGraph({ city: '东京', days: [] }, t)), null)
 })
+
+test('tooltip formatter escapes html in node name and value', () => {
+  const xss = { ...plan, days: [{
+    day_index: 0, date: '2026-08-01', city: '东京',
+    attractions: [{ name: '<img src=x onerror=alert(1)>', address: '<b>addr</b>' }],
+    meals: [],
+  }] }
+  const option = buildGraphOption(buildTripGraph(xss, t))
+  const node = option.series[0].data.find((n) => n.lane === 'attraction')
+  const html = option.tooltip.formatter({ dataType: 'node', data: node })
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'))
+  assert.ok(html.includes('&lt;b&gt;addr&lt;/b&gt;'))
+  assert.ok(!html.includes('<img'))
+})

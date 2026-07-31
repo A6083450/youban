@@ -18,6 +18,11 @@ const NODE_SIZES = {
 }
 
 const LANES = ['city', 'day', 'attraction', 'hotel', 'meal', 'weather', 'budget', 'preference']
+
+// 转义 LLM 生成内容，避免 tooltip HTML 注入
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]))
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
 
 // 布局常量（像素）
@@ -226,7 +231,7 @@ export function buildGraphOption(graph) {
   return {
     tooltip: {
       formatter: (params) => (params.dataType === 'node'
-        ? `<b>${params.data.name}</b>${params.data.value ? `<br/>${params.data.value}` : ''}`
+        ? `<b>${escapeHtml(params.data.name)}</b>${params.data.value ? `<br/>${escapeHtml(params.data.value)}` : ''}`
         : ''),
     },
     legend: { data: graph.categories.map((c) => c.name), top: 8, textStyle: { fontSize: 12 } },
