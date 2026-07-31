@@ -328,7 +328,6 @@ import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { ShareAltOutlined } from '@ant-design/icons-vue'
 import { gsap } from 'gsap'
-import { animate as animeAnimate, stagger as animeStagger } from 'animejs'
 import html2canvas from 'html2canvas'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
@@ -380,13 +379,12 @@ type TripMapHandle = {
 
 const tripMapRef = ref<TripMapHandle | null>(null)
 
-// ─── 行程概览动画:GSAP 入场错开 + Anime.js Ken Burns 持续漂移 ───
+// ─── 行程概览动画:GSAP 驱动,简约暖风格 ───
 const overviewSection = ref<HTMLElement | null>(null)
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let overviewGsapCtx: gsap.Context | undefined
-let overviewDrift: { cancel: () => void } | undefined
 
-// GSAP:卡片入场错开;每次切回概览 tab 重播
+// 入场:卡片柔和上浮错开;每次切回概览 tab 重播
 const playOverviewIntro = (): void => {
   if (prefersReducedMotion || !overviewSection.value) return
   overviewGsapCtx?.revert()
@@ -396,29 +394,29 @@ const playOverviewIntro = (): void => {
       { autoAlpha: 0, y: 14 },
       { autoAlpha: 1, y: 0, duration: 0.35, ease: 'power2.out', stagger: 0.055, overwrite: 'auto' },
     )
+    startOverviewAmbient()
   }, overviewSection.value)
 }
 
-// Anime.js:景点图 Ken Burns 缓慢缩放漂移,stagger 让各卡错开相位
-const startOverviewDrift = (): void => {
-  if (prefersReducedMotion || !overviewSection.value || overviewDrift) return
-  const imgs = overviewSection.value.querySelectorAll('.card-img img')
-  if (!imgs.length) return
-  overviewDrift = animeAnimate(imgs, {
-    scale: [1, 1.08],
-    x: ['0%', '1.5%'],
-    y: ['0%', '-1.5%'],
-    duration: 18000,
-    ease: 'inOutSine',
-    loop: true,
-    alternate: true,
-    delay: animeStagger(1500),
-  }) as unknown as { cancel: () => void }
+// 持续氛围:暖色微光带缓慢扫过每张卡片,间隔循环、逐卡错峰。
+// 光带层不依赖图片加载完成(图片异步到位、占位卡同样生效)
+const startOverviewAmbient = (): void => {
+  gsap.fromTo(
+    '.img-sheen',
+    { xPercent: -130 },
+    {
+      xPercent: 130,
+      duration: 4.2,
+      ease: 'sine.inOut',
+      repeat: -1,
+      repeatDelay: 3.2,
+      stagger: { each: 1.4 },
+    },
+  )
 }
 
 onMounted(() => {
   playOverviewIntro()
-  startOverviewDrift()
 })
 
 watch(activeSection, async (section) => {
@@ -429,7 +427,6 @@ watch(activeSection, async (section) => {
 
 onBeforeUnmount(() => {
   overviewGsapCtx?.revert()
-  overviewDrift?.cancel()
 })
 
 const openShareModal = async (): Promise<void> => {

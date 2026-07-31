@@ -3,6 +3,7 @@
     <div :class="['card-img', `card-img--${visualIndex % 5}`]">
       <img v-if="imageSrc" :src="imageSrc" :alt="item.name" loading="lazy" @error="emit('image-error', item.name)" />
       <div v-else class="image-placeholder">{{ item.name }}</div>
+      <div class="img-sheen" aria-hidden="true"></div>
       <span class="day-badge">D{{ item.dayArrayIndex + 1 }}</span>
       <button
         type="button"
@@ -97,8 +98,23 @@ const { t } = useI18n()
     padding: 16px;
   }
 
-  .day-badge {
+  /* 暖色微光带:由 GSAP 驱动平移扫过,静态时藏在左侧不可见 */
+  .img-sheen {
     position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 32%,
+      rgba(255, 196, 140, 0.14) 47%,
+      rgba(255, 220, 178, 0.22) 52%,
+      transparent 68%
+    );
+    transform: translateX(-130%);
+  }
+
+  .day-badge {    position: absolute;
     left: 0.65rem;
     top: 0.65rem;
     z-index: 2;
