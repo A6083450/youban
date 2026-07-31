@@ -80,6 +80,21 @@ const { t } = useI18n()
   .overview-card-item {
     animation: none;
   }
+
+  .card-img img {
+    animation: none;
+  }
+}
+
+/* 持续动画:Ken Burns 缓慢缩放+漂移,负延迟让各卡片错开相位;
+   动画期间覆盖 hover 的 img 缩放(hover 反馈由按钮/标题变色承担) */
+@keyframes img-drift {
+  from {
+    transform: scale(1) translate(0, 0);
+  }
+  to {
+    transform: scale(1.08) translate(1.5%, -1.5%);
+  }
 }
 
 .card-img {
@@ -99,6 +114,8 @@ const { t } = useI18n()
     object-fit: cover;
     z-index: 0;
     transition: transform 0.25s ease;
+    animation: img-drift 18s ease-in-out infinite alternate;
+    animation-delay: calc(var(--i, 0) * -2.7s);
   }
 
   .image-placeholder {
