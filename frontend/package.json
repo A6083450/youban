@@ -16,6 +16,7 @@
     "ant-design-vue": "^4.2.6",
     "axios": "^1.7.9",
     "dayjs": "^1.11.10",
+    "echarts": "^6.1.0",
     "html2canvas": "^1.4.1",
     "qrcode": "^1.5.4",
     "swiper": "^11.2.10",
