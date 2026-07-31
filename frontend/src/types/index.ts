@@ -222,7 +222,7 @@ export interface RuntimeSettings {
   openai_model: string
 }
 
-// ============ 行程脉络图数据类型(后端 graph_data 字段,前端已改为 TripFlow 渲染) ============
+// ============ 行程脉络图数据类型(后端 graph_data 字段,前端已改为 TripGraph 渲染) ============
 
 export interface GraphNode {
   id: string
