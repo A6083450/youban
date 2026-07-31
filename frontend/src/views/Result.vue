@@ -409,7 +409,7 @@ const startOverviewAmbient = (): void => {
       duration: 4.2,
       ease: 'sine.inOut',
       repeat: -1,
-      repeatDelay: 3.2,
+      repeatDelay: 2.2,
       stagger: { each: 1.4 },
     },
   )

@@ -106,10 +106,10 @@ const { t } = useI18n()
     pointer-events: none;
     background: linear-gradient(
       100deg,
-      transparent 32%,
-      rgba(255, 196, 140, 0.14) 47%,
-      rgba(255, 220, 178, 0.22) 52%,
-      transparent 68%
+      transparent 28%,
+      rgba(255, 190, 128, 0.2) 46%,
+      rgba(255, 218, 172, 0.32) 52%,
+      transparent 72%
     );
     transform: translateX(-130%);
   }
