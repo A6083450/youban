@@ -176,6 +176,7 @@ export type TripTaskStage =
   | 'weather_search'
   | 'hotel_search'
   | 'planning'
+  | 'reviewing'
   | 'graph_building'
   | 'completed'
   | 'failed'

@@ -114,7 +114,7 @@ const toggleExpand = (key: string) => {
 }
 
 const stageOrder: TripTaskStage[] = [
-  'submitted', 'initializing', 'attraction_search', 'weather_search', 'hotel_search', 'planning', 'graph_building', 'completed'
+  'submitted', 'initializing', 'attraction_search', 'weather_search', 'hotel_search', 'planning', 'reviewing', 'graph_building', 'completed'
 ]
 
 const stageLabels: Record<TripTaskStage, string> = {
@@ -124,6 +124,7 @@ const stageLabels: Record<TripTaskStage, string> = {
   weather_search: '查询天气',
   hotel_search: '搜索酒店',
   planning: '生成行程',
+  reviewing: '评审优化',
   graph_building: '整理行程脉络',
   completed: '完成',
   failed: '失败',

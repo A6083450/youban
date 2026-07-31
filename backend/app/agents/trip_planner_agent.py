@@ -1,9 +1,10 @@
-"""LangGraph 旅行规划工作流
+"""LangGraph 旅行规划工作流(规划者 + 评审者 双 agent 反思循环)
 
 图结构:
 START → load_memories → fetch_attractions → fetch_weather → fetch_hotels
-      → plan_itinerary → parse_plan ─(成功)→ save_memories → END
-                              └─(失败且未重试)→ repair(带 parse_error 重新规划)
+      → plan_itinerary → parse_plan ─(失败且未重试)→ plan_itinerary(带 parse_error 重新规划)
+                              └(成功)→ review_plan ─(通过/已修订上限)→ save_memories → END
+                                               └(有问题)→ revise_itinerary → parse_plan(再评审)
 """
 
 import asyncio
@@ -143,6 +144,22 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
 """
 
 
+REVIEWER_AGENT_PROMPT = """你是旅行计划评审专家。规划者(agent)生成了一份旅行计划 JSON,你负责审查其合理性与数据质量。
+
+审查要点:
+1. 时间安排: 每天景点 start_time/end_time 是否重叠、是否与 visit_duration 匹配、节奏是否过紧(正常一天2-3个景点)
+2. 餐饮: 每天是否都有早中晚三餐,用餐时间是否合理
+3. 城际移动: 城市切换日是否正确标记 is_transfer_day、移动日景点是否过多(应1-2个)
+4. 预算: budget 各项是否为纯数字、各项之和与 total 是否基本一致
+5. blueprint: 所有 day_index 是否恰好各出现一次、每个 stage 是否有实质内容
+6. 预约: reservation_required 为 true 的景点是否保留了预约提示
+7. 数据一致性: 日期连续且与 day_index 对应、每天 city 字段正确
+
+只输出严格 JSON,不要输出任何其他文字:
+{"approved": true 或 false, "issues": ["问题1", "问题2"]}
+没有问题或只有可忽略的小瑕疵时 approved=true;issues 最多5条,每条一句话说明问题和修改方向。"""
+
+
 class PlannerState(TypedDict, total=False):
     request_data: dict
     memory_context: str
@@ -153,6 +170,8 @@ class PlannerState(TypedDict, total=False):
     trip_plan: Optional[dict]
     parse_error: str
     repair_attempts: int
+    review_feedback: str
+    revision_attempts: int
 
 
 class PlannerContext(TypedDict, total=False):
@@ -243,6 +262,7 @@ async def load_memories(state: PlannerState, runtime: "Runtime[PlannerContext]")
     if memory_context:
         print(f"🧠 已载入用户记忆 {len(memory_context)} 字")
     return {"memory_context": memory_context, "repair_attempts": 0,
+            "revision_attempts": 0, "review_feedback": "",
             "attractions": {}, "weather": {}, "hotels": {}}
 
 
@@ -327,6 +347,80 @@ async def plan_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext]"
     return {"planner_output": str(response.content)}
 
 
+async def review_plan(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
+    """评审者 agent:检查解析成功的计划 JSON,输出 {"approved", "issues"}。
+
+    评审是建议性的:调用失败或输出无法解析时静默放行,绝不阻塞出计划。
+    """
+    request = _request_from(state)
+    city_names = [cs.city for cs in request.cities]
+    await _emit(runtime, "reviewing", "🧐 评审者正在检查行程合理性...", 92,
+                details=[{"type": "planning",
+                          "title": "🧐 评审 agent 正在审查行程的时间、节奏、预算与蓝图...",
+                          "content": "独立评审者检查规划者的输出,发现问题将要求修订",
+                          "timestamp": int(time.time() * 1000)}])
+    requirement = (
+        f"途经城市: {' → '.join(city_names)};总天数: {request.travel_days}天;"
+        f"日期: {request.start_date} 至 {request.end_date};"
+        f"交通: {request.transportation};住宿: {request.accommodation};"
+        f"偏好: {', '.join(request.preferences) if request.preferences else '无'}"
+    )
+    query = f"**旅行需求:**\n{requirement}\n\n**待评审的旅行计划 JSON:**\n{state.get('planner_output', '')}"
+    timeout = int(os.getenv("TRIP_PLANNER_TIMEOUT", "180"))
+    model = get_chat_model(temperature=0.1, timeout=timeout)
+    try:
+        response = await model.ainvoke([
+            {"role": "system", "content": REVIEWER_AGENT_PROMPT},
+            {"role": "user", "content": query},
+        ])
+        text = str(response.content)
+        import re as _re
+        match = _re.search(r'\{[\s\S]*\}', text)
+        data = json.loads(match.group() if match else text)
+        approved = bool(data.get("approved"))
+        issues = [str(i) for i in (data.get("issues") or []) if str(i).strip()][:5]
+    except Exception as e:
+        print(f"⚠️ 评审者异常,直接放行计划: {e}")
+        return {"review_feedback": ""}
+    if approved or not issues:
+        await _emit(runtime, "reviewing", "✅ 评审通过", 95,
+                    details=[{"type": "found", "title": "✅ 评审 agent 确认行程合理",
+                              "content": "时间与节奏、餐饮、预算、蓝图检查均通过",
+                              "timestamp": int(time.time() * 1000)}])
+        return {"review_feedback": ""}
+    feedback = "\n".join(f"{i + 1}. {issue}" for i, issue in enumerate(issues))
+    await _emit(runtime, "reviewing", f"🔧 评审发现 {len(issues)} 处问题,要求修订", 93,
+                details=[{"type": "found", "title": f"🔧 评审 agent 发现 {len(issues)} 处问题",
+                          "content": feedback, "timestamp": int(time.time() * 1000)}])
+    return {"review_feedback": feedback}
+
+
+async def revise_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
+    """规划者 agent 根据评审意见输出完整修订版 JSON。"""
+    request = _request_from(state)
+    await _emit(runtime, "planning", "🔧 规划者正在根据评审意见修订行程...", 94,
+                details=[{"type": "planning", "title": "🔧 规划 agent 正在逐条修复评审意见...",
+                          "content": state.get("review_feedback", "")[:200],
+                          "timestamp": int(time.time() * 1000)}])
+    query = _build_planner_query(
+        request, state.get("attractions", {}), state.get("weather", {}),
+        state.get("hotels", {}), state.get("memory_context", ""),
+    )
+    query += (
+        f"\n\n**上一版计划 JSON:**\n{state.get('planner_output', '')}\n\n"
+        f"**评审意见(必须逐条修复):**\n{state.get('review_feedback', '')}\n"
+        "请输出完整的修订版 JSON,不要输出解释文字。"
+    )
+    timeout = int(os.getenv("TRIP_PLANNER_TIMEOUT", "180"))
+    model = get_chat_model(temperature=0.2, timeout=timeout)
+    response = await model.ainvoke([
+        {"role": "system", "content": PLANNER_AGENT_PROMPT},
+        {"role": "user", "content": query},
+    ])
+    return {"planner_output": str(response.content),
+            "revision_attempts": state.get("revision_attempts", 0) + 1}
+
+
 async def parse_plan(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
     request = _request_from(state)
     try:
@@ -339,10 +433,20 @@ async def parse_plan(state: PlannerState, runtime: "Runtime[PlannerContext]") ->
 
 def route_after_parse(state: PlannerState) -> str:
     if state.get("trip_plan") is not None:
-        return "save_memories"
+        return "review_plan"
     if state.get("repair_attempts", 0) <= 1:
         return "plan_itinerary"  # 带 parse_error 重新规划一次
     raise ValueError(f"行程 JSON 解析失败: {state.get('parse_error', '未知错误')}")
+
+
+def route_after_review(state: PlannerState) -> str:
+    if not state.get("review_feedback"):
+        return "save_memories"  # 评审通过(含评审者异常放行)
+    max_rounds = int(os.getenv("TRIP_REVIEW_ROUNDS", "1"))
+    if state.get("revision_attempts", 0) >= max_rounds:
+        print(f"⚠️ 已达修订上限({max_rounds}轮),放行当前版本")
+        return "save_memories"
+    return "revise_itinerary"
 
 
 async def save_memories(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
@@ -361,6 +465,8 @@ def _build_graph():
     builder.add_node("fetch_hotels", fetch_hotels)
     builder.add_node("plan_itinerary", plan_itinerary, retry_policy=RetryPolicy(max_attempts=2))
     builder.add_node("parse_plan", parse_plan)
+    builder.add_node("review_plan", review_plan)
+    builder.add_node("revise_itinerary", revise_itinerary, retry_policy=RetryPolicy(max_attempts=2))
     builder.add_node("save_memories", save_memories)
     builder.add_edge(START, "load_memories")
     builder.add_edge("load_memories", "fetch_attractions")
@@ -369,19 +475,22 @@ def _build_graph():
     builder.add_edge("fetch_hotels", "plan_itinerary")
     builder.add_edge("plan_itinerary", "parse_plan")
     builder.add_conditional_edges("parse_plan", route_after_parse,
-                                  ["save_memories", "plan_itinerary"])
+                                  ["review_plan", "plan_itinerary"])
+    builder.add_conditional_edges("review_plan", route_after_review,
+                                  ["save_memories", "revise_itinerary"])
+    builder.add_edge("revise_itinerary", "parse_plan")
     builder.add_edge("save_memories", END)
     return builder.compile()
 
 
 class LangGraphTripPlanner:
-    """LangGraph 旅行规划工作流(替代 hello-agents 多智能体实现)。"""
+    """LangGraph 旅行规划工作流(规划者+评审者双 agent,替代 hello-agents 多智能体实现)。"""
 
     def __init__(self):
         print("🔄 初始化 LangGraph 旅行规划工作流...")
         self.graph = _build_graph()
         self.name = "LangGraph 行程规划"
-        print("✅ LangGraph 工作流就绪(7 节点,含解析修复循环)")
+        print("✅ LangGraph 工作流就绪(9 节点,含解析修复循环与评审反思循环)")
 
     async def plan_trip(
         self,

@@ -31,13 +31,21 @@ class _FakeMessage:
 
 
 class _FakeChatModel:
-    def __init__(self, replies):
+    def __init__(self, replies, fail_at=None):
         self._replies = list(replies)
         self.calls = []
+        self._fail_at = fail_at  # 第 N 次调用(0 起)抛异常,模拟评审者故障
 
     async def ainvoke(self, messages, **kwargs):
+        if self._fail_at is not None and len(self.calls) == self._fail_at:
+            self.calls.append(messages)
+            raise RuntimeError("LLM 故障")
         self.calls.append(messages)
         return _FakeMessage(self._replies.pop(0))
+
+
+APPROVED = json.dumps({"approved": True, "issues": []}, ensure_ascii=False)
+REJECTED = json.dumps({"approved": False, "issues": ["第1天节奏太紧,景点时间重叠"]}, ensure_ascii=False)
 
 
 class LangGraphPlannerTest(unittest.TestCase):
@@ -61,22 +69,36 @@ class LangGraphPlannerTest(unittest.TestCase):
         return plan, events, fake_model
 
     def test_happy_path_produces_plan_and_progress(self):
-        plan, events, model = self._run(_FakeChatModel([PLAN_JSON]))
+        plan, events, model = self._run(_FakeChatModel([PLAN_JSON, APPROVED]))
         self.assertEqual(plan.city, "北京")
         stages = [s for s, _ in events]
-        for stage in ("attraction_search", "weather_search", "hotel_search", "planning"):
+        for stage in ("attraction_search", "weather_search", "hotel_search", "planning", "reviewing"):
             self.assertIn(stage, stages)
 
     def test_memory_context_injected_into_planner_prompt(self):
-        _, _, model = self._run(_FakeChatModel([PLAN_JSON]), recall_text="- 用户喜欢自然风光")
+        _, _, model = self._run(_FakeChatModel([PLAN_JSON, APPROVED]), recall_text="- 用户喜欢自然风光")
         prompt_text = str(model.calls[0])
         self.assertIn("用户喜欢自然风光", prompt_text)
 
     def test_repair_loop_recovers_from_bad_json(self):
-        model = _FakeChatModel(["这不是JSON{{{", PLAN_JSON])
+        model = _FakeChatModel(["这不是JSON{{{", PLAN_JSON, APPROVED])
         plan, _, _ = self._run(model)
         self.assertEqual(plan.city, "北京")
-        self.assertEqual(len(model.calls), 2)  # 首次失败 → repair 重新规划
+        self.assertEqual(len(model.calls), 3)  # 首次失败 → repair 重新规划 → 评审
+
+    def test_review_rejection_triggers_revision(self):
+        model = _FakeChatModel([PLAN_JSON, REJECTED, PLAN_JSON, APPROVED])
+        plan, events, _ = self._run(model)
+        self.assertEqual(plan.city, "北京")
+        self.assertEqual(len(model.calls), 4)  # 规划 → 评审拒绝 → 修订 → 评审通过
+        revise_prompt = str(model.calls[2])
+        self.assertIn("评审意见", revise_prompt)
+        self.assertIn("节奏太紧", revise_prompt)
+
+    def test_reviewer_failure_still_yields_plan(self):
+        model = _FakeChatModel([PLAN_JSON], fail_at=1)
+        plan, _, _ = self._run(model)
+        self.assertEqual(plan.city, "北京")  # 评审者异常 → 静默放行
 
 
 if __name__ == "__main__":

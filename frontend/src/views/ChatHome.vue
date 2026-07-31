@@ -243,7 +243,7 @@ const stageText = (stage: TripTaskStage) => {
   if (stage === 'attraction_search') return t('home.loading.searchingAttractions')
   if (stage === 'weather_search') return t('home.loading.queryingWeather')
   if (stage === 'hotel_search') return t('home.loading.recommendingHotels')
-  if (stage === 'planning' || stage === 'graph_building') return t('home.loading.generatingPlan')
+  if (stage === 'planning' || stage === 'reviewing' || stage === 'graph_building') return t('home.loading.generatingPlan')
   if (stage === 'completed') return t('home.loading.done')
   return t('home.loading.initializing')
 }
