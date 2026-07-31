@@ -24,7 +24,6 @@ from ...agents.trip_planner_agent import get_trip_planner_agent
 from ...config import get_data_dir
 from ...models.schemas import TripPlanResponse, TripRequest
 from ...services import memory_service
-from ...services.knowledge_graph_service import build_knowledge_graph
 from ...services.llm_service import iter_llm_stream
 from ...services.trip_confirmation import consume_execution_token, register_confirm_decision
 
@@ -1060,8 +1059,6 @@ async def _run_trip_planning(task_id: str, request: TripRequest, user_id: str = 
         )
         agent = get_trip_planner_agent()
 
-        city_display = ' → '.join(cs.city for cs in request.cities) if request.cities else request.city
-
         async def progress_callback(stage: str, message: str, progress: int, details: list | None = None) -> None:
             await _update_task_state(
                 task_id,
@@ -1074,26 +1071,11 @@ async def _run_trip_planning(task_id: str, request: TripRequest, user_id: str = 
 
         trip_plan = await agent.plan_trip(request, progress_callback=progress_callback, user_id=user_id)
 
-        await _update_task_state(
-            task_id,
-            status="processing",
-            stage="graph_building",
-            progress=95,
-            message="正在构建知识图谱...",
-            details=[{
-                "type": "planning",
-                "title": f"🔗 正在构建 {city_display} 知识图谱...",
-                "timestamp": int(_time.time() * 1000),
-            }],
-        )
-        graph_data = build_knowledge_graph(trip_plan, language=getattr(request, 'language', 'zh') or 'zh')
-
         trip_result = TripPlanResponse(
             success=True,
             message="旅行计划生成成功",
             plan_id=task_id,
             data=trip_plan,
-            graph_data=graph_data,
         )
 
         print(f"✅ 任务 {task_id} 完成")
