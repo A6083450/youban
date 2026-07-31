@@ -133,7 +133,6 @@ export interface TripPlanResponse {
   message: string
   plan_id?: string
   data?: TripPlan
-  graph_data?: KnowledgeGraphData
 }
 
 export interface SharedTripPlanResponse {
@@ -221,33 +220,6 @@ export interface RuntimeSettings {
   openai_api_key: string
   openai_base_url: string
   openai_model: string
-}
-
-// ============ 行程脉络图数据类型(后端 graph_data 字段,前端已改为 TripFlow 渲染) ============
-
-export interface GraphNode {
-  id: string
-  name: string
-  category: number
-  symbolSize: number
-  itemStyle?: { color: string }
-  value?: string
-}
-
-export interface GraphEdge {
-  source: string
-  target: string
-  label?: string
-}
-
-export interface GraphCategory {
-  name: string
-}
-
-export interface KnowledgeGraphData {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  categories: GraphCategory[]
 }
 
 // ============ AI 行程问答类型 ============

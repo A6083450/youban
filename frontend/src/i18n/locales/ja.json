@@ -310,7 +310,7 @@
       "budget": "予算内訳",
       "map": "観光地マップ",
       "days": "日別プラン",
-      "graph": "旅の設計図",
+      "graph": "旅程マップ",
       "weather": "天気情報"
     },
     "blueprint": {
@@ -319,6 +319,13 @@
       "dayRange": "{start}〜{end}日目",
       "planningLogic": "計画の理由",
       "pace": "旅のペース"
+    },
+    "graph": {
+      "empty": "旅程データがありません",
+      "journeyTitle": "{days}日間 · {cities}",
+      "journeyEnd": "旅程終了",
+      "journeyStart": "出発",
+      "highlights": "旅程ハイライト"
     },
     "daily": {
       "daySelector": "日付を選択",

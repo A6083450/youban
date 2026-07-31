@@ -239,33 +239,21 @@
             </div>
           </div>
 
-          <div class="right-map" v-show="activeSection === 'map'">
-            <a-card id="map" :bordered="false" class="map-card section-shellless">
-              <div v-show="mapProviderType === 'google'" id="google-map-container" style="width: 100%; height: 100%"></div>
-              <div v-show="mapProviderType === 'amap'" id="amap-container" style="width: 100%; height: 100%"></div>
-              <transition name="map-loading-fade">
-                <div v-if="mapLoading" class="map-loading-mask">
-                  <div class="map-loading-spinner" aria-hidden="true">
-                    <span class="map-loading-spinner__ring"></span>
-                    <span class="map-loading-spinner__pin"></span>
-                  </div>
-                  <transition name="map-loading-text" mode="out-in">
-                    <div :key="mapLoadingText" class="map-loading-text">{{ mapLoadingText }}</div>
-                  </transition>
-                </div>
-              </transition>
-              <div v-if="tripPlan && tripPlan.days.length > 1" class="map-day-legend">
-                <span v-for="(_, di) in tripPlan.days" :key="di" class="map-day-legend__item">
-                  <span class="map-day-legend__dot" :style="{ backgroundColor: getMapDayColor(di + 1) }"></span>{{ t('result.mapInfo.dayTitle', { day: di + 1 }) }}
-                </span>
-              </div>
-            </a-card>
-          </div>
+          <TripMap
+            v-show="activeSection === 'map'"
+            ref="tripMapRef"
+            :trip-plan="tripPlan"
+            :active="activeSection === 'map'"
+          />
         </div>
 
-        <!-- 旅行蓝图 -->
+        <!-- 行程脉络图 -->
         <section v-show="activeSection === 'knowledge-graph'" id="knowledge-graph" class="flow-card">
-          <TripFlow :trip-plan="tripPlan" @select-day="goToDayFromOverview" />
+          <TripJourney
+            :trip-plan="tripPlan"
+            :attraction-photos="attractionPhotos"
+            @select-day="goToDayFromOverview"
+          />
         </section>
 
         <!-- 每日行程 -->
@@ -333,20 +321,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, ref, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { ShareAltOutlined } from '@ant-design/icons-vue'
-import AMapLoader from '@amap/amap-jsapi-loader'
-import { Loader as GoogleMapsLoader } from '@googlemaps/js-api-loader'
 import html2canvas from 'html2canvas'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
 import SharePlanModal from '@/components/SharePlanModal.vue'
 import WeatherDayCard from '@/components/WeatherDayCard.vue'
-import TripFlow from '@/components/TripFlow.vue'
+import TripJourney from '@/components/TripJourney.vue'
 import DailyItinerary from '@/components/DailyItinerary.vue'
+import TripMap from '@/components/TripMap.vue'
 import type {
   Attraction,
   Hotel,
@@ -359,12 +346,8 @@ import type {
 import {
   createTripShare,
   getRuntimeApiBaseUrl,
-  getRuntimeMapJsKey,
-  getRuntimeGoogleMapsApiKey,
-  getBackendRuntimeSettings,
   getSharedTripPlan,
   pollTaskStatus,
-  RUNTIME_SETTINGS_UPDATED_EVENT,
   SharedTripPlanError,
   TripShareCreationError,
 } from '@/services/api'
@@ -387,15 +370,12 @@ const pendingDayScrollIndex = ref<number | null>(null)
 const shareModalOpen = ref(false)
 const sharePublishing = ref(false)
 const shareCode = ref('')
-let map: any = null
-let googleMap: google.maps.Map | null = null
-let googleMarkers: google.maps.Marker[] = []
-let googlePolylines: google.maps.Polyline[] = []
-let googleInfoWindows: google.maps.InfoWindow[] = []
-let googleDirectionsRenderers: google.maps.DirectionsRenderer[] = []
-const mapProviderType = ref<'google' | 'amap'>('amap')
-const mapLoading = ref(false)
-const mapLoadingText = ref('')
+
+type TripMapHandle = {
+  captureScreenshot: () => Promise<string>
+}
+
+const tripMapRef = ref<TripMapHandle | null>(null)
 
 const openShareModal = async (): Promise<void> => {
   if (!planId.value || sharePublishing.value) return
@@ -624,7 +604,6 @@ const applyTripPlanPayload = async (payload: {
   sessionStorage.setItem('tripPlan', JSON.stringify(payload.plan))
 
   await loadAttractionPhotos()
-  if (activeSection.value === 'map') await ensureMapReady()
 }
 
 // Agent 对话修改计划:应用新计划并重算预算、刷新当前区块
@@ -649,53 +628,7 @@ const restoreTripPlanFromResponse = async (response?: TripPlanResponse | null) =
   return true
 }
 
-const destroyCurrentMap = () => {
-  // 清理 Google Maps
-  googleInfoWindows.forEach((iw) => { try { iw.close() } catch {} })
-  googleInfoWindows = []
-  googleMarkers.forEach((m) => { try { m.setMap(null) } catch {} })
-  googleMarkers = []
-  googlePolylines.forEach((p) => { try { p.setMap(null) } catch {} })
-  googlePolylines = []
-  googleDirectionsRenderers.forEach((r) => { try { r.setMap(null) } catch {} })
-  googleDirectionsRenderers = []
-  googleMap = null
-
-  // 清理高德地图
-  if (map) {
-    try { map.destroy() } catch {}
-    map = null
-  }
-}
-
-const ensureMapReady = async () => {
-  await nextTick()
-  // Google Maps 优先检测
-  if (mapProviderType.value === 'google' && googleMap) {
-    google.maps.event.trigger(googleMap, 'resize')
-    return
-  }
-  if (mapProviderType.value === 'amap' && map) {
-    if (typeof map.resize === 'function') {
-      map.resize()
-    }
-    return
-  }
-  // 都不存在则初始化
-  await initMap()
-}
-
-const handleRuntimeSettingsUpdated = () => {
-  destroyCurrentMap()
-  if (activeSection.value === 'map') {
-    void nextTick(async () => {
-      await ensureMapReady()
-    })
-  }
-}
-
 const loadPlanById = async (targetPlanId: string) => {
-  destroyCurrentMap()
   tripPlan.value = null
   pendingBudgetItems.value = []
   attractionPhotos.value = {}
@@ -748,12 +681,6 @@ const loadPlanById = async (targetPlanId: string) => {
   }
 }
 
-onMounted(() => {
-  if (typeof window !== 'undefined') {
-    window.addEventListener(RUNTIME_SETTINGS_UPDATED_EVENT, handleRuntimeSettingsUpdated)
-  }
-})
-
 watch(
   () => props.planId,
   async (newId) => {
@@ -783,14 +710,6 @@ watch(activeSection, async (section) => {
   } else {
     main?.scrollTo({ top: 0, behavior: 'auto' })
   }
-  if (section === 'map') await ensureMapReady()
-})
-
-onUnmounted(() => {
-  if (typeof window !== 'undefined') {
-    window.removeEventListener(RUNTIME_SETTINGS_UPDATED_EVENT, handleRuntimeSettingsUpdated)
-  }
-  destroyCurrentMap()
 })
 
 const goBack = () => {
@@ -1141,8 +1060,6 @@ const deleteBudgetItem = (item: BudgetDetailItem) => {
   recalculateBudgetTotals(transportationTotal)
   sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
 
-  destroyCurrentMap()
-
   message.success(t('result.messages.budgetItemDeleted'))
 }
 
@@ -1187,8 +1104,6 @@ const restoreBudgetItem = (pendingItem: BudgetRestoreItem) => {
   recalculateBudgetTotals(transportationTotal)
   pendingBudgetItems.value = pendingBudgetItems.value.filter((item) => item.uid !== pendingItem.uid)
   sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-
-  destroyCurrentMap()
 
   message.success(t('result.messages.budgetItemRestored'))
 }
@@ -1441,68 +1356,13 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
     </div>`
 }
 
-// ========== 捕获地图截图 ==========
-const captureMapScreenshot = async (): Promise<string> => {
-  try {
-    // 根据当前地图供应商选择对应的 DOM 容器
-    const containerId = mapProviderType.value === 'google' ? 'google-map-container' : 'amap-container'
-    const mapEl = document.getElementById(containerId)
-    if (!mapEl || mapEl.clientHeight === 0) {
-      console.warn('⚠️ 地图容器不可见或未初始化，跳过地图截图')
-      return ''
-    }
-
-    // 临时将地图容器显示出来以便截图（可能被 v-show 隐藏）
-    const parentCard = document.querySelector('.right-map') as HTMLElement | null
-    const wasHidden = parentCard && parentCard.style.display === 'none'
-    if (parentCard && wasHidden) {
-      parentCard.style.display = 'block'
-      parentCard.style.position = 'absolute'
-      parentCard.style.left = '-9999px'
-    }
-
-    // 等待一帧让渲染生效
-    await new Promise(resolve => setTimeout(resolve, 300))
-
-    const mapCanvas = await html2canvas(mapEl, {
-      backgroundColor: '#1a1a2e',
-      scale: 2,
-      logging: false,
-      useCORS: true,
-      allowTaint: true,
-      ignoreElements: (element) => {
-        // 忽略地图控制组件（比如 Google 的 +- 缩放按钮、高德控制条）
-        // html2canvas 对地图原生 SVG UI 的渲染支持极差，容易出现白底色块
-        if (element && element.className && typeof element.className === 'string') {
-          if (element.className.includes('gmnoprint') || element.className.includes('amap-controls')) {
-            return true
-          }
-        }
-        return false
-      }
-    })
-
-    // 还原隐藏状态
-    if (parentCard && wasHidden) {
-      parentCard.style.display = 'none'
-      parentCard.style.position = ''
-      parentCard.style.left = ''
-    }
-
-    return mapCanvas.toDataURL('image/png')
-  } catch (err) {
-    console.warn('⚠️ 地图截图失败，导出将不包含地图:', err)
-    return ''
-  }
-}
-
 // 导出为图片
 const exportAsImage = async () => {
   try {
     message.loading({ content: t('result.messages.generatingImage'), key: 'export', duration: 0 })
 
     // 1. 先捕获地图截图
-    const mapDataUrl = await captureMapScreenshot()
+    const mapDataUrl = await tripMapRef.value?.captureScreenshot() || ''
 
     // 2. 构建包含地图的完整导出 HTML
     const exportContainer = document.createElement('div')
@@ -1554,864 +1414,6 @@ const escapeHtml = (value: unknown): string => {
     .replace(/'/g, '&#39;')
 }
 
-// 地图标记按天配色，超出后循环取色
-const MAP_DAY_COLORS = ['#D97757', '#3E7CB1', '#5B9A68', '#8961A7', '#B07D3F', '#B85C79', '#4F9A94', '#7A7265']
-
-// 路线统一用导航绿，Pin 仍按天配色
-const MAP_ROUTE_GREEN = '#07C160'
-
-const getMapDayColor = (dayNo: number): string => MAP_DAY_COLORS[(dayNo - 1) % MAP_DAY_COLORS.length]
-
-// 水滴 Pin 轮廓（viewBox 0 0 36 46，针尖在 (18, 44)），高德与 Google 共用
-const MAP_PIN_PATH = 'M18 2C9.44 2 2.5 8.94 2.5 17.5c0 3.31 1.04 6.38 2.8 8.9L18 44l12.7-17.6c1.76-2.52 2.8-5.59 2.8-8.9C33.5 8.94 26.56 2 18 2Z'
-
-const buildMarkerContent = (dayNo: number, stopNo: number): string => {
-  const color = getMapDayColor(dayNo)
-  const fontSize = stopNo >= 10 ? 12 : 14
-  return `
-    <div class="tripstar-map-pin">
-      <svg class="tripstar-map-pin__svg" viewBox="0 0 36 46" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <ellipse cx="18" cy="44" rx="5" ry="1.8" fill="rgba(61, 50, 41, 0.28)"/>
-        <path d="${MAP_PIN_PATH}" fill="${color}" stroke="#ffffff" stroke-width="2.4" stroke-linejoin="round"/>
-      </svg>
-      <span class="tripstar-map-pin__num" style="font-size:${fontSize}px" aria-hidden="true">${stopNo}</span>
-    </div>
-  `
-}
-
-// Material “hotel” 床形图标（24x24），用于酒店 Pin
-const MAP_HOTEL_GLYPH = 'M7 13c1.66 0 3-1.34 3-3S8.66 7 7 7s-3 1.34-3 3 1.34 3 3 3zm12-6h-8v7H3V5H1v15h2v-3h18v3h2v-9c0-2.21-1.79-4-4-4z'
-
-// 酒店 Pin：白底 + 当天配色描边与床形图标，与景点的实色数字 Pin 形成明显区分
-const buildHotelMarkerContent = (dayNo: number): string => {
-  const color = getMapDayColor(dayNo)
-  return `
-    <div class="tripstar-map-pin">
-      <svg class="tripstar-map-pin__svg" viewBox="0 0 36 46" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <ellipse cx="18" cy="44" rx="5" ry="1.8" fill="rgba(61, 50, 41, 0.28)"/>
-        <path d="${MAP_PIN_PATH}" fill="#FFFDF9" stroke="${color}" stroke-width="2.6" stroke-linejoin="round"/>
-        <g transform="translate(10.8, 10.3) scale(0.6)">
-          <path d="${MAP_HOTEL_GLYPH}" fill="${color}"/>
-        </g>
-      </svg>
-    </div>
-  `
-}
-
-const buildInfoWindowContent = (attraction: any): string => {
-  const name = escapeHtml(attraction.name || t('common.noData'))
-  const address = escapeHtml(attraction.address || t('common.noData'))
-  const visitDuration = Number.isFinite(attraction.visit_duration) ? attraction.visit_duration : '—'
-  const dayAttractionText = escapeHtml(
-    t('result.mapInfo.dayAttraction', { day: attraction.dayIndex + 1, index: attraction.attrIndex + 1 })
-  )
-  const minuteUnit = escapeHtml(t('result.minuteUnit'))
-
-  const dayColor = getMapDayColor(attraction.dayIndex + 1)
-
-  return `
-    <div class="tripstar-map-tooltip tripstar-map-tooltip--plain">
-      <p class="tripstar-map-tooltip__line tripstar-map-tooltip__line--day" style="color:${dayColor}">${dayAttractionText}</p>
-      <p class="tripstar-map-tooltip__line tripstar-map-tooltip__line--title">${name}</p>
-      <p class="tripstar-map-tooltip__line">${address}</p>
-      <p class="tripstar-map-tooltip__line">${visitDuration}${minuteUnit}</p>
-    </div>
-  `
-}
-
-const buildHotelInfoWindowContent = (hotel: any, dayIndex: number): string => {
-  const name = escapeHtml(hotel?.name || t('common.noData'))
-  const address = escapeHtml(hotel?.address || t('common.noData'))
-  const price = escapeHtml(hotel?.price_range || '')
-  const label = escapeHtml(t('result.mapInfo.hotelLabel', { day: dayIndex + 1 }))
-  const dayColor = getMapDayColor(dayIndex + 1)
-  const priceLine = price ? `<p class="tripstar-map-tooltip__line">${price}</p>` : ''
-
-  return `
-    <div class="tripstar-map-tooltip tripstar-map-tooltip--plain">
-      <p class="tripstar-map-tooltip__line tripstar-map-tooltip__line--day" style="color:${dayColor}">${label}</p>
-      <p class="tripstar-map-tooltip__line tripstar-map-tooltip__line--title">${name}</p>
-      <p class="tripstar-map-tooltip__line">${address}</p>
-      ${priceLine}
-    </div>
-  `
-}
-
-type RouteMode = 'driving' | 'walking' | 'straight'
-type RoutePoint = [number, number]
-
-const ROUTE_STYLE_PRESETS: Record<
-  RouteMode,
-  {
-    strokeColor: string
-    strokeWeight: number
-    strokeOpacity: number
-    strokeStyle: 'solid' | 'dashed'
-    strokeDasharray?: number[]
-    lineJoin?: 'round' | 'miter' | 'bevel'
-    lineCap?: 'butt' | 'round' | 'square'
-    outlineColor?: string
-    borderWeight?: number
-  }
-> = {
-  driving: {
-    strokeColor: MAP_ROUTE_GREEN,
-    strokeWeight: 6,
-    strokeOpacity: 0.98,
-    strokeStyle: 'solid',
-    lineJoin: 'round',
-    lineCap: 'round',
-    outlineColor: 'rgba(255, 255, 255, 0.95)',
-    borderWeight: 2.8,
-  },
-  walking: {
-    strokeColor: MAP_ROUTE_GREEN,
-    strokeWeight: 5.5,
-    strokeOpacity: 0.95,
-    strokeStyle: 'dashed',
-    strokeDasharray: [16, 12],
-    lineJoin: 'round',
-    lineCap: 'round',
-    outlineColor: 'rgba(255, 255, 255, 0.95)',
-    borderWeight: 2.8,
-  },
-  straight: {
-    strokeColor: MAP_ROUTE_GREEN,
-    strokeWeight: 4.5,
-    strokeOpacity: 0.95,
-    strokeStyle: 'dashed',
-    strokeDasharray: [2, 12],
-    lineJoin: 'round',
-    lineCap: 'round',
-    outlineColor: 'rgba(255, 255, 255, 0.95)',
-    borderWeight: 2,
-  },
-}
-
-const detectRouteMode = (transportation: string): RouteMode => {
-  const normalized = (transportation || '').toLowerCase()
-  if (/(步行|徒步|散步|walk|walking)/i.test(normalized)) return 'walking'
-  if (/(驾车|开车|自驾|打车|出租车|car|drive|driving|taxi)/i.test(normalized)) return 'driving'
-  return 'driving'
-}
-
-// 两点间的二次贝塞尔弧线采样点：向行进方向左侧拱起，代替生硬的两点直线
-const buildArcPath = (start: RoutePoint, end: RoutePoint, segments = 32): RoutePoint[] => {
-  const [x1, y1] = start
-  const [x2, y2] = end
-  // 经度按纬度缩放到近似等距平面，保证弧线视觉上对称
-  const latScale = Math.cos(((y1 + y2) / 2) * Math.PI / 180) || 1e-6
-  const ux = (x2 - x1) * latScale
-  const uy = y2 - y1
-  if (Math.hypot(ux, uy) === 0) return [start, end]
-  const bend = 0.18
-  const cx = (x1 + x2) / 2 - (uy * bend) / latScale
-  const cy = (y1 + y2) / 2 + ux * bend
-  const path: RoutePoint[] = []
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments
-    const mt = 1 - t
-    path.push([
-      mt * mt * x1 + 2 * mt * t * cx + t * t * x2,
-      mt * mt * y1 + 2 * mt * t * cy + t * t * y2,
-    ])
-  }
-  return path
-}
-
-const toRoutePoint = (raw: any): RoutePoint | null => {
-  if (!raw) return null
-
-  if (Array.isArray(raw) && raw.length >= 2) {
-    const lng = Number(raw[0])
-    const lat = Number(raw[1])
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null
-  }
-
-  if (typeof raw.getLng === 'function' && typeof raw.getLat === 'function') {
-    const lng = Number(raw.getLng())
-    const lat = Number(raw.getLat())
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null
-  }
-
-  if ('lng' in raw && 'lat' in raw) {
-    const lng = Number(raw.lng)
-    const lat = Number(raw.lat)
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null
-  }
-
-  if ('longitude' in raw && 'latitude' in raw) {
-    const lng = Number(raw.longitude)
-    const lat = Number(raw.latitude)
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null
-  }
-
-  return null
-}
-
-const parsePolylineString = (polyline: string): RoutePoint[] => {
-  if (!polyline) return []
-
-  return polyline
-    .split(';')
-    .map((pair) => pair.split(','))
-    .map((parts) => {
-      const lng = Number(parts[0])
-      const lat = Number(parts[1])
-      return Number.isFinite(lng) && Number.isFinite(lat) ? ([lng, lat] as RoutePoint) : null
-    })
-    .filter((point): point is RoutePoint => Boolean(point))
-}
-
-const dedupeRoutePath = (points: RoutePoint[]): RoutePoint[] => {
-  if (points.length <= 1) return points
-  return points.filter((point, index, array) => {
-    if (index === 0) return true
-    const prev = array[index - 1]
-    return point[0] !== prev[0] || point[1] !== prev[1]
-  })
-}
-
-const extractRoutePath = (result: any): RoutePoint[] => {
-  const route =
-    result?.routes?.[0] ||
-    result?.route?.paths?.[0] ||
-    result?.route?.routes?.[0] ||
-    null
-
-  if (!route) return []
-
-  const steps = route.steps || []
-  const points: RoutePoint[] = []
-
-  steps.forEach((step: any) => {
-    if (Array.isArray(step?.path)) {
-      step.path.forEach((node: any) => {
-        const point = toRoutePoint(node)
-        if (point) points.push(point)
-      })
-      return
-    }
-
-    if (typeof step?.polyline === 'string') {
-      points.push(...parsePolylineString(step.polyline))
-    }
-  })
-
-  if (points.length > 1) return dedupeRoutePath(points)
-
-  if (typeof route?.polyline === 'string') {
-    const fromRoute = dedupeRoutePath(parsePolylineString(route.polyline))
-    if (fromRoute.length > 1) return fromRoute
-  }
-
-  return []
-}
-
-const searchRoutePath = (
-  AMap: any,
-  mode: Exclude<RouteMode, 'straight'>,
-  start: RoutePoint,
-  end: RoutePoint
-): Promise<RoutePoint[] | null> => {
-  return new Promise((resolve) => {
-    const ServiceCtor = mode === 'walking' ? AMap.Walking : AMap.Driving
-    if (!ServiceCtor) {
-      resolve(null)
-      return
-    }
-
-    // 插件服务异常时回调可能不触发，超时兜底防止后续路段全部卡住
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const finish = (value: RoutePoint[] | null) => {
-      if (settled) return
-      settled = true
-      if (timer) clearTimeout(timer)
-      resolve(value)
-    }
-    timer = setTimeout(() => finish(null), 4000)
-
-    const service =
-      mode === 'driving'
-        ? new ServiceCtor({
-            policy: AMap.DrivingPolicy?.LEAST_TIME ?? 0,
-          })
-        : new ServiceCtor({})
-
-    service.search(start, end, (status: string, result: any) => {
-      if (status !== 'complete') {
-        finish(null)
-        return
-      }
-      const path = extractRoutePath(result)
-      finish(path.length > 1 ? path : null)
-    })
-  })
-}
-
-// JS API 路线插件依赖有效安全密钥，失败时降级走 Web 服务 REST 接口（复用已配置的 vite_amap_web_key）
-let cachedAmapRestKey: string | null = null
-
-const getAmapRestKey = async (): Promise<string> => {
-  if (cachedAmapRestKey !== null) return cachedAmapRestKey
-  try {
-    const backend = await getBackendRuntimeSettings()
-    cachedAmapRestKey = backend.vite_amap_web_key || ''
-  } catch {
-    cachedAmapRestKey = ''
-  }
-  return cachedAmapRestKey
-}
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
-
-let lastRestCallAt = 0
-
-// 已取得的沿路路径缓存（切换 tab 重绘时不再重复请求消耗配额），以及插件连续失败计数
-const routeSegmentCache = new Map<string, RoutePoint[]>()
-let amapPluginRouteFailures = 0
-
-const searchRoutePathRest = async (
-  mode: Exclude<RouteMode, 'straight'>,
-  start: RoutePoint,
-  end: RoutePoint,
-  attempt = 0
-): Promise<RoutePoint[] | null> => {
-  const key = await getAmapRestKey()
-  if (!key) return null
-
-  // 免费 key 的 QPS 配额很低，请求间强制留出间隔，否则第三天起会被批量限流
-  const gap = lastRestCallAt + 380 - Date.now()
-  if (gap > 0) await sleep(gap)
-  lastRestCallAt = Date.now()
-
-  const url =
-    `https://restapi.amap.com/v3/direction/${mode}` +
-    `?origin=${start[0].toFixed(6)},${start[1].toFixed(6)}` +
-    `&destination=${end[0].toFixed(6)},${end[1].toFixed(6)}` +
-    `&extensions=base&key=${key}`
-
-  try {
-    const resp = await fetch(url)
-    const data = await resp.json()
-    if (data?.status !== '1') {
-      const reason = `${data?.info ?? ''} ${data?.infocode ?? ''}`
-      if (attempt < 2 && /qps|exceed|limit|frequen/i.test(reason)) {
-        await sleep(700 * (attempt + 1))
-        return searchRoutePathRest(mode, start, end, attempt + 1)
-      }
-      console.warn('高德 REST 路线规划失败:', reason.trim() || data)
-      return null
-    }
-
-    const steps = data?.route?.paths?.[0]?.steps
-    if (!Array.isArray(steps)) return null
-
-    const path: RoutePoint[] = []
-    steps.forEach((step: any) => {
-      String(step?.polyline || '').split(';').forEach(pair => {
-        const [lng, lat] = pair.split(',').map(Number)
-        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
-        const last = path[path.length - 1]
-        if (!last || last[0] !== lng || last[1] !== lat) path.push([lng, lat])
-      })
-    })
-    return path.length > 1 ? path : null
-  } catch {
-    return null
-  }
-}
-
-// 初始化地图入口
-const initMap = async () => {
-  mapLoading.value = true
-  mapLoadingText.value = t('result.mapInfo.loadingMap')
-  // 地图固定使用高德；Google Maps 逻辑保留为死代码，不再执行
-  const enableGoogle = false
-
-  // 1. 先尝试从 localStorage 读取 Google Maps API Key
-  let googleKey = enableGoogle ? getRuntimeGoogleMapsApiKey() : ''
-
-  // 2. 如果 localStorage 没有缓存，主动从后端拉取一次
-  if (enableGoogle && !googleKey) {
-    try {
-      const backendSettings = await getBackendRuntimeSettings()
-      if (backendSettings.google_maps_api_key) {
-        googleKey = backendSettings.google_maps_api_key
-        // 同步到 localStorage，下次不再需要请求后端
-        const { setRuntimeGoogleMapsApiKey: syncKey } = await import('@/services/api')
-        syncKey(googleKey)
-      }
-    } catch (err) {
-      console.warn('从后端获取 Google Maps 配置失败:', err)
-    }
-  }
-
-  // 3. 尝试初始化 Google Maps（已停用：固定高德）
-  if (enableGoogle && googleKey) {
-    try {
-      // 超时控制：如果 5 秒内未加载完，强制 reject 以触发降级
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Google Maps 加载超时，可能由于网络环境限制')), 5000)
-      })
-      const initPromise = initGoogleMap(googleKey)
-      await Promise.race([initPromise, timeoutPromise])
-      return
-    } catch (error) {
-      console.warn('Google Maps 加载失败，即将降级到高德地图:', error)
-      destroyCurrentMap()
-      // 等待 DOM 更新，确保高德容器可以显示
-      await nextTick()
-    }
-  }
-
-  // 4. 降级/默认：初始化高德地图
-  await initAMap()
-}
-
-// 初始化 Google Maps
-const initGoogleMap = async (apiKey: string) => {
-  mapProviderType.value = 'amap'
-  const loader = new GoogleMapsLoader({
-    apiKey,
-    version: 'weekly',
-    language: 'zh-CN', // 保持语言为中文体验较好
-  })
-
-  // 这会抛出异常，如由于网络、无代理引起等，正好会被上层捕捉
-  const googleApi = await loader.importLibrary('maps')
-  const { Map } = googleApi as google.maps.MapsLibrary
-
-  // 加载可能用到的模块
-  await loader.importLibrary('routes')
-  await loader.importLibrary('marker')
-
-  const container = document.getElementById('google-map-container')
-  if (!container) throw new Error('Cannot find google-map-container')
-
-  googleMap = new Map(container, {
-    center: { lat: 39.916527, lng: 116.397128 },
-    zoom: 12,
-    mapTypeId: 'roadmap',
-    // 隐藏默认控件，让其风格更接近我们的自定义风格
-    disableDefaultUI: true,
-    zoomControl: true,
-    styles: [
-      { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-      { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-      { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-      { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-      { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-      { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-      { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a76' }] },
-      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-      { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-      { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#9ca5b3' }] },
-      { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#746855' }] },
-      { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1f2835' }] },
-      { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#f3d19c' }] },
-      { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-      { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-      { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-      { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#515c6d' }] },
-      { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#17263c' }] },
-    ],
-  })
-
-  // 添加景点标记
-  await addGoogleAttractionMarkers()
-
-  mapLoading.value = false
-}
-
-// 添加 Google Maps 景点标记
-const addGoogleAttractionMarkers = async () => {
-  if (!tripPlan.value || !googleMap) return
-
-  const allAttractions: any[] = []
-  let globalIndex = 0
-
-  tripPlan.value.days.forEach((day, dayIndex) => {
-    day.attractions.forEach((attraction, attrIndex) => {
-      globalIndex++
-      if (attraction.location && attraction.location.longitude && attraction.location.latitude) {
-        allAttractions.push({
-          ...attraction,
-          dayIndex,
-          attrIndex,
-          globalIndex,
-        })
-      }
-    })
-  })
-
-  const bounds = new google.maps.LatLngBounds()
-
-  allAttractions.forEach((attraction, index) => {
-    const position = { lat: attraction.location.latitude, lng: attraction.location.longitude }
-    bounds.extend(position)
-
-    // 与高德一致的「按天配色」水滴 Pin（SVG data URI）
-    const stopNo = attraction.attrIndex + 1
-    const pinColor = getMapDayColor(attraction.dayIndex + 1)
-    const svgIcon = `data:image/svg+xml;charset=UTF-8,` + encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="36" height="46" viewBox="0 0 36 46">
-        <ellipse cx="18" cy="44" rx="5" ry="1.8" fill="rgba(61, 50, 41, 0.28)"/>
-        <path d="${MAP_PIN_PATH}" fill="${pinColor}" stroke="#ffffff" stroke-width="2.4" stroke-linejoin="round"/>
-        <text x="18" y="${stopNo >= 10 ? 21.8 : 22.4}" font-family="Arial, sans-serif" font-size="${stopNo >= 10 ? 12 : 14}" font-weight="700" fill="#ffffff" text-anchor="middle">${stopNo}</text>
-      </svg>
-    `)
-
-    const marker = new google.maps.Marker({
-      position,
-      map: googleMap,
-      icon: {
-        url: svgIcon,
-        scaledSize: new google.maps.Size(36, 46),
-        anchor: new google.maps.Point(18, 44),
-      },
-      zIndex: 120 + index
-    })
-
-    const infoWindow = new google.maps.InfoWindow({
-      content: buildInfoWindowContent(attraction),
-      disableAutoPan: true,
-    })
-
-    marker.addListener('mouseover', () => { infoWindow.open({ anchor: marker, map: googleMap }) })
-    marker.addListener('mouseout', () => { infoWindow.close() })
-    marker.addListener('click', () => { infoWindow.open({ anchor: marker, map: googleMap }) })
-
-    googleMarkers.push(marker)
-    googleInfoWindows.push(infoWindow)
-  })
-
-  // 绘制 Google Maps 路线
-  await drawGoogleRoutes(allAttractions)
-
-  if (allAttractions.length > 0 && googleMap) {
-    googleMap.fitBounds(bounds)
-    // 防止过于放大
-    const currentZoom = googleMap.getZoom()
-    if (currentZoom && currentZoom > 15) googleMap.setZoom(15)
-  }
-}
-
-// 绘制 Google Maps 路线
-const drawGoogleRoutes = async (attractions: any[]) => {
-  if (attractions.length < 2 || !tripPlan.value || !googleMap) return
-
-  const dayGroups: Record<number, any[]> = {}
-  attractions.forEach(attr => {
-    if (!dayGroups[attr.dayIndex]) dayGroups[attr.dayIndex] = []
-    dayGroups[attr.dayIndex].push(attr)
-  })
-
-  const directionsService = new google.maps.DirectionsService()
-
-  // 降级弧线：珠点样式，与 DirectionsRenderer 的实线区分
-  const addDottedArcFallback = (origin: any, destination: any, color: string) => {
-    const arcPath = buildArcPath([origin.lng, origin.lat], [destination.lng, destination.lat])
-      .map(([lng, lat]) => ({ lat, lng }))
-    const poly = new google.maps.Polyline({
-      path: arcPath,
-      strokeOpacity: 0,
-      icons: [{
-        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 2.4, fillColor: color, fillOpacity: 0.95, strokeColor: '#ffffff', strokeWeight: 1 },
-        offset: '0',
-        repeat: '13px',
-      }],
-      map: googleMap,
-      zIndex: 88,
-    })
-    googlePolylines.push(poly)
-  }
-
-  for (const dayAttractions of Object.values(dayGroups)) {
-    if (dayAttractions.length < 2) continue
-
-    dayAttractions.sort((a: any, b: any) => a.attrIndex - b.attrIndex)
-    const dayIndex = dayAttractions[0].dayIndex
-    const transportation = tripPlan.value.days?.[dayIndex]?.transportation || ''
-    const preferredMode = detectRouteMode(transportation)
-
-    let gTravelMode = google.maps.TravelMode.DRIVING
-    if (preferredMode === 'walking') gTravelMode = google.maps.TravelMode.WALKING
-
-    for (let i = 0; i < dayAttractions.length - 1; i++) {
-      const start = dayAttractions[i]
-      const end = dayAttractions[i + 1]
-      const origin = { lat: start.location.latitude, lng: start.location.longitude }
-      const destination = { lat: end.location.latitude, lng: end.location.longitude }
-
-      if (preferredMode === 'straight') {
-        addDottedArcFallback(origin, destination, MAP_ROUTE_GREEN)
-        continue
-      }
-
-      try {
-        const response = await directionsService.route({
-          origin,
-          destination,
-          travelMode: gTravelMode,
-        })
-
-        const renderer = new google.maps.DirectionsRenderer({
-          map: googleMap,
-          directions: response,
-          suppressMarkers: true, // 我们已经有了自定义 Marker
-          polylineOptions: {
-            strokeColor: MAP_ROUTE_GREEN,
-            strokeWeight: preferredMode === 'walking' ? 5.5 : 6,
-            strokeOpacity: 0.95,
-            zIndex: 90,
-          }
-        })
-        googleDirectionsRenderers.push(renderer)
-      } catch (err: any) {
-        console.warn('Google 路线规划失败, 降级为弧线:', err)
-        addDottedArcFallback(origin, destination, MAP_ROUTE_GREEN)
-      }
-    }
-  }
-}
-
-// 初始化高德地图
-const initAMap = async () => {
-  try {
-    mapProviderType.value = 'amap'
-    const mapJsKey = getRuntimeMapJsKey() || (await getBackendRuntimeSettings()).vite_amap_web_js_key
-    if (!mapJsKey) {
-      mapLoading.value = false
-      message.warning('请先在设置中配置高德地图 JS Key')
-      return
-    }
-
-    // 2021-12 后申请的高德 key 若缺失安全密钥配置，JS API 会直接加载失败。
-    // 未配置真实密钥时补一个占位值：地图可正常显示，路线规划自动走 REST 降级。
-    const w = window as any
-    if (!w._AMapSecurityConfig?.securityJsCode) {
-      w._AMapSecurityConfig = { securityJsCode: 'tripstar-placeholder' }
-    }
-
-    const AMap = await AMapLoader.load({
-      key: mapJsKey,  // 高德地图Web端(JS API) Key
-      version: '2.0',
-      plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow', 'AMap.Driving', 'AMap.Walking']
-    })
-
-    // 创建地图实例
-    map = new AMap.Map('amap-container', {
-      zoom: 12,
-      center: [116.397128, 39.916527], // 默认中心点(北京)
-      viewMode: '3D',
-      mapStyle: 'amap://styles/normal',
-      // 开启 preserveDrawingBuffer 才能让 html2canvas 在 WebGL 下截屏成功！
-      WebGLParams: {
-        preserveDrawingBuffer: true
-      }
-    })
-
-    // 地图底图就绪，进入标注与路线绘制阶段
-    mapLoadingText.value = t('result.mapInfo.loadingRoute')
-
-    // 标注与路线绘制失败不应把整张地图判为加载失败
-    try {
-      await addAttractionMarkers(AMap)
-    } catch (overlayError) {
-      console.error('地图标注/路线绘制失败:', overlayError)
-    }
-    mapLoading.value = false
-  } catch (error) {
-    mapLoading.value = false
-    console.error('地图加载失败:', error)
-    message.error(t('result.messages.mapLoadFailed'))
-  }
-}
-
-// 添加景点标记
-const addAttractionMarkers = async (AMap: any) => {
-  if (!tripPlan.value) return
-
-  const markers: any[] = []
-  const allAttractions: any[] = []
-
-  // 收集所有景点（保留全局编号）
-  let globalIndex = 0
-  tripPlan.value.days.forEach((day, dayIndex) => {
-    day.attractions.forEach((attraction, attrIndex) => {
-      globalIndex++
-      if (attraction.location && attraction.location.longitude && attraction.location.latitude) {
-        allAttractions.push({
-          ...attraction,
-          dayIndex,
-          attrIndex,
-          globalIndex   // 全局编号（从1开始）
-        })
-      }
-    })
-  })
-
-  // 创建标记
-  allAttractions.forEach((attraction, index) => {
-    const marker = new AMap.Marker({
-      position: [attraction.location.longitude, attraction.location.latitude],
-      content: buildMarkerContent(attraction.dayIndex + 1, attraction.attrIndex + 1),
-      anchor: 'bottom-center',
-      offset: new AMap.Pixel(0, 0),
-      zIndex: 120 + index,
-    })
-
-    // 创建信息窗口
-    const infoWindow = new AMap.InfoWindow({
-      isCustom: true,
-      content: buildInfoWindowContent(attraction),
-      offset: new AMap.Pixel(0, -52),
-      closeWhenClickMap: true,
-    })
-
-    // 悬停显示纯文本tooltip，移出关闭
-    marker.on('mouseover', () => {
-      infoWindow.open(map, marker.getPosition())
-    })
-    marker.on('mouseout', () => {
-      infoWindow.close()
-    })
-    // 点击也显示，兼容触屏设备
-    marker.on('click', () => {
-      infoWindow.open(map, marker.getPosition())
-    })
-
-    markers.push(marker)
-  })
-
-  // 酒店标记：白底反色 Pin，当天配色描边 + 床形图标；连住同一酒店只标一次
-  const hotelSeen = new Set<string>()
-  tripPlan.value.days.forEach((day, dayIndex) => {
-    const loc = day.hotel?.location
-    if (!loc?.longitude || !loc?.latitude) return
-    const coordKey = `${loc.longitude},${loc.latitude}`
-    if (hotelSeen.has(coordKey)) return
-    hotelSeen.add(coordKey)
-
-    const hotelMarker = new AMap.Marker({
-      position: [loc.longitude, loc.latitude],
-      content: buildHotelMarkerContent(dayIndex + 1),
-      anchor: 'bottom-center',
-      offset: new AMap.Pixel(0, 0),
-      zIndex: 118,
-    })
-
-    const hotelInfoWindow = new AMap.InfoWindow({
-      isCustom: true,
-      content: buildHotelInfoWindowContent(day.hotel, dayIndex),
-      offset: new AMap.Pixel(0, -52),
-      closeWhenClickMap: true,
-    })
-    hotelMarker.on('mouseover', () => { hotelInfoWindow.open(map, hotelMarker.getPosition()) })
-    hotelMarker.on('mouseout', () => { hotelInfoWindow.close() })
-    hotelMarker.on('click', () => { hotelInfoWindow.open(map, hotelMarker.getPosition()) })
-
-    markers.push(hotelMarker)
-  })
-
-  // 添加标记到地图
-  map.add(markers)
-
-  // 绘制路线（优先真实道路路线，失败时回退直线）
-  const routePolylines = await drawRoutes(AMap, allAttractions)
-
-  // 自动调整视野以包含所有标记
-  if (allAttractions.length > 0) {
-    const overlaysForFit = routePolylines.length > 0 ? [...markers, ...routePolylines] : markers
-    map.setFitView(overlaysForFit)
-  }
-}
-
-// 绘制路线：根据交通方式选择 driving / walking；失败时降级为直线
-const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
-  if (attractions.length < 1 || !tripPlan.value) return []
-
-  // 按天分组绘制路线
-  const dayGroups: Record<number, any[]> = {}
-  attractions.forEach(attr => {
-    if (!dayGroups[attr.dayIndex]) {
-      dayGroups[attr.dayIndex] = []
-    }
-    dayGroups[attr.dayIndex].push(attr)
-  })
-
-  const polylines: any[] = []
-
-  // 为每天的景点逐段绘制路线
-  for (const dayAttractions of Object.values(dayGroups)) {
-    if (dayAttractions.length < 1) continue
-
-    dayAttractions.sort((a: any, b: any) => a.attrIndex - b.attrIndex)
-    const dayIndex = dayAttractions[0].dayIndex
-    const transportation = tripPlan.value.days?.[dayIndex]?.transportation || ''
-    const preferredMode = detectRouteMode(transportation)
-
-    // 当天线路站点：有坐标的酒店纳入，从酒店出发游完回酒店
-    const stops: RoutePoint[] = dayAttractions.map(
-      (attr: any): RoutePoint => [attr.location.longitude, attr.location.latitude]
-    )
-    const hotelLoc = tripPlan.value.days?.[dayIndex]?.hotel?.location
-    if (hotelLoc?.longitude && hotelLoc?.latitude) {
-      const hotelPoint: RoutePoint = [hotelLoc.longitude, hotelLoc.latitude]
-      stops.unshift(hotelPoint)
-      stops.push(hotelPoint)
-    }
-    if (stops.length < 2) continue
-
-    for (let i = 0; i < stops.length - 1; i++) {
-      const startPoint = stops[i]
-      const endPoint = stops[i + 1]
-
-      const routeMode = preferredMode as Exclude<RouteMode, 'straight'>
-      const cacheKey = `${routeMode}:${startPoint.join(',')}|${endPoint.join(',')}`
-      let plannedPath: RoutePoint[] | null = routeSegmentCache.get(cacheKey) ?? null
-
-      if (!plannedPath && preferredMode !== 'straight') {
-        // 安全密钥无效时插件必然全败，连败两次后直接走 REST，避免整体绘制被拖慢
-        if (amapPluginRouteFailures < 2) {
-          plannedPath = await searchRoutePath(AMap, routeMode, startPoint, endPoint)
-          amapPluginRouteFailures = plannedPath ? 0 : amapPluginRouteFailures + 1
-        }
-        if (!plannedPath) {
-          plannedPath = await searchRoutePathRest(routeMode, startPoint, endPoint)
-        }
-        if (plannedPath) {
-          routeSegmentCache.set(cacheKey, plannedPath)
-        }
-      }
-
-      const usePlannedRoute = Array.isArray(plannedPath) && plannedPath.length > 1
-      const routeModeForStyle: RouteMode = usePlannedRoute ? preferredMode : 'straight'
-      // 无真实路线时画珠点弧线，与实路实线明确区分
-      const path = usePlannedRoute ? plannedPath : buildArcPath(startPoint, endPoint)
-      const style = ROUTE_STYLE_PRESETS[routeModeForStyle]
-
-      // 导航绿 + 白描边，在浅色底图上足够醒目
-      const polyline = new AMap.Polyline({
-        path,
-        ...style,
-        isOutline: true,
-        showDir: usePlannedRoute,
-        zIndex: usePlannedRoute ? 90 : 88,
-      })
-
-      polylines.push(polyline)
-    }
-  }
-
-  if (polylines.length > 0) {
-    map.add(polylines)
-  }
-
-  return polylines
-}
 </script>
 
 <style scoped>
@@ -3025,13 +2027,6 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   gap: 20px;
 }
 
-.right-map {
-  flex: 1;
-  height: calc(100vh - 185px);
-  height: calc(100dvh - 185px);
-  min-height: 520px;
-}
-
 /* 行程概览瀑布流 */
 .overview-card {
   width: 100%;
@@ -3404,21 +2399,6 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   padding: 0 !important;
 }
 
-/* 地图卡片 */
-.map-card {
-  position: relative;
-  height: 100%;
-  min-height: 500px;
-  overflow: hidden;
-}
-
-/* body 用绝对定位铺满卡片：百分比高度在移动端 flex 布局下会解析失败导致地图 0 高 */
-.map-card :deep(.ant-card-body) {
-  position: absolute;
-  inset: 0;
-  padding: 0;
-}
-
 /* 蓝图与每日行程直接使用结果框架,不再嵌套卡片壳 */
 .flow-card,
 .days-card {
@@ -3678,6 +2658,54 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   }
 }
 
+/* tab 区块切换：v-show 从 display:none 恢复时动画自动重播；
+   不带 fill-mode，结束后不残留 transform，避免影响内部 sticky/fixed 元素 */
+.overview-card,
+.top-info-section,
+.flow-card,
+.days-card,
+.weather-section-card {
+  animation: section-enter 0.26s ease;
+}
+
+/* 预算/地图面板互切时外层容器不重建，给内层面板补一个纯淡入（不动 transform，保护地图渲染） */
+.left-info,
+.right-map {
+  animation: section-fade 0.22s ease;
+}
+
+@keyframes section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes section-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-card,
+  .top-info-section,
+  .flow-card,
+  .days-card,
+  .weather-section-card,
+  .left-info,
+  .right-map {
+    animation: none;
+  }
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .result-main {
@@ -3686,31 +2714,6 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
 
   .content-wrapper {
     padding: 14px;
-  }
-
-  .right-map {
-    height: calc(100vh - 230px);
-    height: calc(100dvh - 230px);
-    min-height: 420px;
-  }
-
-  /* 图例单行横向滑动：15 天行程不再换行成大色块压掉地图 */
-  .map-day-legend {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 6px 12px;
-    gap: 12px;
-  }
-
-  .map-day-legend::-webkit-scrollbar {
-    display: none;
-  }
-
-  .map-day-legend__item {
-    font-size: 11px;
-    flex-shrink: 0;
   }
 
   .top-switch-nav {
@@ -3905,221 +2908,4 @@ const drawRoutes = async (AMap: any, attractions: any[]): Promise<any[]> => {
   }
 }
 
-</style>
-
-<style>
-:root {
-  --tripstar-map-accent: #D97757;
-  --tripstar-map-accent-strong: #C4603D;
-  --tripstar-map-surface: rgba(255, 255, 255, 0.92);
-  --tripstar-map-border: rgba(217, 119, 87, 0.35);
-  --tripstar-map-text-main: #3D3229;
-  --tripstar-map-text-sub: rgba(61, 50, 41, 0.7);
-}
-
-.tripstar-map-pin {
-  position: relative;
-  width: 36px;
-  height: 46px;
-  cursor: pointer;
-  transform-origin: 50% 100%;
-  transition: transform 0.18s ease;
-  filter: drop-shadow(0 4px 8px rgba(61, 50, 41, 0.3));
-}
-
-.tripstar-map-pin:hover {
-  transform: scale(1.12);
-}
-
-.tripstar-map-pin__svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.tripstar-map-pin__num {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 35px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  color: #ffffff;
-  text-shadow: 0 1px 2px rgba(61, 50, 41, 0.35);
-  pointer-events: none;
-}
-
-.tripstar-map-tooltip {
-  max-width: min(320px, calc(100vw - 40px));
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(61, 50, 41, 0.08);
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(61, 50, 41, 0.18);
-  padding: 10px 14px;
-  color: #3D3229;
-  pointer-events: none;
-}
-
-.tripstar-map-tooltip__line {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: rgba(61, 50, 41, 0.68);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tripstar-map-tooltip__line + .tripstar-map-tooltip__line {
-  margin-top: 2px;
-}
-
-.tripstar-map-tooltip__line--day {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.tripstar-map-tooltip__line--title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #3D3229;
-}
-
-.map-day-legend {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 14px;
-  max-width: calc(100% - 24px);
-  padding: 7px 14px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(61, 50, 41, 0.08);
-  border-radius: 999px;
-  box-shadow: 0 4px 14px rgba(61, 50, 41, 0.12);
-  pointer-events: none;
-}
-
-.map-day-legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #3D3229;
-  white-space: nowrap;
-}
-
-.map-day-legend__dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 2px solid #ffffff;
-  box-shadow: 0 1px 3px rgba(61, 50, 41, 0.35);
-  flex-shrink: 0;
-}
-
-/* 地图加载遮罩：底图与路线就绪前覆盖，淡出过渡 */
-.map-loading-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  background: rgba(250, 247, 242, 0.92);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-.map-loading-spinner {
-  position: relative;
-  width: 52px;
-  height: 52px;
-}
-
-.map-loading-spinner__ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 3px solid rgba(217, 119, 87, 0.18);
-  border-top-color: #D97757;
-  animation: map-loading-rotate 0.9s linear infinite;
-}
-
-.map-loading-spinner__pin {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 16px;
-  height: 16px;
-  background: #D97757;
-  border-radius: 50% 50% 50% 4px;
-  transform: translate(-50%, -62%) rotate(-45deg);
-  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, 0.85);
-  animation: map-loading-pin-bounce 1.2s ease-in-out infinite;
-}
-
-.map-loading-text {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: #8a7d70;
-}
-
-@keyframes map-loading-rotate {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes map-loading-pin-bounce {
-  0%, 100% { transform: translate(-50%, -62%) rotate(-45deg) scale(1); }
-  50% { transform: translate(-50%, -78%) rotate(-45deg) scale(1.08); }
-}
-
-.map-loading-fade-enter-active,
-.map-loading-fade-leave-active {
-  transition: opacity 0.45s ease;
-}
-
-.map-loading-fade-enter-from,
-.map-loading-fade-leave-to {
-  opacity: 0;
-}
-
-.map-loading-text-enter-active,
-.map-loading-text-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
-}
-
-.map-loading-text-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-
-.map-loading-text-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-#amap-container .amap-info-content {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-}
-
-#amap-container .amap-info-sharp {
-  display: none !important;
-}
 </style>

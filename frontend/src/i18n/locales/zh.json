@@ -310,7 +310,7 @@
       "budget": "预算明细",
       "map": "景点地图",
       "days": "每日行程",
-      "graph": "旅行蓝图",
+      "graph": "行程脉络图",
       "weather": "天气信息"
     },
     "blueprint": {
@@ -319,6 +319,13 @@
       "dayRange": "第 {start}–{end} 天",
       "planningLogic": "安排逻辑",
       "pace": "旅行节奏"
+    },
+    "graph": {
+      "empty": "暂无行程数据",
+      "journeyTitle": "{days}天 · {cities}之旅",
+      "journeyEnd": "旅程结束",
+      "journeyStart": "出发",
+      "highlights": "行程主题灵感"
     },
     "daily": {
       "daySelector": "选择日期",

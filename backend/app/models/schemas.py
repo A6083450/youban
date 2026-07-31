@@ -263,44 +263,12 @@ class TripPlan(BaseModel):
         return self
 
 
-# ============ 知识图谱数据模型 ============
-
-class GraphNode(BaseModel):
-    """图谱节点"""
-    id: str = Field(..., description="节点ID")
-    name: str = Field(..., description="节点名称")
-    category: int = Field(default=0, description="分类索引")
-    symbolSize: int = Field(default=30, description="节点大小")
-    itemStyle: Optional[dict] = Field(default=None, description="节点样式")
-    value: Optional[str] = Field(default="", description="附加信息")
-
-
-class GraphEdge(BaseModel):
-    """图谱边"""
-    source: str = Field(..., description="源节点ID")
-    target: str = Field(..., description="目标节点ID")
-    label: str = Field(default="", description="关系标签")
-
-
-class GraphCategory(BaseModel):
-    """图谱分类"""
-    name: str = Field(..., description="分类名称")
-
-
-class KnowledgeGraphData(BaseModel):
-    """知识图谱数据"""
-    nodes: List[GraphNode] = Field(default=[], description="节点列表")
-    edges: List[GraphEdge] = Field(default=[], description="边列表")
-    categories: List[GraphCategory] = Field(default=[], description="分类列表")
-
-
 class TripPlanResponse(BaseModel):
     """旅行计划响应"""
     success: bool = Field(..., description="是否成功")
     message: str = Field(default="", description="消息")
     plan_id: Optional[str] = Field(default=None, description="计划ID（与后端任务ID对齐）")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
-    graph_data: Optional[KnowledgeGraphData] = Field(default=None, description="知识图谱数据")
 
 
 class POIInfo(BaseModel):

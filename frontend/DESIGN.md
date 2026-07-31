@@ -117,6 +117,15 @@ The current code predates semantic CSS variables and still contains equivalent r
 - **Accessibility**: the input has a persistent visible label; invalid feedback uses `role="alert"`; submit remains keyboard accessible.
 - **Layout**: input and action share one shrinkable row; at narrow widths the input owns remaining space and the action keeps a stable touch target without horizontal overflow.
 
+### Trip Map
+- **Structure**: one map surface containing the AMap canvas, transient loading mask, and optional multi-day legend.
+- **States**: inactive, SDK loading, base map ready, route enhancement pending, fully enhanced, and recoverable overlay failure.
+- **Interaction**: switching to the map lazily initializes one map instance; repeated switches resize the existing instance instead of loading another SDK instance.
+- **Layout**: fills the result map region with a 500px minimum desktop canvas and a 420px minimum mobile canvas. The legend remains a single horizontally scrollable row on mobile.
+- **Loading**: the blocking mask covers SDK/base-map setup only. Marker and route enhancement must not hide an already usable base map.
+- **Accessibility**: loading copy remains readable text; map controls retain provider keyboard behavior; the surrounding section keeps its existing navigation label.
+- **Ownership**: the component owns SDK loading, instance lifecycle, runtime-settings refresh, overlays, and screenshot capture. Result-page navigation and export composition remain outside it.
+
 ## 6. Motion & Interaction
 
 - Micro feedback: 150ms ease.

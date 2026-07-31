@@ -18,7 +18,9 @@
     </header>
 
     <!-- 移动端抽屉遮罩 -->
-    <div v-if="!isBareRoute && mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false"></div>
+    <Transition name="mask-fade">
+      <div v-if="!isBareRoute && mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false"></div>
+    </Transition>
 
     <aside v-if="!isBareRoute" class="sidebar" :class="{ open: mobileMenuOpen }">
       <div class="sidebar-header">
@@ -98,7 +100,11 @@
     </aside>
 
     <main class="main-area">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <Transition name="page" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
     </main>
   </div>
 </template>
@@ -474,6 +480,41 @@ onUnmounted(() => {
   background: #f9f9f9;
   display: flex;
   flex-direction: column;
+}
+
+/* 路由页面切换：轻量淡入上移，出场仅淡出避免布局抖动 */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-leave-to {
+  opacity: 0;
+}
+
+/* 移动端抽屉遮罩淡入淡出 */
+.mask-fade-enter-active,
+.mask-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.mask-fade-enter-from,
+.mask-fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active,
+  .mask-fade-enter-active,
+  .mask-fade-leave-active {
+    transition: none;
+  }
 }
 
 /* ─── 移动端顶栏(桌面隐藏) ─── */

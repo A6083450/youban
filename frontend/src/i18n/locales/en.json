@@ -310,7 +310,7 @@
       "budget": "Budget",
       "map": "Attraction Map",
       "days": "Daily Itinerary",
-      "graph": "Trip Blueprint",
+      "graph": "Journey Map",
       "weather": "Weather"
     },
     "blueprint": {
@@ -319,6 +319,13 @@
       "dayRange": "Day {start}–{end}",
       "planningLogic": "Planning logic",
       "pace": "Travel pace"
+    },
+    "graph": {
+      "empty": "No itinerary data yet",
+      "journeyTitle": "{days}-Day {cities}",
+      "journeyEnd": "Journey Complete",
+      "journeyStart": "Start",
+      "highlights": "Trip Highlights"
     },
     "daily": {
       "daySelector": "Choose a day",
