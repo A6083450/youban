@@ -70,6 +70,7 @@
         <section
           v-show="activeSection === 'overview'"
           id="overview"
+          ref="overviewSection"
           class="overview-card"
           :aria-label="t('result.side.overview')"
         >
@@ -80,7 +81,6 @@
               :item="item"
               :image-src="getAttractionImage(item.name, index)"
               :visual-index="index"
-              :style="{ '--i': Math.min(index, 12) }"
               @image-error="handleImageError"
               @select-day="goToDayFromOverview"
             />
@@ -322,11 +322,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick, watch } from 'vue'
+import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { ShareAltOutlined } from '@ant-design/icons-vue'
+import { gsap } from 'gsap'
+import { animate as animeAnimate, stagger as animeStagger } from 'animejs'
 import html2canvas from 'html2canvas'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
@@ -377,6 +379,58 @@ type TripMapHandle = {
 }
 
 const tripMapRef = ref<TripMapHandle | null>(null)
+
+// ─── 行程概览动画:GSAP 入场错开 + Anime.js Ken Burns 持续漂移 ───
+const overviewSection = ref<HTMLElement | null>(null)
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+let overviewGsapCtx: gsap.Context | undefined
+let overviewDrift: { cancel: () => void } | undefined
+
+// GSAP:卡片入场错开;每次切回概览 tab 重播
+const playOverviewIntro = (): void => {
+  if (prefersReducedMotion || !overviewSection.value) return
+  overviewGsapCtx?.revert()
+  overviewGsapCtx = gsap.context(() => {
+    gsap.fromTo(
+      '.overview-card-item',
+      { autoAlpha: 0, y: 14 },
+      { autoAlpha: 1, y: 0, duration: 0.35, ease: 'power2.out', stagger: 0.055, overwrite: 'auto' },
+    )
+  }, overviewSection.value)
+}
+
+// Anime.js:景点图 Ken Burns 缓慢缩放漂移,stagger 让各卡错开相位
+const startOverviewDrift = (): void => {
+  if (prefersReducedMotion || !overviewSection.value || overviewDrift) return
+  const imgs = overviewSection.value.querySelectorAll('.card-img img')
+  if (!imgs.length) return
+  overviewDrift = animeAnimate(imgs, {
+    scale: [1, 1.08],
+    x: ['0%', '1.5%'],
+    y: ['0%', '-1.5%'],
+    duration: 18000,
+    ease: 'inOutSine',
+    loop: true,
+    alternate: true,
+    delay: animeStagger(1500),
+  }) as unknown as { cancel: () => void }
+}
+
+onMounted(() => {
+  playOverviewIntro()
+  startOverviewDrift()
+})
+
+watch(activeSection, async (section) => {
+  if (section !== 'overview') return
+  await nextTick()  // 等 v-show 恢复布局后再量取/回放
+  playOverviewIntro()
+})
+
+onBeforeUnmount(() => {
+  overviewGsapCtx?.revert()
+  overviewDrift?.cancel()
+})
 
 const openShareModal = async (): Promise<void> => {
   if (!planId.value || sharePublishing.value) return

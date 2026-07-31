@@ -49,19 +49,8 @@ const { t } = useI18n()
 </script>
 
 <style scoped lang="scss">
-/* 入场动画:backwards 填充保证延迟期间不可见,结束后不留 transform;
-   --i 由父级传入(上限 12),v-show 恢复时动画随父级自动重播 */
-@keyframes card-rise {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
+/* 入场错开(GSAP)与图片持续漂移(Anime.js)由 Result.vue 驱动,
+   组件内不声明对应 CSS 动画,避免与内联样式冲突 */
 .overview-card-item {
   width: 100%;
   min-width: 0;
@@ -72,29 +61,6 @@ const { t } = useI18n()
   background: transparent;
   box-shadow: none;
   break-inside: avoid;
-  animation: card-rise 0.35s ease backwards;
-  animation-delay: calc(var(--i, 0) * 55ms);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .overview-card-item {
-    animation: none;
-  }
-
-  .card-img img {
-    animation: none;
-  }
-}
-
-/* 持续动画:Ken Burns 缓慢缩放+漂移,负延迟让各卡片错开相位;
-   动画期间覆盖 hover 的 img 缩放(hover 反馈由按钮/标题变色承担) */
-@keyframes img-drift {
-  from {
-    transform: scale(1) translate(0, 0);
-  }
-  to {
-    transform: scale(1.08) translate(1.5%, -1.5%);
-  }
 }
 
 .card-img {
@@ -114,8 +80,6 @@ const { t } = useI18n()
     object-fit: cover;
     z-index: 0;
     transition: transform 0.25s ease;
-    animation: img-drift 18s ease-in-out infinite alternate;
-    animation-delay: calc(var(--i, 0) * -2.7s);
   }
 
   .image-placeholder {
