@@ -321,15 +321,11 @@
       "pace": "Travel pace"
     },
     "graph": {
-      "cat": { "city": "City", "day": "Schedule", "attraction": "Attraction", "hotel": "Hotel", "meal": "Dining", "weather": "Weather", "budget": "Budget", "preference": "Tips" },
-      "edge": { "itinerary": "Itinerary", "visit": "Visit", "next": "Next", "checkin": "Check-in", "weather": "Weather", "budget": "Budget", "suggestion": "Tips" },
-      "dayN": "Day {n}",
-      "visitDuration": "Visit {min} min",
-      "ticketPrice": "Ticket ¥{price}",
-      "hotelCost": "{range} | ¥{cost}/night",
-      "totalBudget": "Total ¥{total}",
-      "budgetItem": { "interCity": "Inter-city" },
-      "empty": "No itinerary data yet"
+      "empty": "No itinerary data yet",
+      "journeyTitle": "{days}-Day {cities}",
+      "journeyEnd": "Journey Complete",
+      "journeyStart": "Start",
+      "highlights": "Trip Highlights"
     },
     "daily": {
       "daySelector": "Choose a day",

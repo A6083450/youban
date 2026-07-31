@@ -249,9 +249,9 @@
 
         <!-- 行程脉络图 -->
         <section v-show="activeSection === 'knowledge-graph'" id="knowledge-graph" class="flow-card">
-          <TripGraph
+          <TripJourney
             :trip-plan="tripPlan"
-            :active="activeSection === 'knowledge-graph'"
+            :attraction-photos="attractionPhotos"
             @select-day="goToDayFromOverview"
           />
         </section>
@@ -331,7 +331,7 @@ import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
 import SharePlanModal from '@/components/SharePlanModal.vue'
 import WeatherDayCard from '@/components/WeatherDayCard.vue'
-import TripGraph from '@/components/TripGraph.vue'
+import TripJourney from '@/components/TripJourney.vue'
 import DailyItinerary from '@/components/DailyItinerary.vue'
 import TripMap from '@/components/TripMap.vue'
 import type {
@@ -2655,6 +2655,54 @@ const escapeHtml = (value: unknown): string => {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* tab 区块切换：v-show 从 display:none 恢复时动画自动重播；
+   不带 fill-mode，结束后不残留 transform，避免影响内部 sticky/fixed 元素 */
+.overview-card,
+.top-info-section,
+.flow-card,
+.days-card,
+.weather-section-card {
+  animation: section-enter 0.26s ease;
+}
+
+/* 预算/地图面板互切时外层容器不重建，给内层面板补一个纯淡入（不动 transform，保护地图渲染） */
+.left-info,
+.right-map {
+  animation: section-fade 0.22s ease;
+}
+
+@keyframes section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes section-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-card,
+  .top-info-section,
+  .flow-card,
+  .days-card,
+  .weather-section-card,
+  .left-info,
+  .right-map {
+    animation: none;
   }
 }
 

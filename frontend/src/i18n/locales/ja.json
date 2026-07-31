@@ -321,15 +321,11 @@
       "pace": "旅のペース"
     },
     "graph": {
-      "cat": { "city": "都市", "day": "日程", "attraction": "観光地", "hotel": "ホテル", "meal": "グルメ", "weather": "天気", "budget": "予算", "preference": "おすすめ" },
-      "edge": { "itinerary": "旅程", "visit": "観光", "next": "次へ", "checkin": "宿泊", "weather": "天気", "budget": "予算", "suggestion": "提案" },
-      "dayN": "{n}日目",
-      "visitDuration": "観光{min}分",
-      "ticketPrice": "入場料¥{price}",
-      "hotelCost": "{range} | ¥{cost}/泊",
-      "totalBudget": "総予算 ¥{total}",
-      "budgetItem": { "interCity": "都市間交通" },
-      "empty": "旅程データがありません"
+      "empty": "旅程データがありません",
+      "journeyTitle": "{days}日間 · {cities}",
+      "journeyEnd": "旅程終了",
+      "journeyStart": "出発",
+      "highlights": "旅程ハイライト"
     },
     "daily": {
       "daySelector": "日付を選択",

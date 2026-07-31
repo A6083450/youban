@@ -321,15 +321,11 @@
       "pace": "旅行节奏"
     },
     "graph": {
-      "cat": { "city": "城市", "day": "日程", "attraction": "景点", "hotel": "酒店", "meal": "餐饮", "weather": "天气", "budget": "预算", "preference": "建议" },
-      "edge": { "itinerary": "行程", "visit": "游览", "next": "下一站", "checkin": "入住", "weather": "天气", "budget": "预算", "suggestion": "建议" },
-      "dayN": "第{n}天",
-      "visitDuration": "游览{min}分钟",
-      "ticketPrice": "门票¥{price}",
-      "hotelCost": "{range} | ¥{cost}/晚",
-      "totalBudget": "总预算 ¥{total}",
-      "budgetItem": { "interCity": "城际交通" },
-      "empty": "暂无行程数据"
+      "empty": "暂无行程数据",
+      "journeyTitle": "{days}天 · {cities}之旅",
+      "journeyEnd": "旅程结束",
+      "journeyStart": "出发",
+      "highlights": "行程主题灵感"
     },
     "daily": {
       "daySelector": "选择日期",
