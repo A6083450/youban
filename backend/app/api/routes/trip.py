@@ -25,7 +25,7 @@ from ...config import get_data_dir
 from ...models.schemas import TripPlanResponse, TripRequest
 from ...services import memory_service
 from ...services.knowledge_graph_service import build_knowledge_graph
-from ...services.llm_service import iter_llm_stream
+from ...services.llm_service import iter_llm_stream, llm_complete
 from ...services.trip_confirmation import consume_execution_token, register_confirm_decision
 
 router = APIRouter(prefix="/trip", tags=["旅行规划"])
@@ -462,7 +462,6 @@ def _sse_from_core(core_factory) -> StreamingResponse:
 async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delta=None):
     import re as _re
     from datetime import datetime as _dt, timedelta as _td
-    from ...services.llm_service import get_llm_settings, get_openai_client
 
     today_str = payload.today or _dt.now().strftime("%Y-%m-%d")
     try:
@@ -574,16 +573,7 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
         if on_delta is not None:
             content = await _stream_and_extract(prompt, "reply", on_delta)
         else:
-            client = get_openai_client()
-            model_id = get_llm_settings()["model"]
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                )
-            )
-            content = response.choices[0].message.content or ""
+            content = await asyncio.to_thread(llm_complete, prompt, 0.1)
         match = _re.search(r'\{[\s\S]*\}', content)
         data = json.loads(match.group() if match else content)
     except Exception as e:
@@ -739,7 +729,6 @@ class TripConfirmReplyRequest(BaseModel):
 async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
     import re as _re
     from datetime import datetime as _dt, timedelta as _td
-    from ...services.llm_service import get_llm_settings, get_openai_client
 
     today_str = payload.today or _dt.now().strftime("%Y-%m-%d")
     try:
@@ -814,16 +803,7 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
         if on_delta is not None:
             content = await _stream_and_extract(prompt, "message", on_delta)
         else:
-            client = get_openai_client()
-            model_id = get_llm_settings()["model"]
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                )
-            )
-            content = response.choices[0].message.content or ""
+            content = await asyncio.to_thread(llm_complete, prompt, 0.1)
         match = _re.search(r'\{[\s\S]*\}', content)
         data = json.loads(match.group() if match else content)
         if not isinstance(data, dict):

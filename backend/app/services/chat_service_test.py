@@ -2,7 +2,22 @@ import copy
 import unittest
 
 from app.models.schemas_test import plan_payload
-from app.services.chat_service import EDIT_SYSTEM_PROMPT, _validate_updated_plan
+from app.services.chat_service import EDIT_SYSTEM_PROMPT, _extract_output_text, _validate_updated_plan
+
+
+class ExtractOutputTextTest(unittest.TestCase):
+    def test_extracts_first_output_text(self):
+        data = {"output": [
+            {"type": "reasoning"},
+            {"type": "message", "content": [
+                {"type": "output_text", "text": "你好"},
+            ]},
+        ]}
+        self.assertEqual(_extract_output_text(data), "你好")
+
+    def test_empty_output_returns_empty_string(self):
+        self.assertEqual(_extract_output_text({"output": []}), "")
+        self.assertEqual(_extract_output_text({}), "")
 
 
 class ChatServiceBlueprintTest(unittest.TestCase):

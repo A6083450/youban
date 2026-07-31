@@ -296,7 +296,7 @@ def search_amap_attractions(city: str, keywords: str, language: str = "zh") -> s
     import json as _json
     import re as _re
     import httpx as _httpx
-    from .llm_service import get_llm_settings, get_openai_client
+    from .llm_service import llm_complete
 
     settings = get_settings()
     if not settings.vite_amap_web_key:
@@ -378,15 +378,8 @@ JSON 返回示例:
   {{"name": "故宫博物院", "name_zh": "故宫博物院", "name_en": "The Palace Museum", "reason": "必去打卡，建议走中轴线。", "duration": 240, "reservation_required": true, "reservation_tips": "需提前7天在故宫官网或微信小程序预约"}}
 ]
 """
-    client = get_openai_client()
-    model_id = get_llm_settings()["model"]
     try:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": extract_prompt}],
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content
+        content = llm_complete(extract_prompt, temperature=0.1)
         json_match = _re.search(r'\[.*\]', content, _re.DOTALL)
         extracted = _json.loads(json_match.group() if json_match else content)
         if not isinstance(extracted, list):

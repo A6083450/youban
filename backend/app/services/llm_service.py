@@ -78,6 +78,7 @@ def get_chat_model(
         timeout=timeout or cfg["timeout"],
         max_tokens=max_tokens,
         max_retries=1,
+        use_responses_api=True,
         default_headers={"User-Agent": _BROWSER_UA},
     )
 
@@ -86,6 +87,23 @@ def reset_llm():
     """重置客户端(配置热更新后调用)。"""
     global _client_instance
     _client_instance = None
+
+
+def llm_complete(
+    prompt: str, temperature: float = 0.1, max_tokens: Optional[int] = None
+) -> str:
+    """同步单次补全(Responses API),返回纯文本输出。"""
+    client = get_openai_client()
+    kwargs: Dict[str, Any] = {}
+    if max_tokens is not None:
+        kwargs["max_output_tokens"] = max_tokens
+    response = client.responses.create(
+        model=get_llm_settings()["model"],
+        input=prompt,
+        temperature=temperature,
+        **kwargs,
+    )
+    return response.output_text or ""
 
 
 async def iter_llm_stream(
@@ -108,9 +126,9 @@ async def iter_llm_stream(
 
     def _worker() -> None:
         def _create(**extra):
-            return client.chat.completions.create(
+            return client.responses.create(
                 model=model_id,
-                messages=[{"role": "user", "content": prompt}],
+                input=prompt,
                 temperature=temperature,
                 stream=True,
                 **extra,
@@ -124,13 +142,11 @@ async def iter_llm_stream(
                     stream = _create()
             else:
                 stream = _create()
-            for chunk in stream:
-                try:
-                    delta = chunk.choices[0].delta.content or ""
-                except (AttributeError, IndexError, TypeError):
-                    delta = ""
-                if delta:
-                    loop.call_soon_threadsafe(queue.put_nowait, delta)
+            for event in stream:
+                if getattr(event, "type", "") == "response.output_text.delta":
+                    delta = getattr(event, "delta", "") or ""
+                    if delta:
+                        loop.call_soon_threadsafe(queue.put_nowait, delta)
         except Exception as exc:  # 透传给消费方抛出
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:

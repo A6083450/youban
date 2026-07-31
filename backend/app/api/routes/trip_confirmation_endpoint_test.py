@@ -13,22 +13,12 @@ from app.models.schemas import TripRequest
 from app.services.trip_confirmation import clear_confirmation_ledger, register_confirm_decision
 
 
-class FakeMessage:
-    def __init__(self, content):
-        self.content = content
-
-
-class FakeChoice:
-    def __init__(self, content):
-        self.message = FakeMessage(content)
-
-
 class FakeResponse:
     def __init__(self, content):
-        self.choices = [FakeChoice(content)]
+        self.output_text = content
 
 
-class FakeCompletions:
+class FakeResponses:
     def __init__(self, content):
         self.content = content
 
@@ -36,14 +26,9 @@ class FakeCompletions:
         return FakeResponse(self.content)
 
 
-class FakeChat:
-    def __init__(self, content):
-        self.completions = FakeCompletions(content)
-
-
 class FakeClient:
     def __init__(self, content):
-        self.chat = FakeChat(content)
+        self.responses = FakeResponses(content)
 
 
 FAKE_LLM_SETTINGS = {

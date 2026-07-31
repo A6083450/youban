@@ -328,10 +328,7 @@ def repair_truncated_json(json_str: str) -> str:
 
 def llm_repair_json(broken_json: str) -> str:
     """使用 LLM 修复无法自动修复的 JSON（最后手段）"""
-    from ..services.llm_service import get_llm_settings, get_openai_client
-
-    client = get_openai_client()
-    model_id = get_llm_settings()["model"]
+    from ..services.llm_service import llm_complete
     # 尽量发送完整内容;过长时保留头尾
     if len(broken_json) > 8000:
         body = f"开头部分:\n{broken_json[:2000]}\n\n...(中间省略)...\n\n尾部部分:\n{broken_json[-5000:]}"
@@ -345,13 +342,7 @@ def llm_repair_json(broken_json: str) -> str:
 {body}
 """
     try:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": repair_prompt}],
-            temperature=0.0,
-            max_tokens=6000,
-        )
-        content = response.choices[0].message.content or ""
+        content = llm_complete(repair_prompt, temperature=0.0, max_tokens=6000)
         # 从修复结果中提取 JSON
         import re as _re
         if "```json" in content:

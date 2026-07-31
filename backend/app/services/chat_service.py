@@ -1,6 +1,6 @@
 """
 AI 行程问答服务
-基于 httpx 直接调用 OpenAI 兼容的 Chat Completions API，
+基于 httpx 直接调用 OpenAI 兼容的 Responses API，
 将当前旅行计划作为上下文注入,实现针对行程的智能问答
 """
 
@@ -64,6 +64,16 @@ def _build_context_message(trip_plan_dict: Dict[str, Any]) -> str:
     return f"【当前旅行计划】\n```json\n{json.dumps(trip_plan_dict, ensure_ascii=False, indent=2)}\n```"
 
 
+def _extract_output_text(data: Dict[str, Any]) -> str:
+    """从 Responses API 原始 JSON 中提取首个文本输出。"""
+    for item in data.get("output") or []:
+        if item.get("type") == "message":
+            for part in item.get("content") or []:
+                if part.get("type") == "output_text":
+                    return part.get("text") or ""
+    return ""
+
+
 def _inject_memory_context(messages: List[Dict[str, str]], user_id: str, query: str) -> None:
     """把用户长期记忆插入 system 之后(无记忆/失败时不插入,不影响主流程)。"""
     if not user_id:
@@ -121,16 +131,16 @@ async def chat_with_trip_context(
     messages.append({"role": "user", "content": message})
 
     # 调用 LLM
-    url = f"{llm_config['base_url']}/chat/completions"
+    url = f"{llm_config['base_url']}/responses"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {llm_config['api_key']}",
     }
     payload = {
         "model": llm_config["model_id"],
-        "messages": messages,
+        "input": messages,
         "temperature": 0.7,
-        "max_tokens": 1024,
+        "max_output_tokens": 1024,
     }
 
     try:
@@ -139,7 +149,7 @@ async def chat_with_trip_context(
             response.raise_for_status()
             data = response.json()
 
-            reply = data["choices"][0]["message"]["content"]
+            reply = _extract_output_text(data)
             return reply.strip()
 
     except httpx.HTTPStatusError as e:
@@ -263,17 +273,17 @@ async def chat_edit_trip(
             })
     messages.append({"role": "user", "content": message})
 
-    url = f"{llm_config['base_url']}/chat/completions"
+    url = f"{llm_config['base_url']}/responses"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {llm_config['api_key']}",
     }
     payload = {
         "model": llm_config["model_id"],
-        "messages": messages,
+        "input": messages,
         "temperature": 0.4,
-        "max_tokens": 8192,
-        "response_format": {"type": "json_object"},
+        "max_output_tokens": 8192,
+        "text": {"format": {"type": "json_object"}},
     }
 
     try:
@@ -281,17 +291,17 @@ async def chat_edit_trip(
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
-            raw = data["choices"][0]["message"]["content"].strip()
+            raw = _extract_output_text(data).strip()
     except httpx.HTTPStatusError as e:
         print(f"❌ LLM API 返回错误: {e.response.status_code} - {e.response.text}")
-        # 部分模型不支持 response_format,降级重试一次
+        # 部分模型不支持 JSON 格式约束,降级重试一次
         if e.response.status_code == 400:
-            payload.pop("response_format", None)
+            payload.pop("text", None)
             try:
                 async with httpx.AsyncClient(timeout=llm_config["timeout"]) as client:
                     response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
-                    raw = response.json()["choices"][0]["message"]["content"].strip()
+                    raw = _extract_output_text(response.json()).strip()
             except Exception as e2:
                 print(f"❌ 降级重试失败: {e2}")
                 return {"reply": "抱歉,AI 服务暂时出现问题,请稍后重试 🙏", "updated_plan": None, "changes": []}

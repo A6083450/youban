@@ -13,7 +13,7 @@ import requests
 import httpx
 from typing import List, Dict, Any
 from ..config import get_settings
-from .llm_service import get_llm_settings, get_openai_client
+from .llm_service import llm_complete
 from .xhs_sign.sign_util import generate_request_params, splice_str, generate_x_b3_traceid, trans_cookies
 
 logger = logging.getLogger(__name__)
@@ -318,8 +318,6 @@ def search_xhs_attractions(city: str, keywords: str, language: str = "zh") -> st
 
     # ======== 轻量级提取过程 ========
     print(f"🧠 [XHS_SERVICE] 正在调用内联模型提纯小红书游记参数...")
-    client = get_openai_client()
-    model_id = get_llm_settings()["model"]
 
     # 根据目标语言构建翻译附加指令
     _lang = (language or "zh").strip().lower().split("-")[0]
@@ -365,12 +363,7 @@ JSON 返回示例:
 ]
 """
     try:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": extract_prompt}],
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content
+        content = llm_complete(extract_prompt, temperature=0.1)
 
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
