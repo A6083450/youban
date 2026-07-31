@@ -384,35 +384,55 @@ const overviewSection = ref<HTMLElement | null>(null)
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let overviewGsapCtx: gsap.Context | undefined
 
-// 入场:卡片柔和上浮错开;每次切回概览 tab 重播
+// 入场:卡片上浮淡入 + 图片 clip-path 柔雾揭幕,expo 缓动,编辑级排版感;
+// 每次切回概览 tab 重播
 const playOverviewIntro = (): void => {
   if (prefersReducedMotion || !overviewSection.value) return
   overviewGsapCtx?.revert()
   overviewGsapCtx = gsap.context(() => {
-    gsap.fromTo(
+    const tl = gsap.timeline()
+    tl.fromTo(
       '.overview-card-item',
-      { autoAlpha: 0, y: 14 },
-      { autoAlpha: 1, y: 0, duration: 0.35, ease: 'power2.out', stagger: 0.055, overwrite: 'auto' },
+      { autoAlpha: 0, y: 18 },
+      { autoAlpha: 1, y: 0, duration: 0.5, ease: 'power3.out', stagger: 0.06 },
+    ).fromTo(
+      '.card-img',
+      { clipPath: 'inset(8% 8% 8% 8% round 14px)', scale: 0.985 },
+      { clipPath: 'inset(0% 0% 0% 0% round 10px)', scale: 1, duration: 0.75, ease: 'expo.out', stagger: 0.06 },
+      '<0.08',
     )
     startOverviewAmbient()
   }, overviewSection.value)
 }
 
-// 持续氛围:暖色微光带缓慢扫过每张卡片,间隔循环、逐卡错峰。
-// 光带层不依赖图片加载完成(图片异步到位、占位卡同样生效)
-const startOverviewAmbient = (): void => {
-  gsap.fromTo(
-    '.img-sheen',
-    { xPercent: -130 },
+// 图片极缓慢推近+微移;延迟随机,避免整列同相位
+const animateCardImg = (img: Element): void => {
+  gsap.fromTo(img,
+    { scale: 1.02 },
     {
-      xPercent: 130,
-      duration: 4.2,
-      ease: 'sine.inOut',
+      scale: 1.07,
+      xPercent: 0.8,
+      yPercent: -0.8,
+      duration: 14,
+      yoyo: true,
       repeat: -1,
-      repeatDelay: 2.2,
-      stagger: { each: 1.4 },
-    },
-  )
+      ease: 'sine.inOut',
+      delay: Math.random() * 5,
+    })
+}
+
+// 持续氛围:暖金色微光呼吸(慢、软、随机错峰),图片极缓慢推近。
+// 微光层始终存在不依赖图片加载;后到位的图片由 attractionPhotos 监听补挂推近动画
+const startOverviewAmbient = (): void => {
+  gsap.to('.img-glow', {
+    opacity: 1,
+    duration: 5.5,
+    yoyo: true,
+    repeat: -1,
+    ease: 'sine.inOut',
+    stagger: { each: 2.1, from: 'random' },
+  })
+  gsap.utils.toArray<Element>('.card-img img').forEach(animateCardImg)
 }
 
 onMounted(() => {
@@ -423,6 +443,15 @@ watch(activeSection, async (section) => {
   if (section !== 'overview') return
   await nextTick()  // 等 v-show 恢复布局后再量取/回放
   playOverviewIntro()
+})
+
+// 图片异步到位:给后渲染的 img 补挂推近动画(已在动的不重复挂)
+watch(() => Object.keys(attractionPhotos.value).length, async () => {
+  if (prefersReducedMotion || !overviewSection.value) return
+  await nextTick()
+  overviewSection.value.querySelectorAll('.card-img img').forEach((img) => {
+    if (!gsap.isTweening(img)) animateCardImg(img)
+  })
 })
 
 onBeforeUnmount(() => {

@@ -3,7 +3,7 @@
     <div :class="['card-img', `card-img--${visualIndex % 5}`]">
       <img v-if="imageSrc" :src="imageSrc" :alt="item.name" loading="lazy" @error="emit('image-error', item.name)" />
       <div v-else class="image-placeholder">{{ item.name }}</div>
-      <div class="img-sheen" aria-hidden="true"></div>
+      <div class="img-glow" aria-hidden="true"></div>
       <span class="day-badge">D{{ item.dayArrayIndex + 1 }}</span>
       <button
         type="button"
@@ -98,20 +98,15 @@ const { t } = useI18n()
     padding: 16px;
   }
 
-  /* 暖色微光带:由 GSAP 驱动平移扫过,静态时藏在左侧不可见 */
-  .img-sheen {
+  /* 暖金色微光层:GSAP 驱动呼吸式明暗,初始透明;
+     不同视觉变体光从不同角度洒入,避免全列表同相位的机械感 */
+  .img-glow {
     position: absolute;
     inset: 0;
     z-index: 1;
     pointer-events: none;
-    background: linear-gradient(
-      100deg,
-      transparent 28%,
-      rgba(255, 190, 128, 0.2) 46%,
-      rgba(255, 218, 172, 0.32) 52%,
-      transparent 72%
-    );
-    transform: translateX(-130%);
+    opacity: 0;
+    background: radial-gradient(ellipse 90% 65% at 25% 15%, rgba(255, 203, 148, 0.3), transparent 70%);
   }
 
   .day-badge {    position: absolute;
@@ -169,22 +164,32 @@ const { t } = useI18n()
 
 .card-img--0 {
   aspect-ratio: 4 / 3;
+
+  .img-glow { background: radial-gradient(ellipse 90% 65% at 25% 15%, rgba(255, 203, 148, 0.3), transparent 70%); }
 }
 
 .card-img--1 {
   aspect-ratio: 3 / 4;
+
+  .img-glow { background: radial-gradient(ellipse 85% 60% at 78% 18%, rgba(255, 210, 158, 0.28), transparent 70%); }
 }
 
 .card-img--2 {
   aspect-ratio: 1;
+
+  .img-glow { background: radial-gradient(ellipse 95% 70% at 50% 85%, rgba(255, 198, 142, 0.26), transparent 72%); }
 }
 
 .card-img--3 {
   aspect-ratio: 4 / 5;
+
+  .img-glow { background: radial-gradient(ellipse 80% 60% at 15% 55%, rgba(255, 214, 165, 0.28), transparent 70%); }
 }
 
 .card-img--4 {
   aspect-ratio: 5 / 4;
+
+  .img-glow { background: radial-gradient(ellipse 90% 65% at 85% 60%, rgba(255, 203, 148, 0.27), transparent 70%); }
 }
 
 .overview-card-item:hover .card-img img {
