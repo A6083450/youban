@@ -563,6 +563,15 @@ const overviewAttractions = computed<OverviewAttractionItem[]>(() => {
   return items
 })
 
+// 数据异步到位:content-wrapper 是 v-if="tripPlan",onMounted 时概览区块尚不存在,
+// 首次出现景点卡片时补一次入场+持续动画(必须定义在 overviewAttractions 之后,
+// watch 会立即求值一次 getter)
+watch(() => overviewAttractions.value.length, async (len) => {
+  if (len === 0 || activeSection.value !== 'overview') return
+  await nextTick()
+  playOverviewIntro()
+})
+
 // 加载所有景点图片
 const loadAttractionPhotos = async () => {
   if (!tripPlan.value) return
