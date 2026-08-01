@@ -106,6 +106,8 @@
         </Transition>
       </router-view>
     </main>
+
+    <YoubanSplash />
   </div>
 </template>
 
@@ -119,6 +121,7 @@ import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores
 import { deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
 import ShareCodeEntry from '@/components/ShareCodeEntry.vue'
+import YoubanSplash from '@/splash/YoubanSplash.vue'
 import { AUTH_UPDATED_EVENT } from '@/stores/auth'
 import type { TripHistoryItem } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
