@@ -60,7 +60,9 @@ function skip() {
 
 onMounted(async () => {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
-  const seen = sessionStorage.getItem(SESSION_KEY)
+  // ?splash=1 强制重播完整版，用于预览调试
+  const force = new URLSearchParams(location.search).has('splash')
+  const seen = !force && sessionStorage.getItem(SESSION_KEY)
   visible.value = true
 
   // 降级路径：reduced-motion / 无 WebGL2 / 本会话已播放 → 静态暖光快速淡入淡出
