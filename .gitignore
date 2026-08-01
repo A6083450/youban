@@ -24,3 +24,4 @@ output
 .debug-journal.md
 *.png
 !imgs/**/*.png
+youban-spec
