@@ -311,7 +311,8 @@
       "map": "Attraction Map",
       "days": "Daily Itinerary",
       "graph": "Journey Map",
-      "weather": "Weather"
+      "weather": "Weather",
+      "today": "Today"
     },
     "blueprint": {
       "eyebrow": "Trip Blueprint",
@@ -501,7 +502,33 @@
       "hotelLabel": "Day {day} · Hotel",
       "dayAttraction": "Day {day} Attraction {index}",
       "loadingMap": "Loading map…",
-      "loadingRoute": "Planning your route…"
+      "loadingRoute": "Planning your route…",
+      "allDays": "All"
+    },
+    "today": {
+      "headerDay": "Day {day} · {city}",
+      "progress": "{done}/{total} done",
+      "transferCard": "Transfer",
+      "hotelCard": "Tonight's stay",
+      "laterGroup": "Later",
+      "actionDone": "Done",
+      "actionSkip": "Skip",
+      "actionPostpone": "Postpone",
+      "actionRestore": "Undo",
+      "statusDone": "Done",
+      "statusSkipped": "Skipped",
+      "statusPostponed": "Postponed",
+      "doneModalTitle": "Mark as done",
+      "confirmDone": "Confirm",
+      "actualCostLabel": "Actual cost (optional, CNY)",
+      "actualCostPlaceholder": "Record what you spent",
+      "updateFailed": "Failed to save, please retry",
+      "offlineHint": "You are offline; check-in resumes when back online",
+      "countdown": "{days} days until departure",
+      "firstDayPreview": "Day 1 preview",
+      "endedTitle": "Trip completed",
+      "endedSummary": "{days} days · {done} items done · actual spend ¥{cost}",
+      "noActionable": "Nothing scheduled today — enjoy the rest"
     }
   }
 }

@@ -311,7 +311,8 @@
       "map": "観光地マップ",
       "days": "日別プラン",
       "graph": "旅程マップ",
-      "weather": "天気情報"
+      "weather": "天気情報",
+      "today": "本日"
     },
     "blueprint": {
       "eyebrow": "旅の設計図",
@@ -501,7 +502,33 @@
       "hotelLabel": "{day} 日目 · ホテル",
       "dayAttraction": "{day} 日目 スポット {index}",
       "loadingMap": "地図を読み込んでいます…",
-      "loadingRoute": "ルートを作成しています…"
+      "loadingRoute": "ルートを作成しています…",
+      "allDays": "すべて"
+    },
+    "today": {
+      "headerDay": "{day}日目 · {city}",
+      "progress": "完了 {done}/{total}",
+      "transferCard": "都市間移動",
+      "hotelCard": "今夜の宿",
+      "laterGroup": "あとで行く",
+      "actionDone": "完了",
+      "actionSkip": "スキップ",
+      "actionPostpone": "延期",
+      "actionRestore": "元に戻す",
+      "statusDone": "完了",
+      "statusSkipped": "スキップ済み",
+      "statusPostponed": "延期済み",
+      "doneModalTitle": "完了にする",
+      "confirmDone": "確認",
+      "actualCostLabel": "実際の出費(任意,元)",
+      "actualCostPlaceholder": "出費を記録",
+      "updateFailed": "保存に失敗しました。後でもう一度お試しください",
+      "offlineHint": "オフラインです。接続が戻り次第チェックインできます",
+      "countdown": "出発まであと {days} 日",
+      "firstDayPreview": "初日のプレビュー",
+      "endedTitle": "旅は終わりました",
+      "endedSummary": "全 {days} 日 · {done} 件完了 · 実際の出費 ¥{cost}",
+      "noActionable": "今日は予定なし。ゆっくり休みましょう"
     }
   }
 }

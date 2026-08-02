@@ -311,7 +311,8 @@
       "map": "景点地图",
       "days": "每日行程",
       "graph": "行程脉络图",
-      "weather": "天气信息"
+      "weather": "天气信息",
+      "today": "今日行程"
     },
     "blueprint": {
       "eyebrow": "旅行蓝图",
@@ -501,7 +502,33 @@
       "hotelLabel": "第 {day} 天 · 酒店",
       "dayAttraction": "第 {day} 天 景点 {index}",
       "loadingMap": "地图加载中…",
-      "loadingRoute": "正在规划行程路线…"
+      "loadingRoute": "正在规划行程路线…",
+      "allDays": "全部"
+    },
+    "today": {
+      "headerDay": "第 {day} 天 · {city}",
+      "progress": "已完成 {done}/{total}",
+      "transferCard": "城际移动",
+      "hotelCard": "今晚入住",
+      "laterGroup": "稍后再去",
+      "actionDone": "完成",
+      "actionSkip": "跳过",
+      "actionPostpone": "延后",
+      "actionRestore": "恢复",
+      "statusDone": "已完成",
+      "statusSkipped": "已跳过",
+      "statusPostponed": "已延后",
+      "doneModalTitle": "标记完成",
+      "confirmDone": "确认完成",
+      "actualCostLabel": "实际花费(可选,元)",
+      "actualCostPlaceholder": "记一笔实际花费",
+      "updateFailed": "状态保存失败,请稍后重试",
+      "offlineHint": "当前离线,恢复网络后可继续打卡",
+      "countdown": "距离出发还有 {days} 天",
+      "firstDayPreview": "首日行程预览",
+      "endedTitle": "旅程已结束",
+      "endedSummary": "共 {days} 天 · 完成 {done} 项 · 实际花费 ¥{cost}",
+      "noActionable": "今天没有待办行程,好好休息"
     }
   }
 }
