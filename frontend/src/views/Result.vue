@@ -7,6 +7,9 @@
         <div class="top-switch-nav">
           <div class="top-switch-menu-wrap">
             <a-menu class="top-switch-menu" mode="horizontal" :disabled-overflow="true" :selected-keys="[activeSection]" @click="scrollToSection">
+              <a-menu-item v-if="!props.readonly && todayArrayIndex >= 0" key="today" :aria-selected="activeSection === 'today'">
+                <span>{{ t('result.side.today') }}</span>
+              </a-menu-item>
               <a-menu-item key="overview" :aria-selected="activeSection === 'overview'">
                 <span>{{ t('result.side.overview') }}</span>
               </a-menu-item>
@@ -257,6 +260,16 @@
           />
         </section>
 
+        <!-- 今日行程 -->
+        <section v-show="activeSection === 'today'" v-if="!props.readonly" class="today-section flow-card">
+          <TripToday
+            :trip-plan="tripPlan"
+            :execution="executionMap"
+            :day-array-index="todayArrayIndex"
+            @update-status="handleUpdateItemStatus"
+          />
+        </section>
+
         <!-- 每日行程 -->
         <section v-show="activeSection === 'days'" class="days-card">
           <DailyItinerary
@@ -323,12 +336,13 @@
 
 <script setup lang="ts">
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { ShareAltOutlined } from '@ant-design/icons-vue'
 import { gsap } from 'gsap'
 import html2canvas from 'html2canvas'
+import dayjs from 'dayjs'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
 import SharePlanModal from '@/components/SharePlanModal.vue'
@@ -336,9 +350,12 @@ import WeatherDayCard from '@/components/WeatherDayCard.vue'
 import TripJourney from '@/components/TripJourney.vue'
 import DailyItinerary from '@/components/DailyItinerary.vue'
 import TripMap from '@/components/TripMap.vue'
+import TripToday from '@/components/TripToday.vue'
 import type {
   Attraction,
+  ExecutionMap,
   Hotel,
+  ItemExecutionStatus,
   Meal,
   ShareLoadErrorKind,
   TripPlan,
@@ -352,9 +369,11 @@ import {
   pollTaskStatus,
   SharedTripPlanError,
   TripShareCreationError,
+  updateItemStatus,
 } from '@/services/api'
 import { canUseCachedPlan } from '@/utils/planConversation.js'
 import { normalizeReferenceTime, resolveTripBlueprint } from '@/utils/tripPresentation.js'
+import { findTodayArrayIndex } from '@/utils/tripExecution'
 
 const props = withDefaults(defineProps<{ planId?: string; readonly?: boolean }>(), {
   readonly: false,
@@ -363,12 +382,82 @@ const emit = defineEmits<{
   (event: 'share-load-error', kind: ShareLoadErrorKind): void
 }>()
 const router = useRouter()
+const route = useRoute()
 const { t, locale } = useI18n()
 const tripPlan = ref<TripPlan | null>(null)
 const planId = ref('')
 const attractionPhotos = ref<Record<string, string>>({})
 const activeSection = ref('overview')
 const pendingDayScrollIndex = ref<number | null>(null)
+
+// ─── 今日行程执行状态(V1.1) ───
+const executionMap = ref<ExecutionMap>({})
+const mapFocusDay = ref<number | null>(null)
+
+const todayArrayIndex = computed(() =>
+  tripPlan.value ? findTodayArrayIndex(tripPlan.value, dayjs().format('YYYY-MM-DD')) : -1,
+)
+
+// 加载完成后的初始落点:URL ?section= 优先;行程期内默认进今日视图
+const applyInitialSection = () => {
+  if (props.readonly) return
+  const requested = String(route.query.section || '')
+  const valid = ['overview', 'knowledge-graph', 'days', 'map', 'budget', 'weather', 'today']
+  if (requested && valid.includes(requested) && !(requested === 'today' && todayArrayIndex.value < 0)) {
+    activeSection.value = requested
+    return
+  }
+  if (todayArrayIndex.value >= 0) activeSection.value = 'today'
+}
+
+// 后台刷新 execution;缓存计划缺 id 时顺带换成后端带 id 版本
+const refreshExecutionFromBackend = async (targetPlanId: string) => {
+  if (!targetPlanId) return
+  try {
+    const task = await pollTaskStatus(targetPlanId)
+    if (task?.status !== 'completed') return
+    executionMap.value = task.execution || {}
+    const missingIds = tripPlan.value?.days.some((day) =>
+      day.attractions.some((a) => !a.id) || day.meals.some((m) => !m.id),
+    )
+    if (missingIds && task.result?.data) {
+      tripPlan.value = task.result.data
+      sessionStorage.setItem('tripPlan', JSON.stringify(task.result.data))
+    }
+  } catch {
+    /* 静默:execution 非关键路径 */
+  }
+}
+
+// 乐观更新 + 失败回滚
+const handleUpdateItemStatus = async (payload: { itemId: string; status: ItemExecutionStatus; actualCost?: number }) => {
+  const prev = executionMap.value[payload.itemId]
+  const optimistic: ExecutionMap = { ...executionMap.value }
+  if (payload.status === 'pending') {
+    delete optimistic[payload.itemId]
+  } else {
+    optimistic[payload.itemId] = {
+      status: payload.status,
+      updated_at: new Date().toISOString(),
+      ...(payload.actualCost !== undefined ? { actual_cost: payload.actualCost } : {}),
+    }
+  }
+  executionMap.value = optimistic
+  try {
+    const entry = await updateItemStatus(planId.value, payload.itemId, payload.status, payload.actualCost)
+    const confirmed: ExecutionMap = { ...executionMap.value }
+    if (entry) confirmed[payload.itemId] = entry
+    else delete confirmed[payload.itemId]
+    executionMap.value = confirmed
+  } catch {
+    const rollback: ExecutionMap = { ...executionMap.value }
+    if (prev) rollback[payload.itemId] = prev
+    else delete rollback[payload.itemId]
+    executionMap.value = rollback
+    message.error(t('result.today.updateFailed'))
+  }
+}
+
 const shareModalOpen = ref(false)
 const sharePublishing = ref(false)
 const shareCode = ref('')
@@ -723,6 +812,7 @@ const loadPlanById = async (targetPlanId: string) => {
   pendingBudgetItems.value = []
   attractionPhotos.value = {}
   activeSection.value = 'overview'
+  executionMap.value = {}
   pendingDayScrollIndex.value = null
 
   const data = sessionStorage.getItem('tripPlan')
@@ -752,6 +842,8 @@ const loadPlanById = async (targetPlanId: string) => {
       plan: JSON.parse(data),
       planId: targetPlanId || storedPlanId,
     })
+    applyInitialSection()
+    void refreshExecutionFromBackend(targetPlanId || storedPlanId)
     return
   }
 
@@ -760,7 +852,11 @@ const loadPlanById = async (targetPlanId: string) => {
       const task = await pollTaskStatus(targetPlanId)
       if (task?.status === 'completed' && task.result) {
         const restored = await restoreTripPlanFromResponse(task.result)
-        if (restored) return
+        if (restored) {
+          executionMap.value = task.execution || {}
+          applyInitialSection()
+          return
+        }
       }
       if (task?.status === 'failed') {
         message.error(task.error || t('result.noTripPlanDesc'))
@@ -808,6 +904,11 @@ const goBack = () => {
 
 // 滚动到指定区域
 const scrollToSection = ({ key }: { key: string }) => {
+  // 从今日视图切到地图时,记录今日下标供地图聚焦(Task 7 消费)
+  if (key === 'map' && activeSection.value === 'today' && todayArrayIndex.value >= 0) {
+    mapFocusDay.value = todayArrayIndex.value
+  }
+
   if (key.startsWith('day-')) {
     const dayIndex = Number(key.replace('day-', ''))
     if (!Number.isNaN(dayIndex)) {
@@ -2494,6 +2595,10 @@ const escapeHtml = (value: unknown): string => {
 .days-card {
   min-width: 0;
   margin-top: 20px;
+}
+
+.today-section {
+  padding: 18px 20px 24px;
 }
 
 .day-header {
