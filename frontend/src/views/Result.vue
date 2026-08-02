@@ -7,7 +7,7 @@
         <div class="top-switch-nav">
           <div class="top-switch-menu-wrap">
             <a-menu class="top-switch-menu" mode="horizontal" :disabled-overflow="true" :selected-keys="[activeSection]" @click="scrollToSection">
-              <a-menu-item v-if="!props.readonly && todayArrayIndex >= 0" key="today" :aria-selected="activeSection === 'today'">
+              <a-menu-item v-if="!props.readonly" key="today" :aria-selected="activeSection === 'today'">
                 <span>{{ t('result.side.today') }}</span>
               </a-menu-item>
               <a-menu-item key="overview" :aria-selected="activeSection === 'overview'">
@@ -404,7 +404,7 @@ const applyInitialSection = () => {
   if (props.readonly) return
   const requested = String(route.query.section || '')
   const valid = ['overview', 'knowledge-graph', 'days', 'map', 'budget', 'weather', 'today']
-  if (requested && valid.includes(requested) && !(requested === 'today' && todayArrayIndex.value < 0)) {
+  if (requested && valid.includes(requested)) {
     activeSection.value = requested
     return
   }
@@ -3002,6 +3002,7 @@ const escapeHtml = (value: unknown): string => {
   .right-budget-summary {
     flex: auto;
     width: 100%;
+    order: -1;
   }
 
   .budget-summary-panel {
