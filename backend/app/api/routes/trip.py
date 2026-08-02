@@ -91,6 +91,49 @@ def _serialize_result(result: Any) -> Any:
     return result
 
 
+def _new_item_id() -> str:
+    """生成行程项稳定 ID。"""
+    return f"itm_{secrets.token_hex(4)}"
+
+
+def _iter_plan_items(result: Any):
+    """遍历 result 中 plan 的可操作行程项(景点+餐饮),兼容 dict 与 pydantic 模型。"""
+    if result is None:
+        return
+    plan = result.get("data") if isinstance(result, dict) else getattr(result, "data", None)
+    if plan is None:
+        return
+    days = plan.get("days") if isinstance(plan, dict) else getattr(plan, "days", None)
+    for day in days or []:
+        for group in ("attractions", "meals"):
+            items = day.get(group) if isinstance(day, dict) else getattr(day, group, None)
+            for item in items or []:
+                yield item
+
+
+def _ensure_item_ids(result: Any) -> bool:
+    """为行程项注入稳定 id(懒迁移),返回是否有新注入。幂等。"""
+    changed = False
+    for item in _iter_plan_items(result):
+        if isinstance(item, dict):
+            if not item.get("id"):
+                item["id"] = _new_item_id()
+                changed = True
+        elif not getattr(item, "id", None):
+            item.id = _new_item_id()
+            changed = True
+    return changed
+
+
+def _find_plan_item(result: Any, item_id: str) -> Any | None:
+    """按 id 查找行程项;找不到返回 None。"""
+    for item in _iter_plan_items(result):
+        current = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+        if current == item_id:
+            return item
+    return None
+
+
 def _task_file_path(task_id: str) -> Path:
     """获取任务持久化文件路径。"""
     return _TASKS_DATA_DIR / f"{task_id}.json"
@@ -123,12 +166,14 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
         task["error"] = "服务已重启，未完成的旅行规划任务无法恢复，请重新生成。"
         task["message"] = task["error"]
 
+    _ensure_item_ids(task.get("result"))
     return task
 
 
 def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
     """将任务状态持久化到本地 JSON 文件。"""
     try:
+        _ensure_item_ids(task.get("result"))
         _TASKS_DATA_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
             "task_id": task_id,
@@ -163,7 +208,13 @@ def _load_task_from_disk(task_id: str) -> Dict[str, Any] | None:
             payload = json.load(f)
         if not isinstance(payload, dict):
             return None
+        needs_migration = any(
+            not (item.get("id") if isinstance(item, dict) else getattr(item, "id", None))
+            for item in _iter_plan_items(payload.get("result"))
+        )
         task = _normalize_loaded_task(task_id, payload)
+        if needs_migration:
+            _persist_task_state(task_id, task)
         _tasks[task_id] = task
         return task
     except Exception as e:

@@ -105,6 +105,7 @@ class Location(BaseModel):
 
 class Attraction(BaseModel):
     """景点信息"""
+    id: Optional[str] = Field(default=None, description="行程项稳定ID(后端注入,不进AI提示词)")
     name: str = Field(..., description="景点名称")
     address: str = Field(..., description="地址")
     location: Location = Field(..., description="经纬度坐标")
@@ -129,6 +130,7 @@ class Attraction(BaseModel):
 
 class Meal(BaseModel):
     """餐饮信息"""
+    id: Optional[str] = Field(default=None, description="行程项稳定ID(后端注入,不进AI提示词)")
     type: str = Field(..., description="餐饮类型: breakfast/lunch/dinner/snack")
     name: str = Field(..., description="餐饮名称")
     address: Optional[str] = Field(default=None, description="地址")
