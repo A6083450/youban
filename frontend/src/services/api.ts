@@ -4,6 +4,8 @@ import type {
   BackendRuntimeSettings,
   ChatMessage,
   CreateTripShareResponse,
+  ExecutionEntry,
+  ItemExecutionStatus,
   ParsedTripDraft,
   RuntimeSettings,
   SharedTripPlanResponse,
@@ -603,6 +605,26 @@ export function confirmTripReplyStream(
     today: todayString(),
     history: history.slice(-10),
   }, cb)
+}
+
+/**
+ * 更新行程项执行状态(完成/跳过/延后/恢复);失败抛错由调用方回滚乐观更新
+ */
+export async function updateItemStatus(
+  planId: string,
+  itemId: string,
+  status: ItemExecutionStatus,
+  actualCost?: number,
+): Promise<ExecutionEntry | null> {
+  try {
+    const response = await apiClient.patch(
+      `/api/trip/plan/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/status`,
+      actualCost === undefined ? { status } : { status, actual_cost: actualCost },
+    )
+    return response.data?.execution ?? null
+  } catch (error: any) {
+    throw new Error(error.response?.data?.detail || error.message || 'update item status failed')
+  }
 }
 
 /**

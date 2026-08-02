@@ -11,6 +11,7 @@ export interface Location {
 }
 
 export interface Attraction {
+  id?: string
   name: string
   address: string
   location: Location
@@ -27,6 +28,7 @@ export interface Attraction {
 }
 
 export interface Meal {
+  id?: string
   type: 'breakfast' | 'lunch' | 'dinner' | 'snack'
   name: string
   address?: string
@@ -330,3 +332,14 @@ export interface UserMemoryItem {
   memory: string
   created_at?: string
 }
+
+// ===== 行程执行状态(V1.1 今日行程) =====
+export type ItemExecutionStatus = 'done' | 'skipped' | 'postponed' | 'pending'
+
+export interface ExecutionEntry {
+  status: ItemExecutionStatus
+  updated_at?: string
+  actual_cost?: number
+}
+
+export type ExecutionMap = Record<string, ExecutionEntry>
