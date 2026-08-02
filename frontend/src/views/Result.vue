@@ -248,6 +248,7 @@
             ref="tripMapRef"
             :trip-plan="tripPlan"
             :active="activeSection === 'map'"
+            :focus-day-index="mapFocusDay"
           />
         </div>
 

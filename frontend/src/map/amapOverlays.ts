@@ -86,13 +86,15 @@ export const renderTripPlanOnAmap = async (options: {
   plan: TripPlan
   copy: MapCopy
   isCurrent: () => boolean
+  visibleDays?: Set<number> | null
 }): Promise<void> => {
-  const { AMap, map, plan, copy, isCurrent } = options
+  const { AMap, map, plan, copy, isCurrent, visibleDays } = options
   const markers: any[] = []
   const attractions: MapAttraction[] = []
 
   let globalIndex = 0
   plan.days.forEach((day, dayIndex) => {
+    if (visibleDays && !visibleDays.has(dayIndex)) return
     day.attractions.forEach((attraction, attrIndex) => {
       globalIndex += 1
       if (!attraction.location?.longitude || !attraction.location?.latitude) return
@@ -122,6 +124,7 @@ export const renderTripPlanOnAmap = async (options: {
 
   const seenHotels = new Set<string>()
   plan.days.forEach((day, dayIndex) => {
+    if (visibleDays && !visibleDays.has(dayIndex)) return
     const location = day.hotel?.location
     if (!location?.longitude || !location?.latitude) return
     const coordinateKey = `${location.longitude},${location.latitude}`

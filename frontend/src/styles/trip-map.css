@@ -136,10 +136,28 @@
   flex-shrink: 0;
   align-items: center;
   gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   color: #3D3229;
+  font: inherit;
   font-size: 12px;
-  font-weight: 600;
   white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.15s ease;
+}
+
+.map-day-legend__item:hover {
+  border-color: rgba(201, 138, 45, 0.35);
+}
+
+.map-day-legend__item--active {
+  border-color: #c98a2d;
+  background: rgba(216, 169, 78, 0.14);
+  color: #a8752a;
+  font-weight: 600;
 }
 
 .map-day-legend__dot {

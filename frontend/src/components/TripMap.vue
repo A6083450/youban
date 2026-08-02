@@ -14,13 +14,26 @@
         </div>
       </transition>
       <div v-if="tripPlan.days.length > 1" class="map-day-legend">
-        <span v-for="(_, dayIndex) in tripPlan.days" :key="dayIndex" class="map-day-legend__item">
+        <button
+          type="button"
+          class="map-day-legend__item"
+          :class="{ 'map-day-legend__item--active': selectedDayIndex === null }"
+          @click="chooseDay(null)"
+        >{{ t('result.mapInfo.allDays') }}</button>
+        <button
+          v-for="(_, dayIndex) in tripPlan.days"
+          :key="dayIndex"
+          type="button"
+          class="map-day-legend__item"
+          :class="{ 'map-day-legend__item--active': selectedDayIndex === dayIndex }"
+          @click="chooseDay(dayIndex)"
+        >
           <span
             class="map-day-legend__dot"
             :style="{ backgroundColor: getMapDayColor(dayIndex + 1) }"
           ></span>
           {{ t('result.mapInfo.dayTitle', { day: dayIndex + 1 }) }}
-        </span>
+        </button>
       </div>
     </a-card>
   </div>
@@ -51,6 +64,7 @@ declare global {
 const props = defineProps<{
   tripPlan: TripPlan
   active: boolean
+  focusDayIndex?: number | null
 }>()
 
 const { t } = useI18n()
@@ -59,9 +73,21 @@ const containerRef = ref<HTMLElement | null>(null)
 const mapLoading = ref(false)
 const mapLoadingText = ref('')
 
+const selectedDayIndex = ref<number | null>(null)
+const userTouchedFilter = ref(false)
+
 let map: any = null
+let amapLib: any = null
 let initialization: Promise<void> | null = null
 let generation = 0
+
+const visibleDaysSet = (): Set<number> | null =>
+  selectedDayIndex.value === null ? null : new Set([selectedDayIndex.value])
+
+const chooseDay = (dayIndex: number | null): void => {
+  userTouchedFilter.value = true
+  selectedDayIndex.value = selectedDayIndex.value === dayIndex ? null : dayIndex
+}
 
 const destroyMap = (): void => {
   generation += 1
@@ -73,6 +99,27 @@ const destroyMap = (): void => {
     console.warn('地图实例清理失败:', error)
   }
   map = null
+  amapLib = null
+}
+
+const renderCurrentPlan = (AMap: any, targetMap: any, targetGeneration: number): void => {
+  void renderTripPlanOnAmap({
+    AMap,
+    map: targetMap,
+    plan: props.tripPlan,
+    visibleDays: visibleDaysSet(),
+    copy: {
+      noData: t('common.noData'),
+      minuteUnit: t('result.minuteUnit'),
+      dayAttraction: (day, index) => t('result.mapInfo.dayAttraction', { day, index }),
+      hotelLabel: (day) => t('result.mapInfo.hotelLabel', { day }),
+    },
+    isCurrent: () => targetGeneration === generation && map === targetMap,
+  }).catch((error: unknown) => {
+    if (targetGeneration === generation) {
+      console.error('地图标注/路线绘制失败:', error)
+    }
+  })
 }
 
 const initAMap = async (targetGeneration: number): Promise<void> => {
@@ -96,6 +143,7 @@ const initAMap = async (targetGeneration: number): Promise<void> => {
       version: '2.0',
       plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow', 'AMap.Driving', 'AMap.Walking'],
     })
+    amapLib = AMap
 
     if (targetGeneration !== generation || !props.active || !containerRef.value) return
 
@@ -110,22 +158,7 @@ const initAMap = async (targetGeneration: number): Promise<void> => {
 
     // Base-map readiness is independent from marker and route enhancement.
     mapLoading.value = false
-    void renderTripPlanOnAmap({
-      AMap,
-      map: targetMap,
-      plan: props.tripPlan,
-      copy: {
-        noData: t('common.noData'),
-        minuteUnit: t('result.minuteUnit'),
-        dayAttraction: (day, index) => t('result.mapInfo.dayAttraction', { day, index }),
-        hotelLabel: (day) => t('result.mapInfo.hotelLabel', { day }),
-      },
-      isCurrent: () => targetGeneration === generation && map === targetMap,
-    }).catch((error: unknown) => {
-      if (targetGeneration === generation) {
-        console.error('地图标注/路线绘制失败:', error)
-      }
-    })
+    renderCurrentPlan(AMap, targetMap, targetGeneration)
   } catch (error: unknown) {
     if (targetGeneration !== generation) return
     mapLoading.value = false
@@ -195,6 +228,23 @@ watch(
   () => props.active,
   (active) => {
     if (active) void ensureMapReady()
+  },
+)
+
+// 筛选切换:清空覆盖物按当前过滤集重绘(不销毁地图实例)
+watch(selectedDayIndex, () => {
+  if (!map || !amapLib) return
+  resetAmapRouteCache()
+  map.clearMap()
+  renderCurrentPlan(amapLib, map, generation)
+})
+
+// 今日联动:进入地图时未手动选择过则聚焦今天
+watch(
+  () => props.focusDayIndex,
+  (value) => {
+    if (value === null || value === undefined || userTouchedFilter.value) return
+    if (selectedDayIndex.value !== value) selectedDayIndex.value = value
   },
 )
 
