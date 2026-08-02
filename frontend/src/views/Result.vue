@@ -3053,12 +3053,63 @@ const escapeHtml = (value: unknown): string => {
     width: 170px;
   }
 
+  /* ── V1.1 移动端预算卡片化:表格行 → 两行卡片 ── */
   .budget-detail-list {
-    overflow-x: auto;
+    overflow: visible;
+    border: none;
+    background: transparent;
   }
 
-  .budget-detail-row {
-    min-width: 620px;
+  .budget-detail-row.budget-detail-header {
+    display: none;
+  }
+
+  .budget-detail-row,
+  .budget-detail-row--readonly {
+    min-width: 0;
+    grid-template-columns: auto auto 1fr auto;
+    grid-template-areas:
+      'name name name amount'
+      'type day gap actions';
+    row-gap: 7px;
+    padding: 13px 14px;
+    border: 1px solid rgba(61, 50, 41, 0.08);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.66);
+  }
+
+  .budget-detail-row:last-child {
+    border-bottom: 1px solid rgba(61, 50, 41, 0.08);
+  }
+
+  .budget-detail-name {
+    grid-area: name;
+    font-weight: 600;
+    font-size: 14.5px;
+  }
+
+  .budget-detail-amount {
+    grid-area: amount;
+    font-weight: 700;
+    justify-self: end;
+  }
+
+  .budget-detail-type {
+    grid-area: type;
+    font-size: 12px;
+    opacity: 0.72;
+  }
+
+  .budget-detail-day {
+    grid-area: day;
+    font-size: 12px;
+    opacity: 0.72;
+  }
+
+  .budget-action-wrap {
+    grid-area: actions;
+    justify-self: end;
   }
 
 }
