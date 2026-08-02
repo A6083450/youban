@@ -58,6 +58,7 @@
             {{ item.start_date }} ~ {{ item.end_date }}
             <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
             <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
+            <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
           </span>
           <a-popconfirm
             :title="t('sidebar.deleteConfirm')"
@@ -116,6 +117,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import dayjs from 'dayjs'
 import { setAppLocale, type AppLocale } from '@/i18n'
 import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteTripPlan, getStoredUser } from '@/services/api'
@@ -131,6 +133,13 @@ const router = useRouter()
 const route = useRoute()
 
 const activePlanId = computed(() => (route.name === 'PlanView' ? String(route.params.id || '') : ''))
+
+// 行程期内(已完成且今日落在 start~end 之间)的计划,侧栏标注"进行中"
+const isOngoing = (item: TripHistoryItem): boolean => {
+  if (item.status !== 'completed' || !item.start_date || !item.end_date) return false
+  const today = dayjs().format('YYYY-MM-DD')
+  return item.start_date <= today && item.end_date >= today
+}
 
 // 语言切换选项（标签始终显示各语言原生名）
 const localeOptions = [
@@ -425,6 +434,8 @@ onUnmounted(() => {
   color: rgba(61, 50, 41, 0.55);
   background: rgba(61, 50, 41, 0.1);
 }
+
+.sidebar-item-badge.ongoing { color: #a8752a; background: rgba(216, 169, 78, 0.18); }
 
 .sidebar-footer {
   display: flex;

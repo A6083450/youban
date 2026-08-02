@@ -5,6 +5,7 @@
     "empty": "まだプランがありません",
     "processing": "生成中",
     "failed": "失敗",
+    "ongoing": "旅行中",
     "delete": "プランを削除",
     "deleteConfirm": "このプランを削除しますか？",
     "deleted": "削除しました",
@@ -46,7 +47,10 @@
     "doneCta": "旅程詳細を開いています…",
     "assistantName": "游伴",
     "userName": "私",
-    "resumeNotice": "生成中の旅程が見つかりました。進行状況を復元しました。"
+    "resumeNotice": "生成中の旅程が見つかりました。進行状況を復元しました。",
+    "ongoingBadge": "旅行中",
+    "ongoingDay": "{day}日目",
+    "ongoingCta": "本日の行程へ"
   },
   "composer": {
     "placeholder": "例：来週末に西安へ3日間、グルメと歴史文化が好き…",

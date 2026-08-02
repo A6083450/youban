@@ -5,6 +5,7 @@
     "empty": "No plans yet, start with one sentence",
     "processing": "Generating",
     "failed": "Failed",
+    "ongoing": "On trip",
     "delete": "Delete plan",
     "deleteConfirm": "Delete this plan?",
     "deleted": "Deleted",
@@ -46,7 +47,10 @@
     "doneCta": "Opening your itinerary…",
     "assistantName": "YouBan",
     "userName": "Me",
-    "resumeNotice": "Found a trip still being generated — progress restored for you."
+    "resumeNotice": "Found a trip still being generated — progress restored for you.",
+    "ongoingBadge": "On trip",
+    "ongoingDay": "Day {day}",
+    "ongoingCta": "Open today"
   },
   "composer": {
     "placeholder": "e.g. 3 days in Xi'an next weekend, love food and history…",

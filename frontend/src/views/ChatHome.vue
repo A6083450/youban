@@ -69,6 +69,21 @@
 
     <!-- 输入区(空态时整体居中,含欢迎语) -->
     <div class="chat-input-area" :class="{ 'is-empty': items.length === 0 }">
+      <div v-if="items.length === 0 && ongoingPlans.length" class="ongoing-banner">
+        <div
+          v-for="p in ongoingPlans"
+          :key="p.plan_id"
+          class="ongoing-card"
+          role="button"
+          tabindex="0"
+          @click="openOngoing(p)"
+          @keydown.enter="openOngoing(p)"
+        >
+          <span class="ongoing-badge">{{ t('chatHome.ongoingBadge') }}</span>
+          <span class="ongoing-title">{{ p.city }} · {{ t('chatHome.ongoingDay', { day: ongoingDayNumber(p) }) }}</span>
+          <span class="ongoing-cta">{{ t('chatHome.ongoingCta') }} →</span>
+        </div>
+      </div>
       <div v-if="items.length === 0" class="welcome">
         <h1 class="welcome-title">{{ t('chatHome.title') }}</h1>
         <p class="welcome-desc">{{ t('chatHome.desc') }}</p>
@@ -104,19 +119,20 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import dayjs from 'dayjs'
 import PlanComposer from '@/components/PlanComposer.vue'
 import TripDraftConfirmCard from '@/components/TripDraftConfirmCard.vue'
 import WorkProgress from '@/components/WorkProgress.vue'
 import { parseTripTextStream, confirmTripReplyStream, generateTripPlan, watchTripTask } from '@/services/api'
 import { getCurrentLocale } from '@/i18n'
-import { notifyPlansUpdated } from '@/stores/plans'
+import { notifyPlansUpdated, plans, refreshPlans } from '@/stores/plans'
 import { currentUser } from '@/stores/auth'
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 import { isConversationNearBottom, scrollConversationToBottom } from '@/utils/chatScroll.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
-import type { ChatMessage, ParsedTripDraft, TripConfirmReplyResponse, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
+import type { ChatMessage, ParsedTripDraft, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
 
 interface WorkProgressStatus {
   visible: boolean
@@ -139,6 +155,18 @@ type ChatItem = ChatItemData & { id: number }
 
 const { t, tm } = useI18n()
 const router = useRouter()
+
+// 行程期内(status=completed 且今日落在 start~end 之间)的进行中计划,首页空态直达今日视图
+const ongoingPlans = computed(() => {
+  const today = dayjs().format('YYYY-MM-DD')
+  return plans.value.filter(
+    (p) => p.status === 'completed' && p.start_date && p.end_date && p.start_date <= today && p.end_date >= today,
+  )
+})
+const ongoingDayNumber = (p: TripHistoryItem) => dayjs().diff(dayjs(p.start_date), 'day') + 1
+const openOngoing = (p: TripHistoryItem) => {
+  router.push({ path: `/plan/${p.plan_id}`, query: { section: 'today' } })
+}
 
 const composerRef = ref<InstanceType<typeof PlanComposer> | null>(null)
 const scrollRef = ref<HTMLElement | null>(null)
@@ -496,6 +524,7 @@ const restoreChatSession = () => {
 onMounted(() => {
   restoreChatSession()
   void resumeActiveTask()
+  if (!plans.value.length) void refreshPlans()
   window.addEventListener(NEW_PLAN_EVENT, resetConversation)
   // 浏览器滚动恢复与字体布局可能晚于首帧,短暂校正确保刷新也落在最新消息
   followingLatest.value = true
@@ -972,6 +1001,13 @@ const onConfirmGenerate = async (
   align-items: center;
   padding-bottom: 48px;
 }
+
+.ongoing-banner { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.ongoing-card { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border-radius: 14px; cursor: pointer; background: linear-gradient(135deg, rgba(216, 169, 78, 0.14), rgba(201, 138, 45, 0.08)); border: 1px solid rgba(201, 138, 45, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.ongoing-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(201, 138, 45, 0.12); }
+.ongoing-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #d8a94e, #c98a2d); }
+.ongoing-title { flex: 1; font-size: 14.5px; font-weight: 600; color: #3d3229; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ongoing-cta { flex-shrink: 0; font-size: 12.5px; color: #a8752a; }
 
 .welcome {
   width: 100%;

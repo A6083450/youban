@@ -5,6 +5,7 @@
     "empty": "还没有计划，说一句话开始吧",
     "processing": "生成中",
     "failed": "失败",
+    "ongoing": "进行中",
     "delete": "删除计划",
     "deleteConfirm": "确定删除这个计划吗？",
     "deleted": "已删除",
@@ -46,7 +47,10 @@
     "doneCta": "正在为你打开计划详情…",
     "assistantName": "游伴",
     "userName": "我",
-    "resumeNotice": "检测到你有一个正在生成的行程，已为你恢复进度～"
+    "resumeNotice": "检测到你有一个正在生成的行程，已为你恢复进度～",
+    "ongoingBadge": "进行中",
+    "ongoingDay": "第 {day} 天",
+    "ongoingCta": "进入今日行程"
   },
   "composer": {
     "placeholder": "例如：下周末去西安玩3天，喜欢美食和历史文化…",
