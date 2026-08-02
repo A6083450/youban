@@ -279,7 +279,14 @@ def _load_persisted_tasks() -> None:
             if not isinstance(payload, dict):
                 continue
             task_id = str(payload.get("task_id") or path.stem)
-            _tasks[task_id] = _normalize_loaded_task(task_id, payload)
+            needs_migration = any(
+                not (item.get("id") if isinstance(item, dict) else getattr(item, "id", None))
+                for item in _iter_plan_items(payload.get("result"))
+            )
+            task = _normalize_loaded_task(task_id, payload)
+            if needs_migration:
+                _persist_task_state(task_id, task)
+            _tasks[task_id] = task
             loaded += 1
         except Exception as e:
             print(f"⚠️  加载历史任务 {path.name} 失败: {e}")
