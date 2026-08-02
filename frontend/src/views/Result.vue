@@ -267,6 +267,7 @@
             :trip-plan="tripPlan"
             :execution="executionMap"
             :day-array-index="todayArrayIndex"
+            :attraction-photos="attractionPhotos"
             @update-status="handleUpdateItemStatus"
           />
         </section>
@@ -2905,7 +2906,8 @@ const escapeHtml = (value: unknown): string => {
 /* 响应式设计 */
 @media (max-width: 768px) {
   .result-main {
-    padding: 12px 10px 24px;
+    /* 底部 padding 预留悬浮 AI 输入框(.agent-dock 约 90px)+ iPhone 安全区,避免滚到底被遮 */
+    padding: 12px 10px calc(110px + env(safe-area-inset-bottom, 0px));
   }
 
   .content-wrapper {

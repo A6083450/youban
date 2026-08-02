@@ -30,6 +30,13 @@
         >
           <div class="today-item-time">{{ item.timeLabel || '—' }}</div>
           <div class="today-item-body">
+            <img
+              v-if="item.kind === 'attraction' && attractionPhotos[item.name] && !failedThumbs.has(item.name)"
+              :src="attractionPhotos[item.name]"
+              :alt="item.name"
+              class="today-item-thumb"
+              @error="onThumbError(item.name)"
+            />
             <div class="today-item-head">
               <span class="today-item-name">{{ item.name }}</span>
               <span v-if="item.kind === 'meal'" class="today-item-tag">{{ mealLabel(item.category) }}</span>
@@ -128,7 +135,12 @@ const props = defineProps<{
   execution: ExecutionMap
   /** 今天在 days 数组中的下标;<0 时按出发前/已结束展示 */
   dayArrayIndex: number
+  /** 景点图片(按景点名索引),由父组件 Result.vue 提供 */
+  attractionPhotos?: Record<string, string>
 }>()
+
+// prop 可选,模板统一走带兜底的访问器
+const attractionPhotos = computed<Record<string, string>>(() => props.attractionPhotos || {})
 
 const emit = defineEmits<{
   (event: 'update-status', payload: { itemId: string; status: ItemExecutionStatus; actualCost?: number }): void
@@ -226,6 +238,12 @@ const statusLabel = (status: ItemExecutionStatus): string => {
   }
   return map[status] || ''
 }
+
+// 缩略图加载失败:隐藏该图片(不影响行程数据)
+const failedThumbs = ref(new Set<string>())
+const onThumbError = (name: string) => {
+  failedThumbs.value = new Set([...failedThumbs.value, name])
+}
 </script>
 
 <style scoped>
@@ -245,6 +263,7 @@ const statusLabel = (status: ItemExecutionStatus): string => {
 .today-item { display: flex; gap: 12px; padding: 13px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(61, 50, 41, 0.08); }
 .today-item-time { flex-shrink: 0; width: 92px; font-size: 12px; color: rgba(61, 50, 41, 0.55); padding-top: 2px; font-variant-numeric: tabular-nums; }
 .today-item-body { flex: 1; min-width: 0; }
+.today-item-thumb { width: 100%; max-height: 150px; object-fit: cover; border-radius: 10px; margin-bottom: 9px; display: block; }
 .today-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .today-item-name { font-size: 15px; font-weight: 600; color: #3d3229; }
 .today-item-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(61, 50, 41, 0.06); color: rgba(61, 50, 41, 0.6); }
