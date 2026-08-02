@@ -321,6 +321,14 @@ class ErrorResponse(BaseModel):
     error_code: Optional[str] = Field(default=None, description="错误代码")
 
 
+# ============ 行程执行状态模型 ============
+
+class ItemStatusUpdateRequest(BaseModel):
+    """行程项执行状态更新请求(V1.1 今日行程打卡)"""
+    status: Literal["done", "skipped", "postponed", "pending"] = Field(..., description="目标状态;pending 表示撤销恢复")
+    actual_cost: Optional[int] = Field(default=None, ge=0, description="实际花费(元),仅完成时记录")
+
+
 # ============ AI 行程问答模型 ============
 
 class TripChatRequest(BaseModel):

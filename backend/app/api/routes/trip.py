@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from ...agents.stream_json import stream_extract_string_field
 from ...agents.trip_planner_agent import get_trip_planner_agent
 from ...config import get_data_dir
-from ...models.schemas import TripPlanResponse, TripRequest
+from ...models.schemas import ItemStatusUpdateRequest, TripPlanResponse, TripRequest
 from ...services import memory_service
 from ...services.llm_service import iter_llm_stream, llm_complete
 from ...services.trip_confirmation import consume_execution_token, register_confirm_decision
@@ -154,6 +154,7 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
             "user_id": payload.get("user_id", ""),
             "share_token": payload.get("share_token", ""),
             "request_payload": payload.get("request_payload"),
+            "execution": payload.get("execution") or {},
         }
     )
     task["subscribers"] = []
@@ -187,6 +188,7 @@ def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
             "user_id": task.get("user_id", ""),
             "share_token": task.get("share_token", ""),
             "request_payload": task.get("request_payload"),
+            "execution": task.get("execution") or {},
         }
         target = _task_file_path(task_id)
         tmp = target.with_suffix(".json.tmp")
@@ -1409,6 +1411,44 @@ async def get_shared_plan(share_token: str):
     }
 
 
+@router.patch(
+    "/plan/{plan_id}/items/{item_id}/status",
+    summary="更新行程项执行状态",
+    description="旅行中对单个行程项(景点/餐饮)标记 完成/跳过/延后/恢复,可选记录实际花费;状态存于计划旁的 execution,不修改行程结构",
+)
+async def update_item_status(
+    plan_id: str,
+    item_id: str,
+    payload: ItemStatusUpdateRequest,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _get_task(plan_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="计划不存在")
+    _require_task_owner(task, x_user_id, detail="无权修改该计划", admin_token=x_admin_token)
+    if task.get("status") != "completed" or not task.get("result"):
+        raise HTTPException(status_code=409, detail="计划尚未生成完成,无法记录执行状态")
+    if _find_plan_item(task.get("result"), item_id) is None:
+        raise HTTPException(status_code=404, detail="行程项不存在")
+
+    execution: Dict[str, Any] = task.setdefault("execution", {})
+    if payload.status == "pending":
+        entry = None
+        execution.pop(item_id, None)
+    else:
+        entry = {
+            "status": payload.status,
+            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        if payload.status == "done" and payload.actual_cost is not None:
+            entry["actual_cost"] = payload.actual_cost
+        execution[item_id] = entry
+
+    _persist_task_state(plan_id, task)
+    return {"success": True, "item_id": item_id, "execution": entry}
+
+
 @router.get(
     "/status/{task_id}",
     summary="查询任务状态",
@@ -1431,6 +1471,7 @@ async def get_task_status(
             "plan_id": task.get("plan_id", task_id),
             "status": "completed",
             "result": _serialize_result(task.get("result")),
+            "execution": task.get("execution") or {},
         }
     if task["status"] == "failed":
         return {
