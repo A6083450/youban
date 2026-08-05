@@ -1,7 +1,7 @@
 # ================================
 # 阶段一：构建前端
 # ================================
-FROM docker.m.daocloud.io/library/node:18-slim AS frontend-builder
+FROM docker.m.daocloud.io/library/node:20-slim AS frontend-builder
 
 # 使用国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
