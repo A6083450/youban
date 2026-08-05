@@ -113,12 +113,11 @@ const preparePlanPage = async (page: Page): Promise<void> => {
   })
 
   await page.goto(`/plan/${planId}`)
-  await expect(page.getByRole('menuitem', { name: '行程概览' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '行程总览' })).toBeVisible()
 }
 
 const detailedSections = [
-  { label: '行程概览', cardSelector: '.overview-card' },
-  { label: '行程脉络图', cardSelector: '.flow-card' },
+  { label: '行程总览', cardSelector: '.overview-card' },
   { label: '预算明细', cardSelector: '.top-info-section' },
 ] as const
 
@@ -167,7 +166,7 @@ for (const section of detailedSections) {
 
 test('keeps the continuous itinerary scrolling inside the main pane', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   const layout = await page.evaluate(() => {
     const main = document.querySelector<HTMLElement>('.main-area')
     const card = document.querySelector<HTMLElement>('.days-card')
@@ -248,7 +247,7 @@ test('keeps the narrow-screen budget and itinerary grouping readable', async ({ 
   }))
   expect(budgetVerticalLayout.toolbarTop).toBeGreaterThanOrEqual(budgetVerticalLayout.navigationBottom)
 
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   const dailyLayout = await page.evaluate(() => {
     const groupingControl = document.querySelector<HTMLElement>('.itinerary-mode > div')
     const panels = Array.from(document.querySelectorAll<HTMLElement>('.daily-itinerary__day-panel'))

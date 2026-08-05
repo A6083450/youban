@@ -333,8 +333,8 @@
       "overview": "旅程概要",
       "budget": "予算内訳",
       "map": "観光地マップ",
-      "days": "日別プラン",
-      "graph": "旅程マップ",
+      "days": "詳細日程",
+      "graph": "ルート概要",
       "weather": "天気情報",
       "today": "本日"
     },
@@ -408,7 +408,7 @@
     },
     "mapTitle": "観光地マップ",
     "graphTitle": "旅の設計図",
-    "dailyTitle": "日別プラン",
+    "dailyTitle": "詳細日程",
     "dayDescription": "プラン説明:",
     "dayTransport": "移動手段:",
     "dayAccommodation": "宿泊:",
@@ -552,7 +552,30 @@
       "firstDayPreview": "初日のプレビュー",
       "endedTitle": "旅は終わりました",
       "endedSummary": "全 {days} 日 · {done} 件完了 · 実際の出費 ¥{cost}",
-      "noActionable": "今日は予定なし。ゆっくり休みましょう"
+      "noActionable": "今日は予定なし。ゆっくり休みましょう",
+      "reflectionLabel": "今日の旅の振り返り",
+      "achievement": "今日の探索 · {percent}%",
+      "reflection": {
+        "startTitle": "今日の物語は始まったばかり",
+        "startSummary": "自分のペースで出発しましょう。今日は {total} 件の体験が待っています。",
+        "progressTitle": "今日はもう、たくさん歩きました",
+        "progressSummary": "{done} 件完了。あと {remaining} 件で気持ちよく締めくくれます。",
+        "mixedTitle": "今日はしっかり旅ができました",
+        "mixedSummary": "{done} 件を完了。残り {deferred} 件は次回の楽しみにしても、心残りではありません。",
+        "completeTitle": "今日の旅をすべて楽しみました",
+        "completeSummary": "全 {total} 件を完了。今日の一歩一歩が、覚えておきたい思い出です。",
+        "deferredTitle": "今日はゆっくりでも大丈夫",
+        "deferredSummary": "予定は次回に回せます。自分のペースを大切にすることも旅の一部です。",
+        "story": "今日は {places} が旅の思い出に加わりました。",
+        "storyMore": "今日は {places} など {count} 個の足跡が旅の思い出に加わりました。",
+        "storyCompact": "今日は {count} 個の足跡が旅の思い出に加わりました。"
+      },
+      "feedback": {
+        "done": "をチェックイン。今日の景色がまた一つ増えました",
+        "skipped": "は次回の楽しみに。予定変更も旅のうちです",
+        "postponed": "はあとで行く予定に移しました。自分のペースで進みましょう",
+        "restored": "を今日の予定に戻しました"
+      }
     }
   }
 }

@@ -122,7 +122,7 @@ const preparePlanPage = async (page: Page): Promise<void> => {
   )
   await mockCommonApi(page)
   await page.goto(`/plan/${planId}`)
-  await expect(page.getByRole('menuitem', { name: '行程概览' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '行程总览' })).toBeVisible()
 }
 
 const installDelayedAmap = async (page: Page) => {
@@ -146,7 +146,7 @@ test('constructs one map when the map section is re-entered during SDK loading',
 
   await page.getByRole('menuitem', { name: '景点地图' }).click()
   await sdk.sdkRequested
-  await page.getByRole('menuitem', { name: '行程概览' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await page.getByRole('menuitem', { name: '景点地图' }).click()
   sdk.releaseSdk()
 

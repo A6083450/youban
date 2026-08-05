@@ -170,19 +170,23 @@ const mockCommonApi = async (page: Page): Promise<void> => {
   })
 }
 
-const preparePlanPage = async (page: Page, plan: TripPlan = tripPlanWithBlueprint): Promise<void> => {
+const preparePlanPage = async (
+  page: Page,
+  plan: TripPlan = tripPlanWithBlueprint,
+  locale = 'zh-CN',
+): Promise<void> => {
   await page.addInitScript(
-    ({ storedUser, storedPlanId, storedPlan }) => {
+    ({ storedUser, storedPlanId, storedPlan, storedLocale }) => {
       localStorage.setItem('tripstar.user', JSON.stringify(storedUser))
-      localStorage.setItem('tripstar-locale', 'zh-CN')
+      localStorage.setItem('tripstar-locale', storedLocale)
       sessionStorage.setItem('planId', storedPlanId)
       sessionStorage.setItem('tripPlan', JSON.stringify(storedPlan))
     },
-    { storedUser: user, storedPlanId: planId, storedPlan: plan },
+    { storedUser: user, storedPlanId: planId, storedPlan: plan, storedLocale: locale },
   )
   await mockCommonApi(page)
   await page.goto(`/plan/${planId}`)
-  await expect(page.getByRole('menuitem', { name: '行程概览' })).toBeVisible()
+  await expect(page.locator('.top-switch-menu')).toBeVisible()
 }
 
 const mockSharedPlan = async (page: Page, plan: TripPlan): Promise<void> => {
@@ -209,10 +213,11 @@ const mockSharedPlan = async (page: Page, plan: TripPlan): Promise<void> => {
   })
 }
 
-test('shows journey context without duplicating daily logistics', async ({ page }) => {
+test('merges journey context into the trip overview without a separate navigation item', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
-  const blueprint = page.locator('.flow-card')
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+  await expect(page.getByRole('menuitem', { name: '行程脉络图' })).toHaveCount(0)
+  const blueprint = page.locator('.overview-card')
   await expect(blueprint.getByRole('heading', { name: '江南慢游' })).toBeVisible()
   await expect(blueprint.getByText('从上海城市文化进入杭州湖滨慢游。')).toBeVisible()
   await expect(blueprint.getByText('城市文化', { exact: true })).toBeVisible()
@@ -221,11 +226,56 @@ test('shows journey context without duplicating daily logistics', async ({ page 
   await expect(blueprint.getByText('测试餐厅')).toHaveCount(0)
 })
 
+test('uses distinct overview and detailed itinerary labels in Japanese', async ({ page }) => {
+  await preparePlanPage(page, tripPlanWithBlueprint, 'ja-JP')
+
+  await expect(page.getByRole('menuitem', { name: '旅程概要' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '詳細日程' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '旅程マップ' })).toHaveCount(0)
+})
+
+test('lets users drag both journey rails and resumes autoplay after the pointer leaves', async ({ page }) => {
+  await preparePlanPage(page, makeLongTripPlan(10, '2026-08-01'))
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+
+  for (const rail of [
+    { viewport: '.journey__track', strip: '.journey__track-strip', manualClass: 'journey__track--manual' },
+    { viewport: '.journey__cards', strip: '.journey__cards-track', manualClass: 'journey__cards--manual' },
+  ]) {
+    const viewport = page.locator(rail.viewport)
+    const strip = page.locator(rail.strip)
+    await expect(viewport).toHaveClass(/--loop/)
+    await viewport.hover()
+    const before = await strip.evaluate((element) => Number(element.getAnimations()[0]?.currentTime ?? 0))
+    const box = await viewport.boundingBox()
+    expect(box).not.toBeNull()
+    if (!box) return
+
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2, { steps: 6 })
+    await page.mouse.up()
+
+    await expect(viewport).toHaveClass(new RegExp(rail.manualClass))
+    const after = await strip.evaluate((element) => Number(element.getAnimations()[0]?.currentTime ?? 0))
+    expect(Math.abs(after - before)).toBeGreaterThan(100)
+    await expect(strip).toHaveCSS('animation-play-state', 'paused')
+    await expect(page.getByRole('menuitem', { name: '行程总览' })).toHaveAttribute('aria-selected', 'true')
+
+    await page.mouse.move(0, 0)
+    await expect(viewport).not.toHaveClass(new RegExp(rail.manualClass))
+    await expect(strip).toHaveCSS('animation-play-state', 'running')
+    await expect.poll(() => strip.evaluate((element) => (
+      Number(element.getAnimations()[0]?.currentTime ?? 0)
+    ))).toBeGreaterThan(after + 50)
+  }
+})
+
 test('scrolls the continuous itinerary to a selected journey day', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await page.getByRole('button', { name: /D3 杭州.*断桥/ }).click()
-  await expect(page.getByRole('menuitem', { name: '每日行程' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('menuitem', { name: '详细日程' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(3)
   await expect.poll(() => page.evaluate(() => {
     const navigation = document.querySelector<HTMLElement>('.top-switch-nav')
@@ -241,7 +291,7 @@ test('scrolls the continuous itinerary to a selected journey day', async ({ page
 
 test('renders every day with its own ordered reference timeline', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.locator('#daily-day-1 .daily-timeline__time')).toHaveText(['08:30', '12:00', '14:00'])
   await expect(page.getByText('以下时间为参考时间').first()).toBeVisible()
   await expect(page.locator('.daily-itinerary__day-panel')).toHaveCount(3)
@@ -249,7 +299,7 @@ test('renders every day with its own ordered reference timeline', async ({ page 
 
 test('shows untimed legacy items after timed items', async ({ page }) => {
   await preparePlanPage(page, legacyTripPlan)
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.getByRole('radiogroup', { name: '日程分组' })).toHaveCount(0)
   await expect(page.locator('.daily-timeline__time')).toHaveText(['时间待定', '时间待定'])
 })
@@ -257,9 +307,9 @@ test('shows untimed legacy items after timed items', async ({ page }) => {
 test('uses the same blueprint and daily views on a readonly share page', async ({ page }) => {
   await mockSharedPlan(page, tripPlanWithBlueprint)
   await page.goto('/share/blueprint')
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await expect(page.getByRole('heading', { name: '江南慢游' })).toBeVisible()
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.getByText('以下时间为参考时间').first()).toBeVisible()
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(3)
   await expect(page.getByRole('button', { name: '分享' })).toHaveCount(0)
@@ -268,12 +318,12 @@ test('uses the same blueprint and daily views on a readonly share page', async (
 test('keeps blueprint and daily views inside a 375px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await preparePlanPage(page)
-  for (const label of ['行程脉络图', '每日行程']) {
+  for (const label of ['行程总览', '详细日程']) {
     await page.getByRole('menuitem', { name: label }).click()
     const layout = await page.evaluate((sectionLabel) => {
       const navigation = document.querySelector<HTMLElement>('.top-switch-nav')
       const content = document.querySelector<HTMLElement>(
-        sectionLabel === '行程脉络图' ? '.journey__hero' : '.itinerary-mode',
+        sectionLabel === '行程总览' ? '.journey__hero' : '.itinerary-mode',
       )
       return {
         widths: [document.documentElement.clientWidth, document.documentElement.scrollWidth],
@@ -289,7 +339,7 @@ test('keeps blueprint and daily views inside a 375px viewport', async ({ page })
 test('keeps the mobile result navigation pinned while the plan scrolls', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await page.locator('.main-area').evaluate((main) => {
     main.scrollTop = main.scrollHeight
   })
@@ -308,7 +358,7 @@ test('keeps the mobile result navigation pinned while the plan scrolls', async (
 test('uses one mobile grouping control and keeps all day media directly visible', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
 
   const groupingControl = page.locator('.itinerary-mode > div')
   await expect(groupingControl).toBeVisible()
@@ -327,7 +377,7 @@ test('uses one mobile grouping control and keeps all day media directly visible'
 
 test('keeps all five days visible while display grouping changes', async ({ page }) => {
   await preparePlanPage(page, makeLongTripPlan(5, '2026-08-01'))
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
 
   await expect(page.getByRole('radiogroup', { name: '日程分组' })).toBeVisible()
   await expect(page.getByRole('radio', { name: '日' })).toHaveAttribute('aria-checked', 'true')
@@ -336,15 +386,15 @@ test('keeps all five days visible while display grouping changes', async ({ page
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(5)
   await expect(page.getByText('第 1 周 · 第 1～5 天 · 8月1日—8月5日')).toBeVisible()
 
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.getByRole('radio', { name: '周' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(5)
 })
 
 test('uses concrete weekly ranges for a ten-day plan', async ({ page }) => {
   await preparePlanPage(page, makeLongTripPlan(10, '2026-08-01'))
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
 
   await expect(page.getByRole('radio', { name: '周' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.daily-itinerary__group-heading')).toHaveText([
@@ -356,7 +406,7 @@ test('uses concrete weekly ranges for a ten-day plan', async ({ page }) => {
 
 test('defaults a thirty-five-day plan to month grouping', async ({ page }) => {
   await preparePlanPage(page, makeLongTripPlan(35, '2026-08-15'))
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
 
   await expect(page.getByRole('radio', { name: '月' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(35)
@@ -374,9 +424,9 @@ test('renders blueprint and daily sections without nested Ant cards', async ({ p
   await page.setViewportSize({ width: 1440, height: 900 })
   await preparePlanPage(page)
 
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await expect(page.locator('.flow-card > .ant-card-body')).toHaveCount(0)
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.locator('.days-card > .ant-card-body')).toHaveCount(0)
 })
 
@@ -401,7 +451,7 @@ test('exports a non-empty itinerary image', async ({ page }, testInfo) => {
 test('supports keyboard day selection and captures visual QA artifacts', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   const firstDay = page.getByRole('button', { name: /D1 上海.*外滩/ }).first()
   await firstDay.focus()
   await expect(firstDay).toBeFocused()
@@ -411,19 +461,19 @@ test('supports keyboard day selection and captures visual QA artifacts', async (
   })
 
   await firstDay.press('Enter')
-  await expect(page.getByRole('menuitem', { name: '每日行程' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('menuitem', { name: '详细日程' })).toHaveAttribute('aria-selected', 'true')
   await page.screenshot({
     path: testInfo.outputPath('daily-itinerary-desktop.png'),
     animations: 'disabled',
   })
 
   await page.setViewportSize({ width: 375, height: 812 })
-  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
   await page.screenshot({
     path: testInfo.outputPath('trip-blueprint-mobile.png'),
     animations: 'disabled',
   })
-  await page.getByRole('menuitem', { name: '每日行程' }).click()
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
   await page.screenshot({
     path: testInfo.outputPath('daily-itinerary-mobile.png'),
     animations: 'disabled',
@@ -450,7 +500,7 @@ for (const visualCase of adaptiveVisualCases) {
   test(`captures adaptive itinerary ${visualCase.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: visualCase.width, height: visualCase.height })
     await preparePlanPage(page, makeLongTripPlan(visualCase.days, visualCase.start))
-    await page.getByRole('menuitem', { name: '每日行程' }).click()
+    await page.getByRole('menuitem', { name: '详细日程' }).click()
     await expect(page.getByRole('radio', { name: visualCase.mode })).toHaveAttribute('aria-checked', 'true')
     await expect(page.locator('.daily-itinerary__day')).toHaveCount(visualCase.days)
     await expect.poll(() => page.evaluate(() => (

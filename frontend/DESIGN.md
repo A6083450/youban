@@ -17,6 +17,7 @@ Youban is a calm, work-focused travel planning surface. Warm paper backgrounds, 
 | Text secondary | `--text-secondary` | `#6B5D52` | Supporting copy |
 | Accent | `--accent-primary` | `#D97757` | Selected tabs and primary emphasis |
 | Accent strong | `--accent-strong` | `#C4603D` | Hover and active emphasis |
+| Companion mark | `--brand-companion` | `#C17F59` | Second foot in the paired Youban brand mark |
 | Border subtle | `--border-subtle` | `rgba(61, 50, 41, 0.1)` | Dividers and card outlines |
 | Success | `--status-success` | `#3A9C7A` | Confirmed and city tags |
 | Warning | `--status-warning` | `#B8860B` | Transfer and pending states |
@@ -64,8 +65,8 @@ The current code predates semantic CSS variables and still contains equivalent r
 - **Layout**: fixed-sidenav-shell. `.main-area` is the scroll owner; `.sidebar-list` scrolls only its own records.
 
 ### Result Section Surface
-- **Structure**: one result frame with a section-specific body (`overview`, `budget`, `days`, or `flow`).
-- **Variants**: unframed overview waterfall, budget split, unframed daily plan, unframed trip flow.
+- **Structure**: one result frame with a section-specific body (`overview`, `budget`, `days`, `map`, `weather`, or `today`).
+- **Variants**: unframed overview, budget split, unframed detailed itinerary, map, weather, and today's executable plan.
 - **Spacing**: 20px section separation, 14px to 20px internal spacing.
 - **States**: selected tab, empty content, populated content, selected day.
 - **Accessibility**: tabs and collapse panels retain Ant Design keyboard behavior and visible focus.
@@ -73,7 +74,7 @@ The current code predates semantic CSS variables and still contains equivalent r
 - **Layout**: stack or intrinsic grid. Cards never exceed the result content inline size.
 
 ### Overview Waterfall
-- **Structure**: a semantic section containing an unframed multi-column feed of reusable attraction tiles, followed by plain trip metadata.
+- **Structure**: the trip overview begins with the route summary and day sequence, followed by an unframed multi-column feed of reusable attraction tiles and plain trip metadata. Route content has no separate primary-navigation entry.
 - **Tile anatomy**: variable-ratio attraction media, day badge, day-navigation action, title, and supporting description. The tile itself has no background panel, border, outer radius, or shadow.
 - **Layout**: CSS multi-column flow with 5 columns at the widest result container, then 4, 3, and 2 columns as the container narrows. Mobile remains a stable 2-column feed.
 - **Spacing**: 16px desktop column gap, 10px mobile column gap, and 20px between tiles in a column.
@@ -81,10 +82,10 @@ The current code predates semantic CSS variables and still contains equivalent r
 - **States**: image zoom and title accent on hover; the day-navigation action remains keyboard focusable and visible on touch devices.
 - **Accessibility**: CJK titles may wrap to two lines without clipping; focus-visible uses the primary accent; source order and day navigation behavior remain unchanged.
 
-### Trip Blueprint
-- **Structure**: route summary, unframed stage sequence, planning logic, pace summary.
+### Route Overview
+- **Structure**: route summary, interactive day sequence, highlights, planning logic, and pace summary embedded at the top of the trip overview.
 - **States**: AI blueprint, conservative legacy blueprint, empty optional copy.
-- **Interaction**: each stage is a native button that selects its first day.
+- **Interaction**: each stage is a native button that selects its first day. The route and inspiration rails accept horizontal pointer or touch dragging without triggering a day selection. The marquee stays paused while the pointer remains over a dragged rail, resumes when it leaves, and resumes after touch release; vertical touch movement remains owned by the page.
 - **Layout**: 3-column stage sequence with open edges on wide content; single-column accent rail below 720px. Stage buttons use separators and tonal hover only, never enclosed cards.
 
 ### Adaptive Daily Itinerary Stream
@@ -116,6 +117,29 @@ The current code predates semantic CSS variables and still contains equivalent r
 - **Accessibility**: one native button with a complete accessible name and a persistent visible return label.
 - **Layout**: full sidebar width inside 12px gutters; the same action appears inside the mobile drawer without truncating CJK labels.
 
+### Brand Loading
+- **Structure**: the existing paired-foot Youban mark, the `游伴` wordmark, one live status line, and a three-dot activity cue. Detailed task progress may follow below, but never replaces the brand loading focal point.
+- **Variants**: boot before Vue mounts; compact inside the generation-progress surface; regular inside centered result-page waiting states. The boot variant is critical inline HTML/CSS in `index.html`, mirrors the component anatomy and tokens, and is replaced naturally when Vue mounts.
+- **States**: active loading and reduced motion.
+- **Motion**: the two feet take alternating 1.4s steps while the complete mark sways subtly; only `transform` and `opacity` animate. Reduced motion freezes the feet and replaces movement with a restrained opacity pulse.
+- **Accessibility**: the changing status remains real text inside one polite status region; the decorative mark and dots are hidden from assistive technology.
+- **Layout**: vertically centered open composition with no nested card. The mark keeps a stable square footprint so animation cannot shift surrounding content.
+
+### Ongoing Trip Return
+- **Structure**: a home-page return action for each completed trip whose date range includes today, with status, trip title, current day, and a persistent "view today" command.
+- **States**: one or multiple current trips, short or long multi-city titles, hover, press, and focus-visible.
+- **Layout**: shares the 640px home content measure. On mobile, cards use two compact rows, clamp long CJK titles to two lines, and top-align the home empty state below the app bar.
+- **Accessibility**: each card is one native button with a complete accessible name; document-level horizontal scrolling is prohibited.
+- **Motion**: the existing 150ms hover feedback is retained on pointer devices and no entrance animation is added.
+
+### Today Journey Reflection
+- **Structure**: one unframed tonal band beneath the day context, containing a compact achievement label, a state-aware reflection title, a supportive summary, and an optional sentence naming completed places. A single transient status pill appears after a status action and never stacks.
+- **States**: not started, in progress, mixed completed and deferred, fully completed, and fully deferred. Completion is celebrated; skipped or postponed plans are framed as valid pacing choices rather than failure.
+- **Item treatment**: completed itinerary rows retain full readability with a soft success tint and no strike-through. Skipped rows are quieter but remain legible; postponed rows stay grouped under the existing later section.
+- **Accessibility**: the persistent reflection is ordinary readable content. The transient action echo uses a polite live status region and never becomes the only indication of the saved state.
+- **Layout**: the band is a single horizontal composition on desktop and remains one shrinkable row on mobile. Desktop may name completed places; mobile uses a compact footprint-count sentence to preserve natural CJK phrases. Transient feedback places the destination name and response on separate mobile lines. Copy wraps naturally without introducing document-level overflow.
+- **Motion**: the action echo uses a 200ms opacity/translate transition derived from the beui.dev animated-toast-stack status mechanism, stays visible for 3.2 seconds, and is replaced by the next action. Reduced motion removes translation while retaining the state change.
+
 ### Share Code Entry
 - **Structure**: visible label, single-line code input, primary icon-and-text submit button, and inline validation message.
 - **Variants**: full-width login/error-page form; progressive-disclosure sidebar tool reused inside the mobile drawer.
@@ -138,16 +162,18 @@ The current code predates semantic CSS variables and still contains equivalent r
 
 - Micro feedback: 150ms ease.
 - Standard panel transitions: 200ms to 300ms ease-in-out.
+- Transient action echo: 200ms ease, 3.2s readable dwell, latest action replaces the previous one.
 - Emphasis entrance: existing 600ms transform/opacity animation.
+- Brand loading step: 1.4s ease-in-out, with the second foot offset by half a cycle.
 - Motion communicates hover, drawer state, cross-view scroll targeting, or content state only.
-- Reduced-motion behavior is accepted existing debt; no new animation is added by the layout repair.
+- New motion must provide a `prefers-reduced-motion` fallback; older animation coverage remains accepted debt.
 
 ## 7. Depth & Surface
 
 Strategy: mixed tonal surfaces, subtle borders, and restrained shadows.
 
 - Result frame: translucent elevated surface with one subtle border and soft warm shadow.
-- Overview, blueprint, and daily sections remain unframed inside the result frame. Budget may use a pale grouped surface where dense tabular information benefits from separation.
+- Route overview, attraction overview, and detailed itinerary remain unframed inside the result frame. Budget may use a pale grouped surface where dense tabular information benefits from separation.
 - Sidebar: opaque white with a subtle divider; it does not float over desktop content.
 - Overview tiles, blueprint stages, and daily attraction details use open composition or separators instead of nested cards or decorative shadows.
 

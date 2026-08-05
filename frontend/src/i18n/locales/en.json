@@ -330,11 +330,11 @@
     "exportImage": "Export Guide",
     "exportPdf": "Export as PDF",
     "side": {
-      "overview": "Overview",
+      "overview": "Trip Overview",
       "budget": "Budget",
       "map": "Attraction Map",
-      "days": "Daily Itinerary",
-      "graph": "Journey Map",
+      "days": "Detailed Itinerary",
+      "graph": "Route Overview",
       "weather": "Weather",
       "today": "Today"
     },
@@ -408,7 +408,7 @@
     },
     "mapTitle": "Attraction Map",
     "graphTitle": "Trip Blueprint",
-    "dailyTitle": "Daily Itinerary",
+    "dailyTitle": "Detailed Itinerary",
     "dayDescription": "Description:",
     "dayTransport": "Transportation:",
     "dayAccommodation": "Accommodation:",
@@ -552,7 +552,30 @@
       "firstDayPreview": "Day 1 preview",
       "endedTitle": "Trip completed",
       "endedSummary": "{days} days · {done} items done · actual spend ¥{cost}",
-      "noActionable": "Nothing scheduled today — enjoy the rest"
+      "noActionable": "Nothing scheduled today — enjoy the rest",
+      "reflectionLabel": "Today's journey reflection",
+      "achievement": "Today's exploration · {percent}%",
+      "reflection": {
+        "startTitle": "Today's story is just beginning",
+        "startSummary": "Set out at your own pace. You have {total} experiences waiting today.",
+        "progressTitle": "You've already come a long way today",
+        "progressSummary": "{done} done, with {remaining} left before a full finish.",
+        "mixedTitle": "You made today count",
+        "mixedSummary": "You completed {done}. The other {deferred} can wait for another day, with no regrets.",
+        "completeTitle": "Today's journey is complete",
+        "completeSummary": "All {total} experiences complete. Every step today is worth remembering.",
+        "deferredTitle": "It's okay to take today slowly",
+        "deferredSummary": "The plan can wait. Honoring your own pace is part of the journey too.",
+        "story": "Today, {places} became part of your journey.",
+        "storyMore": "Today, {places} joined the {count} footprints in your journey.",
+        "storyCompact": "Today, {count} footprints became part of your journey."
+      },
+      "feedback": {
+        "done": "checked in. One more beautiful moment for today.",
+        "skipped": "is saved for next time. Changing plans is part of the trip.",
+        "postponed": "is saved for later. Keep your own pace.",
+        "restored": "is back on today's plan."
+      }
     }
   }
 }

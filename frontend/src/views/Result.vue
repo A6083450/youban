@@ -13,9 +13,6 @@
               <a-menu-item key="overview" :aria-selected="activeSection === 'overview'">
                 <span>{{ t('result.side.overview') }}</span>
               </a-menu-item>
-              <a-menu-item key="knowledge-graph" :aria-selected="activeSection === 'knowledge-graph'">
-                <span>{{ t('result.side.graph') }}</span>
-              </a-menu-item>
               <a-menu-item key="days" :aria-selected="activeSection === 'days'">
                 <span>{{ t('result.side.days') }}</span>
               </a-menu-item>
@@ -77,6 +74,13 @@
           class="overview-card"
           :aria-label="t('result.side.overview')"
         >
+          <div class="overview-journey">
+            <TripJourney
+              :trip-plan="tripPlan"
+              :attraction-photos="attractionPhotos"
+              @select-day="goToDayFromOverview"
+            />
+          </div>
           <div v-if="overviewAttractions.length > 0" class="overview-grid">
             <OverviewAttractionCard
               v-for="(item, index) in overviewAttractions"
@@ -252,15 +256,6 @@
           />
         </div>
 
-        <!-- 行程脉络图 -->
-        <section v-show="activeSection === 'knowledge-graph'" id="knowledge-graph" class="flow-card">
-          <TripJourney
-            :trip-plan="tripPlan"
-            :attraction-photos="attractionPhotos"
-            @select-day="goToDayFromOverview"
-          />
-        </section>
-
         <!-- 今日行程 -->
         <section v-show="activeSection === 'today'" v-if="!props.readonly" class="today-section flow-card">
           <TripToday
@@ -268,6 +263,7 @@
             :execution="executionMap"
             :day-array-index="todayArrayIndex"
             :attraction-photos="attractionPhotos"
+            :confirmed-status-feedback="todayStatusFeedback"
             @update-status="handleUpdateItemStatus"
           />
         </section>
@@ -316,9 +312,8 @@
           @retry="retryFailedPlan(false)"
           @restart-all="retryFailedPlan(true)"
         />
-        <div v-else-if="loadingPlan && !props.readonly" class="result-task-loading" role="status" aria-live="polite">
-          <a-spin size="large" />
-          <span>{{ t('tripFailure.retrying') }}</span>
+        <div v-else-if="loadingPlan && !props.readonly" class="result-task-loading">
+          <YoubanLoader :message="t('tripFailure.retrying')" />
         </div>
         <a-empty v-else :description="t('result.noTripPlan')">
           <template #description>
@@ -369,6 +364,7 @@ import DailyItinerary from '@/components/DailyItinerary.vue'
 import TripMap from '@/components/TripMap.vue'
 import TripToday from '@/components/TripToday.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
+import YoubanLoader from '@/components/YoubanLoader.vue'
 import type {
   Attraction,
   ExecutionMap,
@@ -463,6 +459,8 @@ const failedTaskError = computed(() =>
 
 // ─── 今日行程执行状态(V1.1) ───
 const executionMap = ref<ExecutionMap>({})
+const todayStatusFeedback = ref<{ id: number; itemId: string; status: ItemExecutionStatus }>()
+let todayStatusFeedbackSequence = 0
 const mapFocusDay = ref<number | null>(null)
 
 const todayArrayIndex = computed(() =>
@@ -473,7 +471,11 @@ const todayArrayIndex = computed(() =>
 const applyInitialSection = () => {
   if (props.readonly) return
   const requested = String(route.query.section || '')
-  const valid = ['overview', 'knowledge-graph', 'days', 'map', 'budget', 'weather', 'today']
+  if (requested === 'knowledge-graph') {
+    activeSection.value = 'overview'
+    return
+  }
+  const valid = ['overview', 'days', 'map', 'budget', 'weather', 'today']
   if (requested && valid.includes(requested)) {
     activeSection.value = requested
     return
@@ -523,6 +525,11 @@ const handleUpdateItemStatus = async (payload: { itemId: string; status: ItemExe
     if (entry) confirmed[payload.itemId] = entry
     else delete confirmed[payload.itemId]
     executionMap.value = confirmed
+    todayStatusFeedback.value = {
+      id: ++todayStatusFeedbackSequence,
+      itemId: payload.itemId,
+      status: payload.status,
+    }
   } catch {
     if (!ownsPlanOperation(operation)) return
     const rollback: ExecutionMap = { ...executionMap.value }
@@ -2426,11 +2433,17 @@ const escapeHtml = (value: unknown): string => {
   gap: 20px;
 }
 
-/* 行程概览瀑布流 */
+/* 行程总览:路线总览 + 景点瀑布流 */
 .overview-card {
   width: 100%;
   min-width: 0;
   margin-bottom: 20px;
+}
+
+.overview-journey {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .section-shellless {

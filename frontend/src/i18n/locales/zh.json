@@ -330,11 +330,11 @@
     "exportImage": "导出攻略",
     "exportPdf": "导出为 PDF",
     "side": {
-      "overview": "行程概览",
+      "overview": "行程总览",
       "budget": "预算明细",
       "map": "景点地图",
-      "days": "每日行程",
-      "graph": "行程脉络图",
+      "days": "详细日程",
+      "graph": "路线总览",
       "weather": "天气信息",
       "today": "今日行程"
     },
@@ -408,7 +408,7 @@
     },
     "mapTitle": "景点地图",
     "graphTitle": "旅行蓝图",
-    "dailyTitle": "每日行程",
+    "dailyTitle": "详细日程",
     "dayDescription": "行程描述:",
     "dayTransport": "交通方式:",
     "dayAccommodation": "住宿:",
@@ -552,7 +552,30 @@
       "firstDayPreview": "首日行程预览",
       "endedTitle": "旅程已结束",
       "endedSummary": "共 {days} 天 · 完成 {done} 项 · 实际花费 ¥{cost}",
-      "noActionable": "今天没有待办行程,好好休息"
+      "noActionable": "今天没有待办行程,好好休息",
+      "reflectionLabel": "今日行程回响",
+      "achievement": "今日探索 · {percent}%",
+      "reflection": {
+        "startTitle": "今天的故事刚刚开始",
+        "startSummary": "按自己的节奏出发，今天有 {total} 项行程等你慢慢体验。",
+        "progressTitle": "今天已经走出很远了",
+        "progressSummary": "完成 {done} 项，距离圆满收官还有 {remaining} 项。",
+        "mixedTitle": "今天走得很扎实",
+        "mixedSummary": "完成 {done} 项，{deferred} 项留给下次，也不算遗憾。",
+        "completeTitle": "今日行程圆满收官",
+        "completeSummary": "完成全部 {total} 项，今天的每一步都值得记住。",
+        "deferredTitle": "今天也可以慢一点",
+        "deferredSummary": "计划留给下次，照顾好自己的节奏也是旅行的一部分。",
+        "story": "今天，你已经把 {places} 写进旅程。",
+        "storyMore": "今天，你已经把 {places} 等 {count} 个足迹写进旅程。",
+        "storyCompact": "今天已留下 {count} 个旅行足迹。"
+      },
+      "feedback": {
+        "done": "已打卡，又收下一段好风景",
+        "skipped": "留给下次，临时改变计划也没关系",
+        "postponed": "已经放到稍后，按自己的节奏来",
+        "restored": "已回到今日计划"
+      }
     }
   }
 }

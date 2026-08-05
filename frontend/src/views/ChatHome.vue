@@ -81,21 +81,30 @@
     </div>
 
     <!-- 输入区(空态时整体居中,含欢迎语) -->
-    <div class="chat-input-area" :class="{ 'is-empty': items.length === 0 }">
+    <div
+      class="chat-input-area"
+      :class="{
+        'is-empty': items.length === 0,
+        'has-ongoing': items.length === 0 && ongoingPlans.length > 0,
+      }"
+    >
       <div v-if="items.length === 0 && ongoingPlans.length" class="ongoing-banner">
-        <div
+        <button
           v-for="p in ongoingPlans"
           :key="p.plan_id"
+          type="button"
           class="ongoing-card"
-          role="button"
-          tabindex="0"
           @click="openOngoing(p)"
-          @keydown.enter="openOngoing(p)"
         >
-          <span class="ongoing-badge">{{ t('chatHome.ongoingBadge') }}</span>
-          <span class="ongoing-title">{{ p.city }} · {{ t('chatHome.ongoingDay', { day: ongoingDayNumber(p) }) }}</span>
-          <span class="ongoing-cta">{{ t('chatHome.ongoingCta') }} →</span>
-        </div>
+          <span class="ongoing-card-main">
+            <span class="ongoing-badge">{{ t('chatHome.ongoingBadge') }}</span>
+            <span class="ongoing-title">{{ p.city }}</span>
+          </span>
+          <span class="ongoing-card-footer">
+            <span class="ongoing-day">{{ t('chatHome.ongoingDay', { day: ongoingDayNumber(p) }) }}</span>
+            <span class="ongoing-cta">{{ t('chatHome.ongoingCta') }} <span aria-hidden="true">→</span></span>
+          </span>
+        </button>
       </div>
       <div v-if="items.length === 0" class="welcome">
         <h1 class="welcome-title">{{ t('chatHome.title') }}</h1>
@@ -1165,12 +1174,53 @@ const onConfirmGenerate = async (
   padding-bottom: 48px;
 }
 
-.ongoing-banner { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
-.ongoing-card { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border-radius: 14px; cursor: pointer; background: linear-gradient(135deg, rgba(216, 169, 78, 0.14), rgba(201, 138, 45, 0.08)); border: 1px solid rgba(201, 138, 45, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.ongoing-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.ongoing-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 13px 16px;
+  border: 1px solid rgba(201, 138, 45, 0.25);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(216, 169, 78, 0.14), rgba(201, 138, 45, 0.08));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
 .ongoing-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(201, 138, 45, 0.12); }
+.ongoing-card:focus-visible { outline: 2px solid #D97757; outline-offset: 2px; }
+.ongoing-card-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .ongoing-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #d8a94e, #c98a2d); }
-.ongoing-title { flex: 1; font-size: 14.5px; font-weight: 600; color: #3d3229; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ongoing-cta { flex-shrink: 0; font-size: 12.5px; color: #a8752a; }
+.ongoing-title {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #3d3229;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: keep-all;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.ongoing-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ongoing-day { color: #8B7B6E; font-size: 12px; }
+.ongoing-cta { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: #a8752a; font-size: 12.5px; font-weight: 600; }
 
 .welcome {
   width: 100%;
@@ -1239,5 +1289,18 @@ const onConfirmGenerate = async (
 
 .suggestion-refresh:hover svg {
   transform: rotate(180deg);
+}
+
+@media (max-width: 768px) {
+  .chat-input-area.is-empty.has-ongoing {
+    justify-content: flex-start;
+    align-items: stretch;
+    padding-top: 24px;
+  }
+
+  .chat-input-area.is-empty.has-ongoing .ongoing-banner,
+  .chat-input-area.is-empty.has-ongoing .welcome {
+    align-self: center;
+  }
 }
 </style>

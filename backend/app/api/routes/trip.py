@@ -1227,10 +1227,10 @@ async def _run_trip_planning(task_id: str, request: TripRequest, user_id: str = 
             status="processing",
             stage="initializing",
             progress=10,
-            message="正在获取多智能体系统实例...",
+            message="正在准备行程规划...",
             details=[{
                 "type": "thinking",
-                "title": "正在初始化多智能体系统...",
+                "title": "正在为你安排这次旅行...",
                 "timestamp": int(_time.time() * 1000),
             }],
         )

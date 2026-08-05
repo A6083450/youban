@@ -19,6 +19,31 @@
         <span>{{ day.transfer_info }}</span>
       </div>
 
+      <section
+        v-if="progress.total > 0"
+        class="today-reflection"
+        :class="{ 'is-complete': reflectionState === 'complete' }"
+        :aria-label="t('result.today.reflectionLabel')"
+      >
+        <div class="today-reflection-mark" aria-hidden="true">
+          <TrophyOutlined />
+        </div>
+        <div class="today-reflection-content">
+          <div class="today-reflection-kicker">
+            {{ t('result.today.achievement', { percent: progressPercent }) }}
+          </div>
+          <h3>{{ reflectionTitle }}</h3>
+          <p>{{ reflectionSummary }}</p>
+          <p v-if="completedStory" class="today-reflection-story">
+            <CheckCircleFilled aria-hidden="true" />
+            <span class="today-reflection-story-wide">{{ completedStory }}</span>
+            <span class="today-reflection-story-compact">
+              {{ t('result.today.reflection.storyCompact', { count: doneItems.length }) }}
+            </span>
+          </p>
+        </div>
+      </section>
+
       <a-empty v-if="mainItems.length === 0 && laterItems.length === 0" :description="t('result.today.noActionable')" />
 
       <div class="today-timeline">
@@ -79,6 +104,25 @@
       </div>
 
       <p v-if="!online" class="today-offline-hint">{{ t('result.today.offlineHint') }}</p>
+
+      <div class="today-action-feedback-shell">
+        <Transition name="today-feedback">
+          <div
+            v-if="actionFeedback"
+            :key="actionFeedback.id"
+            class="today-action-feedback"
+            :class="`is-${actionFeedback.status}`"
+            role="status"
+            aria-live="polite"
+          >
+            <CheckCircleFilled v-if="actionFeedback.status === 'done'" aria-hidden="true" />
+            <CompassOutlined v-else aria-hidden="true" />
+            <span class="today-action-feedback-copy">
+              <strong>{{ actionFeedback.name }}</strong><span class="today-action-feedback-message">{{ actionFeedbackSeparator }}{{ actionFeedback.message }}</span>
+            </span>
+          </div>
+        </Transition>
+      </div>
     </template>
 
     <!-- 出发前:倒计时 + 首日预览 -->
@@ -124,9 +168,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
+import { CheckCircleFilled, CompassOutlined, TrophyOutlined } from '@ant-design/icons-vue'
 import type { ExecutionMap, ItemExecutionStatus, TripPlan } from '@/types'
 import { buildTodayTimeline, todayProgress, type TodayTimelineItem } from '@/utils/tripExecution'
 
@@ -137,6 +182,7 @@ const props = defineProps<{
   dayArrayIndex: number
   /** 景点图片(按景点名索引),由父组件 Result.vue 提供 */
   attractionPhotos?: Record<string, string>
+  confirmedStatusFeedback?: { id: number; itemId: string; status: ItemExecutionStatus }
 }>()
 
 // prop 可选,模板统一走带兜底的访问器
@@ -146,7 +192,7 @@ const emit = defineEmits<{
   (event: 'update-status', payload: { itemId: string; status: ItemExecutionStatus; actualCost?: number }): void
 }>()
 
-const { t, te } = useI18n()
+const { t, te, locale } = useI18n()
 
 const online = ref(navigator.onLine)
 const setOnline = () => { online.value = true }
@@ -178,6 +224,42 @@ const progress = computed(() => todayProgress(timeline.value))
 const progressPercent = computed(() =>
   progress.value.total === 0 ? 0 : Math.round((progress.value.done / progress.value.total) * 100),
 )
+const doneItems = computed(() => timeline.value.filter((item) => item.status === 'done'))
+const deferredCount = computed(() =>
+  timeline.value.filter((item) => item.status === 'skipped' || item.status === 'postponed').length,
+)
+const pendingCount = computed(() => timeline.value.filter((item) => item.status === 'pending').length)
+
+type ReflectionState = 'start' | 'progress' | 'mixed' | 'complete' | 'deferred'
+const reflectionState = computed<ReflectionState>(() => {
+  if (progress.value.total > 0 && progress.value.done === progress.value.total) return 'complete'
+  if (progress.value.done > 0 && pendingCount.value === 0 && deferredCount.value > 0) return 'mixed'
+  if (progress.value.done > 0) return 'progress'
+  if (pendingCount.value === 0 && deferredCount.value > 0) return 'deferred'
+  return 'start'
+})
+
+const reflectionTitle = computed(() => t(`result.today.reflection.${reflectionState.value}Title`))
+const reflectionSummary = computed(() => {
+  const key = `result.today.reflection.${reflectionState.value}Summary`
+  return t(key, {
+    done: progress.value.done,
+    total: progress.value.total,
+    remaining: pendingCount.value,
+    deferred: deferredCount.value,
+  })
+})
+
+const completedStory = computed(() => {
+  const names = doneItems.value.map((item) => item.name)
+  if (names.length === 0) return ''
+  const visibleNames = names.slice(0, 2)
+  const localeCode = String(locale.value || 'zh-CN')
+  const places = visibleNames.join(localeCode.toLowerCase().startsWith('en') ? ' and ' : '、')
+  return names.length > visibleNames.length
+    ? t('result.today.reflection.storyMore', { places, count: names.length })
+    : t('result.today.reflection.story', { places })
+})
 
 const todayWeather = computed(() =>
   day.value ? props.tripPlan.weather_info?.find((w) => w.date === day.value?.date) : undefined,
@@ -197,6 +279,43 @@ const endedSummary = computed(() => {
 })
 
 const canOperate = (item: TodayTimelineItem): boolean => Boolean(item.id) && online.value
+
+type ActionFeedback = {
+  id: number
+  status: ItemExecutionStatus
+  name: string
+  message: string
+}
+
+const actionFeedback = ref<ActionFeedback | null>(null)
+let feedbackSequence = 0
+let feedbackTimer: number | undefined
+const showActionFeedback = (item: TodayTimelineItem, status: ItemExecutionStatus) => {
+  const keyByStatus: Record<ItemExecutionStatus, string> = {
+    done: 'result.today.feedback.done',
+    skipped: 'result.today.feedback.skipped',
+    postponed: 'result.today.feedback.postponed',
+    pending: 'result.today.feedback.restored',
+  }
+  window.clearTimeout(feedbackTimer)
+  actionFeedback.value = {
+    id: ++feedbackSequence,
+    status,
+    name: item.name,
+    message: t(keyByStatus[status]),
+  }
+  feedbackTimer = window.setTimeout(() => {
+    actionFeedback.value = null
+  }, 3200)
+}
+const actionFeedbackSeparator = computed(() =>
+  String(locale.value || '').toLowerCase().startsWith('en') ? ' ' : '',
+)
+watch(() => props.confirmedStatusFeedback, (feedback) => {
+  if (!feedback) return
+  const item = timeline.value.find((entry) => entry.id === feedback.itemId)
+  if (item) showActionFeedback(item, feedback.status)
+})
 
 const emitStatus = (item: TodayTimelineItem, status: ItemExecutionStatus) => {
   if (!canOperate(item)) return
@@ -244,6 +363,8 @@ const failedThumbs = ref(new Set<string>())
 const onThumbError = (name: string) => {
   failedThumbs.value = new Set([...failedThumbs.value, name])
 }
+
+onUnmounted(() => window.clearTimeout(feedbackTimer))
 </script>
 
 <style scoped>
@@ -259,6 +380,19 @@ const onThumbError = (name: string) => {
 .today-progress-bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #d8a94e, #c98a2d); transition: width 0.3s ease; }
 .today-context-card { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border-radius: 10px; background: rgba(216, 169, 78, 0.08); font-size: 13px; color: rgba(61, 50, 41, 0.8); }
 .today-context-label { flex-shrink: 0; font-weight: 600; color: #a8752a; }
+.today-context-card > span:last-child { min-width: 0; text-wrap: pretty; }
+.today-reflection { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--accent-primary) 7%, var(--surface-elevated)); }
+.today-reflection.is-complete { border-color: color-mix(in srgb, var(--status-success) 28%, transparent); background: color-mix(in srgb, var(--status-success) 8%, var(--surface-elevated)); }
+.today-reflection-mark { display: grid; flex: 0 0 36px; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 14%, var(--surface-elevated)); color: var(--accent-strong); font-size: 17px; }
+.today-reflection.is-complete .today-reflection-mark { background: color-mix(in srgb, var(--status-success) 15%, var(--surface-elevated)); color: var(--status-success); }
+.today-reflection-content { min-width: 0; }
+.today-reflection-kicker { margin-bottom: 2px; color: var(--accent-strong); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.today-reflection.is-complete .today-reflection-kicker { color: var(--status-success); }
+.today-reflection h3 { margin: 0; color: var(--text-primary); font-size: 16px; font-weight: 700; line-height: 1.45; }
+.today-reflection p { margin: 3px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.6; text-wrap: pretty; }
+.today-reflection-story { display: flex; align-items: flex-start; gap: 6px; }
+.today-reflection-story .anticon { flex: 0 0 auto; margin-top: 4px; color: var(--status-success); font-size: 12px; }
+.today-reflection-story-compact { display: none; }
 .today-timeline, .today-later { display: flex; flex-direction: column; gap: 10px; }
 .today-item { display: flex; gap: 12px; padding: 13px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(61, 50, 41, 0.08); }
 .today-item-time { flex-shrink: 0; width: 92px; font-size: 12px; color: rgba(61, 50, 41, 0.55); padding-top: 2px; font-variant-numeric: tabular-nums; }
@@ -275,9 +409,18 @@ const onThumbError = (name: string) => {
 .today-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .today-btn-done { background: linear-gradient(135deg, #d8a94e, #c98a2d); border-color: transparent; color: #fff; }
 .today-btn-done:hover:not(:disabled) { color: #fff; opacity: 0.9; }
-.today-item.is-done .today-item-name { text-decoration: line-through; opacity: 0.55; }
-.today-item.is-done, .today-item.is-skipped { opacity: 0.72; }
-.today-item.is-skipped .today-item-name { opacity: 0.55; }
+.today-item.is-done { border-color: color-mix(in srgb, var(--status-success) 20%, transparent); background: color-mix(in srgb, var(--status-success) 5%, var(--surface-elevated)); opacity: 1; }
+.today-item.is-done .today-item-status { background: color-mix(in srgb, var(--status-success) 14%, transparent); color: var(--status-success); }
+.today-item.is-skipped { background: color-mix(in srgb, var(--text-primary) 2%, var(--surface-elevated)); }
+.today-item.is-skipped .today-item-name, .today-item.is-skipped .today-item-desc { color: color-mix(in srgb, var(--text-primary) 62%, transparent); }
+.today-action-feedback-shell { position: fixed; z-index: 1100; bottom: 82px; left: 50%; width: min(520px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.today-action-feedback { display: flex; align-items: center; justify-content: center; gap: 8px; width: fit-content; max-width: 100%; margin: 0 auto; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--text-primary) 92%, transparent); box-shadow: 0 10px 28px color-mix(in srgb, var(--text-primary) 20%, transparent); color: var(--surface-elevated); font-size: 13px; line-height: 1.45; }
+.today-action-feedback .anticon { flex: 0 0 auto; color: color-mix(in srgb, var(--accent-primary) 55%, white); }
+.today-action-feedback.is-done .anticon { color: color-mix(in srgb, var(--status-success) 55%, white); }
+.today-action-feedback-copy { min-width: 0; text-wrap: pretty; }
+.today-action-feedback-copy strong { font-weight: 600; }
+.today-feedback-enter-active, .today-feedback-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.today-feedback-enter-from, .today-feedback-leave-to { opacity: 0; transform: translateY(8px); }
 .today-later-title { font-size: 13px; font-weight: 600; color: rgba(61, 50, 41, 0.5); letter-spacing: 0.04em; margin-top: 4px; }
 .today-offline-hint { font-size: 12px; color: #b0483e; }
 .today-placeholder { padding: 28px 8px; display: flex; flex-direction: column; gap: 12px; }
@@ -289,5 +432,15 @@ const onThumbError = (name: string) => {
 @media (max-width: 640px) {
   .today-item { flex-direction: column; gap: 6px; }
   .today-item-time { width: auto; }
+  .today-reflection { padding: 12px; }
+  .today-action-feedback { justify-content: flex-start; border-radius: 8px; }
+  .today-reflection-story-wide { display: none; }
+  .today-reflection-story-compact { display: inline; }
+  .today-action-feedback-copy strong, .today-action-feedback-message { display: block; }
+  .today-action-feedback-message { margin-top: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .today-feedback-enter-active, .today-feedback-leave-active { transition: opacity 0.2s ease; }
+  .today-feedback-enter-from, .today-feedback-leave-to { transform: none; }
 }
 </style>

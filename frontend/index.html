@@ -9,10 +9,158 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#f7f1e8" />
   <title>游伴</title>
+  <style>
+    :root {
+      --boot-paper: #faf7f2;
+      --boot-text: #3d3229;
+      --boot-muted: #6b5d52;
+      --boot-accent: #d97757;
+      --boot-companion: #c17f59;
+    }
+
+    html,
+    body,
+    #app {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      background: var(--boot-paper);
+    }
+
+    .youban-boot-loader {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      box-sizing: border-box;
+      padding: 24px;
+      background: var(--boot-paper);
+      color: var(--boot-text);
+      font-family: "Montserrat", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      text-align: center;
+    }
+
+    .youban-boot-loader__content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      inline-size: min(100%, 320px);
+    }
+
+    .youban-boot-loader__mark {
+      inline-size: 88px;
+      block-size: 88px;
+      overflow: visible;
+      animation: youban-boot-mark-sway 1.4s ease-in-out infinite;
+    }
+
+    .youban-boot-loader__foot {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: youban-boot-foot-step 1.4s ease-in-out infinite;
+    }
+
+    .youban-boot-loader__foot--right {
+      animation-delay: -0.7s;
+    }
+
+    .youban-boot-loader__brand {
+      margin-block-start: 8px;
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .youban-boot-loader__message {
+      margin-block-start: 12px;
+      min-block-size: 24px;
+      color: var(--boot-muted);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.6;
+    }
+
+    .youban-boot-loader__dots {
+      display: flex;
+      gap: 8px;
+      margin-block-start: 20px;
+    }
+
+    .youban-boot-loader__dots i {
+      inline-size: 7px;
+      block-size: 7px;
+      border-radius: 50%;
+      background: var(--boot-muted);
+      animation: youban-boot-dot-pulse 1.2s ease-in-out infinite;
+    }
+
+    .youban-boot-loader__dots i:nth-child(2) { animation-delay: 0.16s; }
+    .youban-boot-loader__dots i:nth-child(3) { animation-delay: 0.32s; }
+
+    @keyframes youban-boot-foot-step {
+      0%, 100% { transform: translate3d(-2px, 1px, 0) rotate(-1deg); }
+      50% { transform: translate3d(3px, -7px, 0) rotate(4deg); }
+    }
+
+    @keyframes youban-boot-mark-sway {
+      0%, 100% { transform: translateX(-2px) rotate(-1deg); }
+      50% { transform: translateX(2px) rotate(1deg); }
+    }
+
+    @keyframes youban-boot-dot-pulse {
+      0%, 80%, 100% { opacity: 0.28; transform: scale(0.75); }
+      40% { opacity: 0.9; transform: scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .youban-boot-loader__mark,
+      .youban-boot-loader__foot {
+        animation: none;
+      }
+
+      .youban-boot-loader__dots i {
+        animation: youban-boot-dot-fade 1.2s ease-in-out infinite;
+      }
+    }
+
+    @keyframes youban-boot-dot-fade {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.75; }
+    }
+  </style>
 </head>
 
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div class="youban-boot-loader" role="status" aria-live="polite">
+      <div class="youban-boot-loader__content">
+        <svg class="youban-boot-loader__mark" viewBox="0 0 512 512" aria-hidden="true">
+          <g transform="translate(256,259) scale(1.34) translate(-256,-259)">
+            <g class="youban-boot-loader__foot youban-boot-loader__foot--left">
+              <path
+                fill="var(--boot-accent)"
+                transform="translate(0,7)"
+                d="M242,150 C244,118 214,94 178,97 C136,102 106,148 100,222 C94,300 108,378 138,406 C160,424 196,422 210,398 C222,368 230,260 242,150 Z"
+              />
+            </g>
+            <g class="youban-boot-loader__foot youban-boot-loader__foot--right">
+              <g transform="translate(512,-7) scale(-1,1)">
+                <path
+                  fill="var(--boot-companion)"
+                  d="M242,150 C244,118 214,94 178,97 C136,102 106,148 100,222 C94,300 108,378 138,406 C160,424 196,422 210,398 C222,368 230,260 242,150 Z"
+                />
+              </g>
+            </g>
+          </g>
+        </svg>
+        <strong class="youban-boot-loader__brand">游伴</strong>
+        <span class="youban-boot-loader__message">正在准备你的旅程…</span>
+        <span class="youban-boot-loader__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div>
+    </div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 

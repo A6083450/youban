@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useMarqueeDrag } from '@/composables/useMarqueeDrag'
 import type { TripPlan } from '@/types'
 import { resolveTripBlueprint } from '@/utils/tripPresentation.js'
 
@@ -77,59 +78,15 @@ const highlightCards = computed(() => days.value
   }))
   .filter((card) => card.photo))
 
-// 无缝循环轮播：单组内容宽于可视区时复制一组循环滚动，否则保持静态/手动横滑。
-// 组件随 v-show 区块挂载时可能处于 display:none（量不到宽度），
-// 用 ResizeObserver 覆盖：初次显示、窗口缩放、容器尺寸变化都会重新判定
-const useMarqueeLoop = (
-  viewportRef: Ref<HTMLElement | null>,
-  stripRef: Ref<HTMLElement | null>,
-  source: Ref<unknown>,
-) => {
-  const loop = ref(false)
-  const duration = ref(20)
-
-  const update = () => {
-    const viewport = viewportRef.value
-    const group = stripRef.value?.firstElementChild as HTMLElement | null | undefined
-    if (!viewport || !group) {
-      loop.value = false
-      return
-    }
-    const groupWidth = Math.max(group.scrollWidth, group.offsetWidth)
-    loop.value = groupWidth > viewport.clientWidth
-    // 恒定速度约 45px/s；设下限避免刚溢出时转得太快
-    duration.value = Math.max(14, Math.round(groupWidth / 45))
-  }
-
-  let observer: ResizeObserver | null = null
-  let observedViewport: HTMLElement | null = null
-  const refresh = () => void nextTick(() => {
-    const viewport = viewportRef.value
-    if (viewport && viewport !== observedViewport) {
-      if (!observer) observer = new ResizeObserver(update)
-      if (observedViewport) observer.unobserve(observedViewport)
-      observer.observe(viewport)
-      observedViewport = viewport
-    }
-    update()
-  })
-
-  onMounted(refresh)
-  onBeforeUnmount(() => observer?.disconnect())
-  watch(source, refresh)
-
-  return { loop, duration }
-}
-
 // 时间轴轮播：图钉沿固定虚线轨道循环滑行（仅桌面横向布局生效）
 const trackViewportRef = ref<HTMLElement | null>(null)
 const trackStripRef = ref<HTMLElement | null>(null)
-const { loop: trackLoop, duration: trackLoopDuration } = useMarqueeLoop(trackViewportRef, trackStripRef, days)
+const trackDrag = useMarqueeDrag(trackViewportRef, trackStripRef, days)
 
 // 灵感卡片轮播
 const cardsViewportRef = ref<HTMLElement | null>(null)
 const cardsStripRef = ref<HTMLElement | null>(null)
-const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsViewportRef, cardsStripRef, highlightCards)
+const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards)
 </script>
 
 <template>
@@ -154,16 +111,27 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
         <div
           ref="trackViewportRef"
           class="journey__track"
-          :class="{ 'journey__track--loop': trackLoop }"
+          :class="{
+            'journey__track--loop': trackDrag.loop.value,
+            'journey__track--manual': trackDrag.manual.value,
+            'journey__track--dragging': trackDrag.dragging.value,
+          }"
+          @pointerdown="trackDrag.onPointerDown"
+          @pointermove="trackDrag.onPointerMove"
+          @pointerup="trackDrag.onPointerEnd"
+          @pointercancel="trackDrag.onPointerEnd"
+          @pointerleave="trackDrag.onPointerLeave"
+          @click.capture="trackDrag.onClickCapture"
+          @dragstart.prevent
         >
           <div class="journey__rail" aria-hidden="true" />
           <div
             ref="trackStripRef"
             class="journey__track-strip"
-            :style="trackLoop ? { animationDuration: `${trackLoopDuration}s` } : undefined"
+            :style="trackDrag.loop.value ? { animationDuration: `${trackDrag.duration.value}s` } : undefined"
           >
             <div
-              v-for="copy in trackLoop ? 2 : 1"
+              v-for="copy in trackDrag.loop.value ? 2 : 1"
               :key="copy"
               class="journey__track-group"
               :aria-hidden="copy === 2 ? 'true' : undefined"
@@ -214,15 +182,26 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
         <div
           ref="cardsViewportRef"
           class="journey__cards"
-          :class="{ 'journey__cards--loop': cardsLoop }"
+          :class="{
+            'journey__cards--loop': cardsDrag.loop.value,
+            'journey__cards--manual': cardsDrag.manual.value,
+            'journey__cards--dragging': cardsDrag.dragging.value,
+          }"
+          @pointerdown="cardsDrag.onPointerDown"
+          @pointermove="cardsDrag.onPointerMove"
+          @pointerup="cardsDrag.onPointerEnd"
+          @pointercancel="cardsDrag.onPointerEnd"
+          @pointerleave="cardsDrag.onPointerLeave"
+          @click.capture="cardsDrag.onClickCapture"
+          @dragstart.prevent
         >
           <div
             ref="cardsStripRef"
             class="journey__cards-track"
-            :style="cardsLoop ? { animationDuration: `${cardsLoopDuration}s` } : undefined"
+            :style="cardsDrag.loop.value ? { animationDuration: `${cardsDrag.duration.value}s` } : undefined"
           >
             <div
-              v-for="copy in cardsLoop ? 2 : 1"
+              v-for="copy in cardsDrag.loop.value ? 2 : 1"
               :key="copy"
               class="journey__cards-group"
               :aria-hidden="copy === 2 ? 'true' : undefined"
@@ -354,6 +333,8 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
   overflow-x: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 100, 70, 0.3) transparent;
+  cursor: grab;
+  touch-action: pan-y;
 }
 
 /* 非循环时 strip/group 撑满可视区，图钉 flex-grow 均布（保持原有排版） */
@@ -385,8 +366,14 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
 
 /* 悬停或键盘聚焦时暂停，方便点击图钉 */
 .journey__track--loop:hover .journey__track-strip,
-.journey__track--loop:focus-within .journey__track-strip {
+.journey__track--loop:focus-within .journey__track-strip,
+.journey__track--manual .journey__track-strip {
   animation-play-state: paused;
+}
+
+.journey__track--dragging {
+  cursor: grabbing;
+  user-select: none;
 }
 
 @keyframes track-marquee {
@@ -546,6 +533,8 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 100, 70, 0.3) transparent;
+  cursor: grab;
+  touch-action: pan-y;
 }
 
 .journey__cards-track {
@@ -571,8 +560,14 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
 
 /* 悬停或键盘聚焦时暂停，方便点击 */
 .journey__cards--loop:hover .journey__cards-track,
-.journey__cards--loop:focus-within .journey__cards-track {
+.journey__cards--loop:focus-within .journey__cards-track,
+.journey__cards--manual .journey__cards-track {
   animation-play-state: paused;
+}
+
+.journey__cards--dragging {
+  cursor: grabbing;
+  user-select: none;
 }
 
 @keyframes cards-marquee {
