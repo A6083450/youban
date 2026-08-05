@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -31,6 +32,7 @@ router = APIRouter(prefix="/trip", tags=["旅行规划"])
 
 # 内存任务存储（单实例部署足够）
 _tasks: Dict[str, Dict[str, Any]] = {}
+_TASK_STATE_LOCK = threading.RLock()
 _FINAL_TASK_STATUS = {"completed", "failed"}
 _TASKS_DATA_DIR = get_data_dir() / "trip_tasks"
 
@@ -79,6 +81,7 @@ def _create_task_state(task_id: str) -> Dict[str, Any]:
         "user_id": "",
         "share_token": "",
         "request_payload": None,
+        "checkpoint": {},
         "subscribers": [],  # list[asyncio.Queue]
     }
 
@@ -154,6 +157,7 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
             "user_id": payload.get("user_id", ""),
             "share_token": payload.get("share_token", ""),
             "request_payload": payload.get("request_payload"),
+            "checkpoint": payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {},
             "execution": payload.get("execution") or {},
         }
     )
@@ -171,7 +175,11 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
     return task
 
 
-def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
+def _persist_task_state(
+    task_id: str,
+    task: Dict[str, Any],
+    raise_errors: bool = False,
+) -> None:
     """将任务状态持久化到本地 JSON 文件。"""
     try:
         _ensure_item_ids(task.get("result"))
@@ -188,6 +196,7 @@ def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
             "user_id": task.get("user_id", ""),
             "share_token": task.get("share_token", ""),
             "request_payload": task.get("request_payload"),
+            "checkpoint": task.get("checkpoint") if isinstance(task.get("checkpoint"), dict) else {},
             "execution": task.get("execution") or {},
         }
         target = _task_file_path(task_id)
@@ -197,6 +206,22 @@ def _persist_task_state(task_id: str, task: Dict[str, Any]) -> None:
         tmp.replace(target)
     except Exception as e:
         print(f"⚠️  持久化任务 {task_id} 失败: {e}")
+        if raise_errors:
+            raise
+
+
+def _save_task_checkpoint(task_id: str, checkpoint: dict) -> None:
+    """保存 Agent checkpoint；失败必须反馈给规划流程。"""
+    task = _tasks.get(task_id)
+    if task is None:
+        raise RuntimeError(f"任务不存在: {task_id}")
+    previous = task.get("checkpoint")
+    task["checkpoint"] = checkpoint
+    try:
+        _persist_task_state(task_id, task, raise_errors=True)
+    except Exception:
+        task["checkpoint"] = previous
+        raise
 
 
 def _load_task_from_disk(task_id: str) -> Dict[str, Any] | None:
@@ -372,6 +397,35 @@ def _load_history_items(limit: int = 10, user_id: str = "", all_users: bool = Fa
     return items
 
 
+def _checkpoint_summary(checkpoint: Any) -> Dict[str, Any] | None:
+    """从完整 checkpoint 推导可安全发送给前端的最小摘要。"""
+    if not isinstance(checkpoint, dict) or not checkpoint:
+        return None
+    segments = checkpoint.get("segments")
+    segments = segments if isinstance(segments, dict) else {}
+    completed = sum(
+        isinstance(record, dict) and record.get("status") == "completed"
+        for record in segments.values()
+    )
+    last_stage = ""
+    search = checkpoint.get("search")
+    if isinstance(search, dict) and any(
+        isinstance(values, dict) and values for values in search.values()
+    ):
+        last_stage = "search"
+    if completed:
+        last_stage = "segments"
+    for stage in ("summary", "review"):
+        record = checkpoint.get(stage)
+        if isinstance(record, dict) and record.get("status") == "completed":
+            last_stage = stage
+    return {
+        "completed_segments": completed,
+        "total_segments": len(segments),
+        "last_successful_stage": last_stage,
+    }
+
+
 def _build_task_event(task_id: str, task: Dict[str, Any], include_result: bool = True) -> Dict[str, Any]:
     """从任务状态构建对前端可消费的事件对象。"""
     event = {
@@ -386,6 +440,9 @@ def _build_task_event(task_id: str, task: Dict[str, Any], include_result: bool =
     details = task.get("details") or []
     if details:
         event["details"] = details
+    checkpoint_summary = _checkpoint_summary(task.get("checkpoint"))
+    if checkpoint_summary is not None:
+        event["checkpoint_summary"] = checkpoint_summary
     if task.get("error"):
         event["error"] = task["error"]
     if task.get("status") == "failed" and task.get("request_payload") is not None:
@@ -447,6 +504,10 @@ async def _update_task_state(
     _persist_task_state(task_id, task)
     event = _build_task_event(task_id, task, include_result=True)
     _broadcast_task_event(task_id, event)
+
+
+class TripRetryRequest(BaseModel):
+    restart_all: bool = False
 
 
 class TripParseRequest(BaseModel):
@@ -1068,8 +1129,7 @@ async def plan_trip(request: TripRequest, x_user_id: str = Header(default="")):
         message="任务已提交，正在初始化流程...",
     )
 
-    # 启动后台任务
-    asyncio.create_task(_run_trip_planning(task_id, request, _user_id))
+    _start_trip_planning_task(task_id, request, _user_id)
 
     return {
         "task_id": task_id,
@@ -1078,6 +1138,83 @@ async def plan_trip(request: TripRequest, x_user_id: str = Header(default="")):
         "ws_url": f"/api/trip/ws/{task_id}",
         "message": f"任务已提交，可通过 WebSocket /api/trip/ws/{task_id} 实时订阅状态",
     }
+
+
+@router.post(
+    "/plan/{task_id}/retry",
+    summary="重试失败的旅行规划任务",
+    description="沿用原任务 ID 和断点重试；restart_all=true 时从头开始",
+)
+async def retry_trip_plan(
+    task_id: str,
+    payload: TripRetryRequest,
+    x_user_id: str = Header(default=""),
+):
+    with _TASK_STATE_LOCK:
+        task = _get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        _require_task_owner(task, x_user_id)
+        if task.get("status") != "failed":
+            raise HTTPException(status_code=409, detail="仅失败任务可重试")
+
+        try:
+            request = TripRequest.model_validate(task.get("request_payload"))
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="原始行程请求不可重试") from exc
+        request = request.model_copy(update={"execution_token": ""})
+
+        task.update({
+            "status": "processing",
+            "stage": "submitted",
+            "progress": 5,
+            "message": "任务已重新提交，正在初始化流程...",
+            "details": [],
+            "result": None,
+            "error": None,
+        })
+        if payload.restart_all:
+            task["checkpoint"] = {}
+    _persist_task_state(task_id, task)
+    _broadcast_task_event(task_id, _build_task_event(task_id, task, include_result=True))
+    _start_trip_planning_task(task_id, request, str(task.get("user_id") or ""))
+
+    return {
+        "task_id": task_id,
+        "plan_id": task.get("plan_id", task_id),
+        "status": "processing",
+        "ws_url": f"/api/trip/ws/{task_id}",
+        "message": f"任务已重新提交，可通过 WebSocket /api/trip/ws/{task_id} 实时订阅状态",
+    }
+
+
+def _start_trip_planning_task(task_id: str, request: TripRequest, user_id: str) -> None:
+    coroutine = _run_trip_planning(task_id, request, user_id)
+    try:
+        asyncio.create_task(coroutine)
+    except Exception as exc:
+        coroutine.close()
+        with _TASK_STATE_LOCK:
+            task = _tasks.get(task_id)
+            if task is not None:
+                error = str(exc)
+                task.update({
+                    "status": "failed",
+                    "stage": "failed",
+                    "progress": 100,
+                    "message": error,
+                    "error": error,
+                })
+                event = _build_task_event(task_id, task, include_result=True)
+                try:
+                    _persist_task_state(task_id, task)
+                except Exception:
+                    pass
+                try:
+                    _broadcast_task_event(task_id, event)
+                except Exception:
+                    pass
+        raise
 
 
 async def _run_trip_planning(task_id: str, request: TripRequest, user_id: str = ""):
@@ -1109,7 +1246,19 @@ async def _run_trip_planning(task_id: str, request: TripRequest, user_id: str = 
                 details=details,
             )
 
-        trip_plan = await agent.plan_trip(request, progress_callback=progress_callback, user_id=user_id)
+        async def checkpoint_callback(checkpoint: dict) -> None:
+            _save_task_checkpoint(task_id, checkpoint)
+
+        task = _tasks.get(task_id)
+        if task is None:
+            raise RuntimeError(f"任务不存在: {task_id}")
+        trip_plan = await agent.plan_trip(
+            request,
+            progress_callback=progress_callback,
+            user_id=user_id,
+            checkpoint=task.get("checkpoint"),
+            checkpoint_callback=checkpoint_callback,
+        )
 
         trip_result = TripPlanResponse(
             success=True,
@@ -1474,13 +1623,17 @@ async def get_task_status(
             "execution": task.get("execution") or {},
         }
     if task["status"] == "failed":
-        return {
+        response = {
             "task_id": task_id,
             "plan_id": task.get("plan_id", task_id),
             "status": "failed",
             "error": task.get("error", ""),
             "request_payload": task.get("request_payload"),
         }
+        checkpoint_summary = _checkpoint_summary(task.get("checkpoint"))
+        if checkpoint_summary is not None:
+            response["checkpoint_summary"] = checkpoint_summary
+        return response
     return {
         "task_id": task_id,
         "plan_id": task.get("plan_id", task_id),

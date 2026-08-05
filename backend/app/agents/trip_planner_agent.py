@@ -1,16 +1,20 @@
-"""LangGraph 旅行规划工作流(规划者 + 评审者 双 agent 反思循环)
+"""LangGraph 多 Agent 旅行规划工作流。
 
 图结构:
-START → load_memories → fetch_attractions → fetch_weather → fetch_hotels
+START → load_memories → research_trip(景点/天气/酒店并行)
       → plan_itinerary → parse_plan ─(失败且未重试)→ plan_itinerary(带 parse_error 重新规划)
                               └(成功)→ review_plan ─(通过/已修订上限)→ save_memories → END
                                                └(有问题)→ revise_itinerary → parse_plan(再评审)
 """
 
 import asyncio
+import copy
+import inspect
 import json
 import os
+import re
 import time
+from datetime import date, timedelta
 from typing import Any, Awaitable, Callable, Dict, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -19,7 +23,20 @@ from langgraph.types import RetryPolicy
 
 from ..models.schemas import TripPlan, TripRequest
 from ..services.llm_service import get_chat_model
-from .plan_parser import parse_trip_plan
+from .trip_plan_orchestrator import (
+    build_budget,
+    build_segments,
+    build_weather_info,
+    merge_segment_days,
+    normalize_checkpoint,
+    parse_segment_output,
+)
+from .trip_research_agents import (
+    ResearchCallbacks,
+    ResearchContext,
+    ResearchSources,
+    run_parallel_research,
+)
 
 PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点信息和天气信息,生成详细的旅行计划。支持单城市和多城市行程。
 
@@ -166,16 +183,16 @@ class PlannerState(TypedDict, total=False):
     attractions: Dict[str, str]
     weather: Dict[str, str]
     hotels: Dict[str, str]
-    planner_output: str
+    checkpoint: dict
     trip_plan: Optional[dict]
-    parse_error: str
-    repair_attempts: int
     review_feedback: str
     revision_attempts: int
 
 
 class PlannerContext(TypedDict, total=False):
     progress_callback: Optional[Callable[..., Awaitable[None]]]
+    checkpoint: dict
+    checkpoint_callback: Optional[Callable[[dict], Awaitable[None]]]
     user_id: str
 
 
@@ -247,6 +264,18 @@ async def _emit(runtime: "Runtime[PlannerContext]", stage: str, message: str,
         await result
 
 
+async def _save_checkpoint(runtime: "Runtime[PlannerContext]", checkpoint: dict) -> None:
+    cb = (runtime.context or {}).get("checkpoint_callback")
+    if cb is None:
+        return
+    try:
+        result = cb(copy.deepcopy(checkpoint))
+        if inspect.isawaitable(result):
+            await result
+    except Exception as error:
+        raise RuntimeError(f"checkpoint 写入失败: {error}") from error
+
+
 def _request_from(state: PlannerState) -> TripRequest:
     return TripRequest(**state["request_data"])
 
@@ -255,144 +284,387 @@ def _request_from(state: PlannerState) -> TripRequest:
 
 async def load_memories(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
     request = _request_from(state)
-    user_id = (runtime.context or {}).get("user_id") or ""
+    context = runtime.context or {}
+    user_id = context.get("user_id") or ""
     cities = " ".join(cs.city for cs in request.cities)
     query = f"旅行偏好 兴趣 口味 出行习惯 {cities}"
     memory_context = await asyncio.to_thread(_recall_memory, user_id, query)
     if memory_context:
         print(f"🧠 已载入用户记忆 {len(memory_context)} 字")
-    return {"memory_context": memory_context, "repair_attempts": 0,
-            "revision_attempts": 0, "review_feedback": "",
-            "attractions": {}, "weather": {}, "hotels": {}}
+    return {
+        "memory_context": memory_context,
+        "revision_attempts": 0,
+        "review_feedback": "",
+        "attractions": {},
+        "weather": {},
+        "hotels": {},
+        "checkpoint": normalize_checkpoint(context.get("checkpoint")),
+    }
 
 
-async def fetch_attractions(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
+async def research_trip(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
     request = _request_from(state)
-    keywords = request.preferences[0] if request.preferences else "景点"
-    lang = (getattr(request, "language", "zh") or "zh").strip().lower().split("-")[0]
-    total = len(request.cities)
-    result: Dict[str, str] = {}
-    for idx, cs in enumerate(request.cities):
-        progress = int(10 + (idx / total) * 25)
-        await _emit(runtime, "attraction_search", f"🔍 正在搜索 {cs.city} 的景点...", progress,
-                    details=[{"type": "searching", "title": f"🔍 正在搜索 {cs.city} 的{keywords}景点...",
-                              "content": f"使用高德地图搜索 {cs.city} 的 {keywords} 相关景点信息",
-                              "timestamp": int(time.time() * 1000)}])
-        text = await asyncio.to_thread(_fetch_attractions_text, cs.city, keywords, lang)
-        result[cs.city] = text
-        await _emit(runtime, "attraction_search", f"✅ {cs.city} 景点搜索完毕", progress,
-                    details=[{"type": "found", "title": f"📍 {cs.city} 景点搜索完成",
-                              "content": (text or "")[:200], "timestamp": int(time.time() * 1000)}])
-    return {"attractions": result}
+    checkpoint = state["checkpoint"]
+
+    async def save_checkpoint() -> None:
+        await _save_checkpoint(runtime, checkpoint)
+
+    async def emit_progress(stage: str, message: str, progress: int,
+                            details: Optional[list[dict[str, str]]]) -> None:
+        await _emit(runtime, stage, message, progress, details)
+
+    bundle = await run_parallel_research(ResearchContext(
+        request=request,
+        search=checkpoint["search"],
+        sources=ResearchSources(
+            attractions=_fetch_attractions_text,
+            weather=_fetch_weather_text,
+            hotels=_fetch_hotels_text,
+        ),
+        callbacks=ResearchCallbacks(
+            save_checkpoint=save_checkpoint,
+            emit_progress=emit_progress,
+        ),
+    ))
+    return {
+        "attractions": bundle.attractions,
+        "weather": bundle.weather,
+        "hotels": bundle.hotels,
+        "checkpoint": checkpoint,
+    }
 
 
-async def fetch_weather(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
-    request = _request_from(state)
-    total = len(request.cities)
-    result: Dict[str, str] = {}
-    for idx, cs in enumerate(request.cities):
-        progress = int(35 + (idx / total) * 20)
-        await _emit(runtime, "weather_search", f"🌤️ 正在查询 {cs.city} 的天气...", progress,
-                    details=[{"type": "searching", "title": f"🌤️ 正在查询 {cs.city} 未来天气预报...",
-                              "content": f"调用高德天气 API 获取 {cs.city} 的预报数据",
-                              "timestamp": int(time.time() * 1000)}])
-        text = await asyncio.to_thread(_fetch_weather_text, cs.city)
-        result[cs.city] = text
-        await _emit(runtime, "weather_search", f"✅ {cs.city} 天气查询完毕", progress,
-                    details=[{"type": "found", "title": f"🌤️ {cs.city} 天气查询完成",
-                              "content": (text or "")[:200], "timestamp": int(time.time() * 1000)}])
-    return {"weather": result}
+SEGMENT_AGENT_PROMPT = """你是分段行程规划者。只规划指定分段并输出严格 JSON，禁止输出解释文字：
+{"segment_id":"seg-01","days":[{"date":"YYYY-MM-DD","day_index":0,"city":"城市",\
+"description":"当日概述","transportation":"市内交通","accommodation":"住宿安排",\
+"hotel":{"name":"酒店","estimated_cost":300},\
+"attractions":[{"name":"景点","address":"地址","location":{"longitude":116.4,"latitude":39.9},\
+"visit_duration":120,"description":"说明","ticket_price":0}],\
+"meals":[{"type":"lunch","name":"餐厅","estimated_cost":50}]}]}
+禁止输出 budget、overall_suggestions、blueprint、weather_info。每天必须严格使用指定的 day_index、date、city，
+并生成可执行的景点、餐饮、交通和住宿安排；所有价格只能是数字。"""
+
+SUMMARY_AGENT_PROMPT = """你负责根据完整行程生成总体建议与旅行蓝图。
+只输出严格 JSON：{"overall_suggestions":"...","blueprint":null}。不得修改或重写 days。"""
+
+SEGMENT_REVIEW_PROMPT = """你负责分段行程评审。只输出严格 JSON：
+{"approved":true,"issues":[],"segment_ids":[]}。segment_ids 只能填写输入中已知的分段编号。"""
+
+_REVISION_CONSUMED = "revision_consumed"
 
 
-async def fetch_hotels(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
-    request = _request_from(state)
-    total = len(request.cities)
-    result: Dict[str, str] = {}
-    for idx, cs in enumerate(request.cities):
-        progress = int(55 + (idx / total) * 20)
-        await _emit(runtime, "hotel_search", f"🏨 正在搜索 {cs.city} 的酒店...", progress,
-                    details=[{"type": "searching", "title": f"🏨 正在搜索 {cs.city} 的{request.accommodation}...",
-                              "content": f"根据住宿偏好「{request.accommodation}」搜索 {cs.city} 合适的酒店",
-                              "timestamp": int(time.time() * 1000)}])
-        text = await asyncio.to_thread(_fetch_hotels_text, cs.city, request.accommodation)
-        result[cs.city] = text
-        await _emit(runtime, "hotel_search", f"✅ {cs.city} 酒店搜索完毕", progress,
-                    details=[{"type": "found", "title": f"🏨 {cs.city} 酒店搜索完成",
-                              "content": (text or "")[:200], "timestamp": int(time.time() * 1000)}])
-    return {"hotels": result}
+def _completed_previous_boundary(segment: dict, checkpoint: dict) -> str:
+    previous_id = f"seg-{int(segment['segment_id'][4:]) - 1:02d}"
+    record = checkpoint["segments"].get(previous_id, {})
+    days = record.get("output", []) if record.get("status") == "completed" else []
+    if not days:
+        return "无已完成的前一段边界"
+    day = days[-1]
+    return json.dumps({
+        "city": day.get("city"), "hotel": day.get("hotel"),
+        "accommodation": day.get("accommodation"),
+    }, ensure_ascii=False)
+
+
+def _next_city(request: TripRequest, segment: dict) -> str:
+    last_index = segment["day_indices"][-1]
+    cities = [stay.city for stay in request.cities for _ in range(stay.days)]
+    return cities[last_index + 1] if last_index + 1 < len(cities) else "无"
+
+
+def _language_instruction(request: TripRequest) -> str:
+    language = (request.language or "zh").strip().lower().split("-")[0]
+    names = {"en": "English", "ja": "Japanese", "ko": "Korean",
+             "fr": "French", "de": "German", "es": "Spanish"}
+    if language == "zh":
+        return "所有文字内容使用中文，JSON key 保持英文。"
+    return f"Use {names.get(language, language)} for all text values; keep JSON keys in English."
+
+
+def _build_segment_query(request, segment, attractions, weather, hotels,
+                         memory_context, previous_error="", checkpoint=None) -> str:
+    start = date.fromisoformat(request.start_date)
+    days = [{
+        "day_index": index,
+        "date": (start + timedelta(days=index)).isoformat(),
+        "city": segment["city"],
+    } for index in segment["day_indices"]]
+    boundary = _completed_previous_boundary(segment, checkpoint or {"segments": {}})
+    return (
+        f"segment_id: {segment['segment_id']}\n精确日期与城市: {json.dumps(days, ensure_ascii=False)}\n"
+        f"前一段边界: {boundary}\n下一段请求城市: {_next_city(request, segment)}\n"
+        f"景点: {attractions.get(segment['city'], '无')}\n天气: {weather.get(segment['city'], '无')}\n"
+        f"酒店: {hotels.get(segment['city'], '无')}\n用户记忆: {memory_context or '无'}\n"
+        f"交通: {request.transportation};住宿偏好: {request.accommodation};"
+        f"额外要求: {request.free_text_input or '无'}\n上次错误: {previous_error or '无'}\n"
+        f"语言要求: {_language_instruction(request)}"
+    )
+
+
+async def _generate_segment(model, request, segment, state) -> list[dict]:
+    query = _build_segment_query(
+        request, segment, state.get("attractions", {}), state.get("weather", {}),
+        state.get("hotels", {}), state.get("memory_context", ""),
+        state["checkpoint"]["segments"][segment["segment_id"]]["error"],
+        state["checkpoint"],
+    )
+    response = await model.ainvoke([
+        {"role": "system", "content": SEGMENT_AGENT_PROMPT},
+        {"role": "user", "content": query},
+    ])
+    output = parse_segment_output(response.text, segment)
+    _validate_segment_days(request, segment, output)
+    return output
+
+
+def _validate_segment_days(request: TripRequest, segment: dict, days: list[dict]) -> None:
+    start = date.fromisoformat(request.start_date)
+    for day, day_index in zip(days, segment["day_indices"]):
+        expected_date = (start + timedelta(days=day_index)).isoformat()
+        if day.get("date") != expected_date:
+            raise ValueError("日期与分段范围不符")
+        if day.get("city") != segment["city"]:
+            raise ValueError("城市与分段范围不符")
+
+
+def _prepare_segments(request: TripRequest, checkpoint: dict) -> tuple[list[dict], bool]:
+    segments = build_segments(request)
+    changed = False
+    for segment in segments:
+        saved = checkpoint["segments"].get(segment["segment_id"])
+        if saved and saved.get("day_indices") == segment["day_indices"]:
+            try:
+                if saved["status"] == "completed":
+                    output = parse_segment_output(json.dumps({
+                        "segment_id": segment["segment_id"], "days": saved["output"],
+                    }), segment)
+                    _validate_segment_days(request, segment, output)
+                    continue
+            except (ValueError, TypeError):
+                pass
+        changed = True
+        checkpoint["segments"][segment["segment_id"]] = {
+            "day_indices": segment["day_indices"], "status": "pending",
+            "output": [], "attempts": saved.get("attempts", 0) if saved else 0,
+            "error": saved.get("error", "") if saved else "",
+        }
+    return segments, changed
+
+
+async def _run_one_segment(model, request, segment, state, runtime, semaphore, lock,
+                           progress_state) -> Optional[str]:
+    record = state["checkpoint"]["segments"][segment["segment_id"]]
+    async with semaphore:
+        async with lock:
+            record["attempts"] += 1
+            record["status"] = "processing"
+            await _save_checkpoint(runtime, state["checkpoint"])
+        try:
+            output = await _generate_segment(model, request, segment, state)
+        except Exception as error:
+            async with lock:
+                record["status"], record["error"] = "failed", str(error)
+                await _save_checkpoint(runtime, state["checkpoint"])
+            return segment["segment_id"]
+        async with lock:
+            record["output"], record["status"], record["error"] = output, "completed", ""
+            progress_state["completed"] += 1
+            calculated = 75 + int(15 * progress_state["completed"] / progress_state["total"])
+            progress_state["floor"] = max(progress_state["floor"], calculated)
+            await _save_checkpoint(runtime, state["checkpoint"])
+            await _emit(runtime, "planning", f"✅ {segment['segment_id']} 规划完成",
+                        progress_state["floor"])
+    return None
+
+
+async def _run_segments(model, request, segments, state, runtime, progress_floor=75) -> int:
+    pending = [item for item in segments
+               if state["checkpoint"]["segments"][item["segment_id"]]["status"] != "completed"]
+    progress_state = {
+        "total": len(segments), "completed": len(segments) - len(pending),
+        "floor": progress_floor,
+    }
+    semaphore, lock = asyncio.Semaphore(4), asyncio.Lock()
+    results = await asyncio.gather(*[
+        _run_one_segment(model, request, item, state, runtime, semaphore, lock, progress_state)
+        for item in pending
+    ], return_exceptions=True)
+    callback_errors = [item for item in results if isinstance(item, BaseException)]
+    if callback_errors:
+        raise callback_errors[0]
+    failed = [item for item in results if isinstance(item, str)]
+    if failed:
+        raise RuntimeError(f"分段生成失败: {', '.join(failed)}")
+    return progress_state["floor"]
+
+
+def _parse_object(text: str, required: set[str]) -> dict:
+    match = re.search(r"\{[\s\S]*\}", text)
+    data = json.loads(match.group() if match else text)
+    if not isinstance(data, dict) or set(data) != required:
+        raise ValueError("输出 JSON 字段不符")
+    return data
+
+
+def _fallback_suggestions(request: TripRequest) -> str:
+    language = (request.language or "zh").strip().lower().split("-")[0]
+    if language == "en":
+        cities = ", ".join(
+            f"{stay.city} ({stay.days} {'day' if stay.days == 1 else 'days'})"
+            for stay in request.cities
+        )
+        return f"This trip covers {cities}. Follow the daily plan and allow flexibility for weather and local conditions."
+    if language == "ja":
+        cities = "、".join(f"{stay.city}{stay.days}日間" for stay in request.cities)
+        return f"この旅行は{cities}を巡ります。毎日の計画に沿い、気象や現地状況に応じて余裕を持ってください。"
+    cities = "、".join(f"{stay.city}{stay.days}天" for stay in request.cities)
+    return f"本次行程覆盖{cities}，请按每日安排出行，并根据天气与现场情况预留机动时间。"
+
+
+def _valid_summary(output, request, days, state) -> bool:
+    try:
+        if set(output) != {"overall_suggestions", "blueprint"}:
+            return False
+        if not isinstance(output["overall_suggestions"], str) or not output["overall_suggestions"].strip():
+            return False
+        TripPlan.model_validate(_assemble_plan(request, days, state, output))
+        return True
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+async def _run_summary(model, request, days, state, runtime) -> dict:
+    checkpoint = state["checkpoint"]
+    record = checkpoint["summary"]
+    if record["status"] == "completed" and _valid_summary(record["output"], request, days, state):
+        return record["output"]
+    record.update(status="pending", output=None, error="")
+    await _save_checkpoint(runtime, checkpoint)
+    try:
+        response = await model.ainvoke([
+            {"role": "system", "content": SUMMARY_AGENT_PROMPT},
+            {"role": "user", "content": (
+                f"语言要求: {_language_instruction(request)}\n"
+                f"行程: {json.dumps([day.model_dump() for day in days], ensure_ascii=False)}"
+            )},
+        ])
+        output = _parse_object(response.text, {"overall_suggestions", "blueprint"})
+        if not _valid_summary(output, request, days, state):
+            raise ValueError("summary 输出无效")
+        record.update(status="completed", output=output, error="")
+    except Exception as error:
+        output = {"overall_suggestions": _fallback_suggestions(request), "blueprint": None}
+        record.update(status="failed", output=None, error=str(error))
+    await _save_checkpoint(runtime, checkpoint)
+    return output
+
+
+def _assemble_plan(request, days, state, summary) -> dict:
+    return {
+        "city": request.cities[0].city,
+        "cities": [stay.city for stay in request.cities],
+        "start_date": request.start_date,
+        "end_date": request.end_date,
+        "days": [day.model_dump() for day in days],
+        "weather_info": [item.model_dump() for item in build_weather_info(request, state.get("weather", {}))],
+        "overall_suggestions": summary["overall_suggestions"],
+        "budget": build_budget(days).model_dump(),
+        "blueprint": summary["blueprint"],
+    }
+
+
+def _valid_review(output, segments) -> bool:
+    if not isinstance(output, dict) or set(output) != {"approved", "issues", "segment_ids"}:
+        return False
+    known = {item["segment_id"] for item in segments}
+    return (
+        isinstance(output["approved"], bool)
+        and isinstance(output["issues"], list)
+        and all(isinstance(item, str) for item in output["issues"])
+        and isinstance(output["segment_ids"], list)
+        and all(isinstance(item, str) for item in output["segment_ids"])
+        and set(output["segment_ids"]) <= known
+    )
+
+
+async def _run_review(model, segments, plan, state, runtime) -> Optional[dict]:
+    checkpoint = state["checkpoint"]
+    record = checkpoint["review"]
+    if record["status"] == "completed" and _valid_review(record["output"], segments):
+        return record["output"]
+    record.update(status="pending", output=None, error="")
+    await _save_checkpoint(runtime, checkpoint)
+    try:
+        payload = {
+            "segments": [{key: segment[key] for key in ("segment_id", "day_indices", "city")}
+                         for segment in segments],
+            "plan": plan,
+        }
+        response = await model.ainvoke([
+            {"role": "system", "content": SEGMENT_REVIEW_PROMPT},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ])
+        output = _parse_object(response.text, {"approved", "issues", "segment_ids"})
+        if not _valid_review(output, segments):
+            raise ValueError("review 输出无效")
+        record.update(status="completed", output=output, error="")
+    except Exception as error:
+        print(f"⚠️ 评审者异常,直接放行计划: {error}")
+        record.update(status="failed", output=None, error=str(error))
+        output = None
+    await _save_checkpoint(runtime, checkpoint)
+    return output
+
+
+async def _revise_selected(model, request, segments, review, state, runtime,
+                           progress_floor=90) -> tuple[list, dict]:
+    if not review or review["approved"] or not review["segment_ids"]:
+        days = merge_segment_days(request, segments, state["checkpoint"])
+        return days, await _run_summary(model, request, days, state, runtime)
+    error = "；".join(str(item) for item in review["issues"] if str(item).strip())
+    for segment_id in review["segment_ids"]:
+        state["checkpoint"]["segments"][segment_id].update(status="pending", error=error)
+    state["checkpoint"]["summary"].update(status="pending", output=None, error="")
+    state["checkpoint"]["review"].update(
+        status="completed",
+        output={"approved": True, "issues": review["issues"], "segment_ids": []},
+        error=_REVISION_CONSUMED,
+    )
+    await _save_checkpoint(runtime, state["checkpoint"])
+    await _run_segments(model, request, segments, state, runtime, progress_floor)
+    days = merge_segment_days(request, segments, state["checkpoint"])
+    return days, await _run_summary(model, request, days, state, runtime)
 
 
 async def plan_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
     request = _request_from(state)
-    city_names = [cs.city for cs in request.cities]
-    await _emit(runtime, "planning",
-                "📋 正在生成多城市行程计划..." if len(city_names) > 1 else "📋 正在生成旅行计划...", 85,
-                details=[{"type": "planning",
-                          "title": f"🧠 正在综合分析 {' → '.join(city_names)} 的景点、天气和酒店信息...",
-                          "content": "AI 正在结合你的偏好记忆规划最优行程路线",
-                          "timestamp": int(time.time() * 1000)}])
-    query = _build_planner_query(
-        request, state.get("attractions", {}), state.get("weather", {}),
-        state.get("hotels", {}), state.get("memory_context", ""),
-    )
-    if state.get("parse_error"):
-        query += ("\n\n**补充要求:** 上次输出的 JSON 解析失败"
-                  f"({state['parse_error'][:200]}),请重新输出完整、严格合法的 JSON,不要输出解释文字。")
+    checkpoint = state["checkpoint"]
+    segments, changed = _prepare_segments(request, checkpoint)
+    revision_resume = checkpoint["review"].get("error") == _REVISION_CONSUMED
+    if changed:
+        checkpoint["summary"].update(status="pending", output=None, error="")
+        if not revision_resume:
+            checkpoint["review"].update(status="pending", output=None, error="")
+    await _save_checkpoint(runtime, checkpoint)
+    await _emit(runtime, "planning", "📋 正在并行生成旅行计划...", 75)
     timeout = int(os.getenv("TRIP_PLANNER_TIMEOUT", "180"))
     model = get_chat_model(temperature=0.2, timeout=timeout)
-    response = await model.ainvoke([
-        {"role": "system", "content": PLANNER_AGENT_PROMPT},
-        {"role": "user", "content": query},
-    ])
-    return {"planner_output": str(response.content)}
+    progress_floor = await _run_segments(model, request, segments, state, runtime)
+    await _emit(runtime, "planning", "🧭 主 Agent 正在汇总并校验所有 Agent 结果...",
+                max(progress_floor, 90))
+    days = merge_segment_days(request, segments, checkpoint)
+    summary = await _run_summary(model, request, days, state, runtime)
+    plan = _assemble_plan(request, days, state, summary)
+    review = await _run_review(model, segments, plan, state, runtime)
+    days, summary = await _revise_selected(
+        model, request, segments, review, state, runtime, progress_floor
+    )
+    return {"trip_plan": _assemble_plan(request, days, state, summary), "checkpoint": checkpoint}
 
 
 async def review_plan(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
-    """评审者 agent:检查解析成功的计划 JSON,输出 {"approved", "issues"}。
-
-    评审是建议性的:调用失败或输出无法解析时静默放行,绝不阻塞出计划。
-    """
-    request = _request_from(state)
-    city_names = [cs.city for cs in request.cities]
-    await _emit(runtime, "reviewing", "🧐 评审者正在检查行程合理性...", 92,
-                details=[{"type": "planning",
-                          "title": "🧐 评审 agent 正在审查行程的时间、节奏、预算与蓝图...",
-                          "content": "独立评审者检查规划者的输出,发现问题将要求修订",
-                          "timestamp": int(time.time() * 1000)}])
-    requirement = (
-        f"途经城市: {' → '.join(city_names)};总天数: {request.travel_days}天;"
-        f"日期: {request.start_date} 至 {request.end_date};"
-        f"交通: {request.transportation};住宿: {request.accommodation};"
-        f"偏好: {', '.join(request.preferences) if request.preferences else '无'}"
-    )
-    query = f"**旅行需求:**\n{requirement}\n\n**待评审的旅行计划 JSON:**\n{state.get('planner_output', '')}"
-    timeout = int(os.getenv("TRIP_PLANNER_TIMEOUT", "180"))
-    model = get_chat_model(temperature=0.1, timeout=timeout)
-    try:
-        response = await model.ainvoke([
-            {"role": "system", "content": REVIEWER_AGENT_PROMPT},
-            {"role": "user", "content": query},
-        ])
-        text = str(response.content)
-        import re as _re
-        match = _re.search(r'\{[\s\S]*\}', text)
-        data = json.loads(match.group() if match else text)
-        approved = bool(data.get("approved"))
-        issues = [str(i) for i in (data.get("issues") or []) if str(i).strip()][:5]
-    except Exception as e:
-        print(f"⚠️ 评审者异常,直接放行计划: {e}")
-        return {"review_feedback": ""}
-    if approved or not issues:
-        await _emit(runtime, "reviewing", "✅ 评审通过", 95,
-                    details=[{"type": "found", "title": "✅ 评审 agent 确认行程合理",
-                              "content": "时间与节奏、餐饮、预算、蓝图检查均通过",
-                              "timestamp": int(time.time() * 1000)}])
-        return {"review_feedback": ""}
-    feedback = "\n".join(f"{i + 1}. {issue}" for i, issue in enumerate(issues))
-    await _emit(runtime, "reviewing", f"🔧 评审发现 {len(issues)} 处问题,要求修订", 93,
-                details=[{"type": "found", "title": f"🔧 评审 agent 发现 {len(issues)} 处问题",
-                          "content": feedback, "timestamp": int(time.time() * 1000)}])
-    return {"review_feedback": feedback}
+    await _emit(runtime, "reviewing", "✅ 分段评审与必要修订已完成", 95)
+    return {"review_feedback": ""}
 
 
 async def revise_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
@@ -417,26 +689,19 @@ async def revise_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext
         {"role": "system", "content": PLANNER_AGENT_PROMPT},
         {"role": "user", "content": query},
     ])
-    return {"planner_output": str(response.content),
+    return {"planner_output": response.text,
             "revision_attempts": state.get("revision_attempts", 0) + 1}
 
 
 async def parse_plan(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
-    request = _request_from(state)
-    try:
-        plan = await asyncio.to_thread(parse_trip_plan, state.get("planner_output", ""), request)
-        return {"trip_plan": plan.model_dump(mode="json"), "parse_error": ""}
-    except ValueError as e:
-        return {"trip_plan": None, "parse_error": str(e),
-                "repair_attempts": state.get("repair_attempts", 0) + 1}
+    plan = TripPlan.model_validate(state["trip_plan"])
+    return {"trip_plan": plan.model_dump(mode="json")}
 
 
 def route_after_parse(state: PlannerState) -> str:
     if state.get("trip_plan") is not None:
         return "review_plan"
-    if state.get("repair_attempts", 0) <= 1:
-        return "plan_itinerary"  # 带 parse_error 重新规划一次
-    raise ValueError(f"行程 JSON 解析失败: {state.get('parse_error', '未知错误')}")
+    raise ValueError("行程计划缺失")
 
 
 def route_after_review(state: PlannerState) -> str:
@@ -460,19 +725,15 @@ async def save_memories(state: PlannerState, runtime: "Runtime[PlannerContext]")
 def _build_graph():
     builder = StateGraph(PlannerState, context_schema=PlannerContext)
     builder.add_node("load_memories", load_memories)
-    builder.add_node("fetch_attractions", fetch_attractions)
-    builder.add_node("fetch_weather", fetch_weather)
-    builder.add_node("fetch_hotels", fetch_hotels)
+    builder.add_node("research_trip", research_trip)
     builder.add_node("plan_itinerary", plan_itinerary, retry_policy=RetryPolicy(max_attempts=2))
     builder.add_node("parse_plan", parse_plan)
     builder.add_node("review_plan", review_plan)
     builder.add_node("revise_itinerary", revise_itinerary, retry_policy=RetryPolicy(max_attempts=2))
     builder.add_node("save_memories", save_memories)
     builder.add_edge(START, "load_memories")
-    builder.add_edge("load_memories", "fetch_attractions")
-    builder.add_edge("fetch_attractions", "fetch_weather")
-    builder.add_edge("fetch_weather", "fetch_hotels")
-    builder.add_edge("fetch_hotels", "plan_itinerary")
+    builder.add_edge("load_memories", "research_trip")
+    builder.add_edge("research_trip", "plan_itinerary")
     builder.add_edge("plan_itinerary", "parse_plan")
     builder.add_conditional_edges("parse_plan", route_after_parse,
                                   ["review_plan", "plan_itinerary"])
@@ -490,13 +751,15 @@ class LangGraphTripPlanner:
         print("🔄 初始化 LangGraph 旅行规划工作流...")
         self.graph = _build_graph()
         self.name = "LangGraph 行程规划"
-        print("✅ LangGraph 工作流就绪(9 节点,含解析修复循环与评审反思循环)")
+        print("✅ LangGraph 工作流就绪(7 节点,含并行研究、解析修复与评审反思)")
 
     async def plan_trip(
         self,
         request: TripRequest,
         progress_callback: Optional[Callable[..., Any]] = None,
         user_id: str = "",
+        checkpoint: Optional[dict] = None,
+        checkpoint_callback: Optional[Callable[[dict], Any]] = None,
     ) -> TripPlan:
         city_names = [cs.city for cs in request.cities]
         print(f"\n{'='*60}\n🚀 LangGraph 规划开始: {' → '.join(city_names)} "
@@ -504,7 +767,12 @@ class LangGraphTripPlanner:
         try:
             final_state = await self.graph.ainvoke(
                 {"request_data": request.model_dump(mode="json")},
-                context={"progress_callback": progress_callback, "user_id": user_id},
+                context={
+                    "progress_callback": progress_callback,
+                    "checkpoint": checkpoint,
+                    "checkpoint_callback": checkpoint_callback,
+                    "user_id": user_id,
+                },
             )
         except Exception as e:
             print(f"❌ 生成旅行计划失败: {e}")

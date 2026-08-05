@@ -1,8 +1,9 @@
 """LLM服务模块:OpenAI 兼容客户端(原生 + langchain),支持运行时热更新"""
 
-import asyncio
+import asyncio  # noqa: ANYIO_OK - 同步 SDK 流需要线程与事件循环桥接
 import os
 from typing import Any, AsyncIterator, Dict, Optional
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -106,20 +107,21 @@ def llm_complete(
     return response.output_text or ""
 
 
+def _supports_reasoning_effort(base_url: str, model_id: str) -> bool:
+    return urlparse(base_url).hostname == "api.deepseek.com" and model_id == "deepseek-v4-flash"
+
+
 async def iter_llm_stream(
     prompt: str, temperature: float = 0.1, disable_thinking: bool = False
 ) -> AsyncIterator[str]:
-    """异步产出 LLM 流式回复的文本增量(content delta)。
+    """通过 Responses API 在线程池中迭代阻塞流,并异步产出正文增量。
 
-    原生 OpenAI 客户端 stream=True 返回的是阻塞迭代器,这里在线程池里迭代,
-    通过 asyncio.Queue 把每块 delta 桥接回事件循环,供 async SSE 端点消费。
-    网络/鉴权等异常会透传到 async 侧抛出。
-
-    disable_thinking: 推理模型(如 MiMo)会先输出几十秒 reasoning 才吐 content,
-    对话类端点体感上完全不流式;置 True 时请求关闭思考,网关不支持该参数则自动回退。
+    `disable_thinking` 仅对官方 DeepSeek v4-flash 发送 `reasoning.effort=none`。
     """
     client = get_openai_client()
-    model_id = get_llm_settings()["model"]
+    llm_settings = get_llm_settings()
+    model_id = llm_settings["model"]
+    supports_reasoning_effort = _supports_reasoning_effort(llm_settings["base_url"], model_id)
     loop = asyncio.get_running_loop()
     queue: "asyncio.Queue[Any]" = asyncio.Queue()
     sentinel = object()
@@ -135,11 +137,8 @@ async def iter_llm_stream(
             )
 
         try:
-            if disable_thinking:
-                try:
-                    stream = _create(extra_body={"thinking": {"type": "disabled"}})
-                except Exception:
-                    stream = _create()
+            if disable_thinking and supports_reasoning_effort:
+                stream = _create(reasoning={"effort": "none"})
             else:
                 stream = _create()
             for event in stream:
@@ -147,7 +146,7 @@ async def iter_llm_stream(
                     delta = getattr(event, "delta", "") or ""
                     if delta:
                         loop.call_soon_threadsafe(queue.put_nowait, delta)
-        except Exception as exc:  # 透传给消费方抛出
+        except Exception as exc:  # noqa: BROAD_EXCEPT_OK - 在线程边界向协程转发 SDK 异常
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, sentinel)

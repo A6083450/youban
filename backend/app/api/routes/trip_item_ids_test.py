@@ -1,12 +1,13 @@
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.api.routes import trip
 from app.api.routes.trip import _ensure_item_ids, _find_plan_item, _new_item_id
-from app.models.schemas import TripPlanResponse
+from app.models.schemas import TripPlan, TripPlanResponse
 
 
 def _dict_result():
@@ -76,6 +77,163 @@ class EnsureItemIdsTest(unittest.TestCase):
         meal_id = result["data"]["days"][0]["meals"][0]["id"]
         self.assertIsNotNone(_find_plan_item(result, meal_id))
         self.assertIsNone(_find_plan_item(result, "itm_00000000"))
+
+
+def _checkpoint():
+    return {
+        "version": 1,
+        "search": {
+            "attractions": {"北京": ["完整搜索正文"]},
+            "weather": {"北京": {"forecast": "晴"}},
+            "hotels": {},
+        },
+        "segments": {
+            "seg-01": {
+                "day_indices": [0],
+                "status": "completed",
+                "output": [{"description": "完整分段正文"}],
+                "attempts": 1,
+                "error": "",
+            },
+            "seg-02": {
+                "day_indices": [1],
+                "status": "pending",
+                "output": [],
+                "attempts": 0,
+                "error": "",
+            },
+        },
+        "summary": {"status": "completed", "output": "完整总结正文", "error": ""},
+        "review": {"status": "pending", "output": None, "error": ""},
+    }
+
+
+class TaskCheckpointPersistenceTest(unittest.TestCase):
+    def tearDown(self):
+        trip._tasks.clear()
+
+    def test_new_task_has_empty_checkpoint(self):
+        self.assertEqual(trip._create_task_state("new123")["checkpoint"], {})
+
+    def test_checkpoint_round_trips_through_task_json(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            trip, "_TASKS_DATA_DIR", Path(tmp)
+        ):
+            task = trip._create_task_state("chk123")
+            task.update(status="failed", checkpoint=_checkpoint())
+            trip._persist_task_state("chk123", task)
+            trip._tasks.clear()
+
+            loaded = trip._load_task_from_disk("chk123")
+
+            self.assertEqual(loaded["checkpoint"], _checkpoint())
+
+    def test_restart_marks_processing_failed_without_losing_checkpoint(self):
+        checkpoint = _checkpoint()
+        loaded = trip._normalize_loaded_task(
+            "chk123",
+            {
+                "status": "processing",
+                "stage": "segments",
+                "checkpoint": checkpoint,
+            },
+        )
+
+        self.assertEqual(loaded["status"], "failed")
+        self.assertEqual(loaded["checkpoint"], checkpoint)
+
+    def test_task_event_exposes_summary_but_not_full_checkpoint(self):
+        task = trip._create_task_state("chk123")
+        task.update(status="failed", checkpoint=_checkpoint())
+
+        event = trip._build_task_event("chk123", task)
+
+        self.assertNotIn("checkpoint", event)
+        self.assertEqual(
+            event["checkpoint_summary"],
+            {
+                "completed_segments": 1,
+                "total_segments": 2,
+                "last_successful_stage": "summary",
+            },
+        )
+        serialized = json.dumps(event, ensure_ascii=False)
+        self.assertNotIn("完整搜索正文", serialized)
+        self.assertNotIn("完整分段正文", serialized)
+        self.assertNotIn("完整总结正文", serialized)
+
+    def test_failed_status_exposes_summary_but_not_full_checkpoint(self):
+        task = trip._create_task_state("chk123")
+        task.update(status="failed", checkpoint=_checkpoint())
+        trip._tasks["chk123"] = task
+
+        response = asyncio.run(trip.get_task_status("chk123"))
+
+        self.assertNotIn("checkpoint", response)
+        self.assertEqual(response["checkpoint_summary"]["completed_segments"], 1)
+
+    def test_regular_state_update_broadcasts_when_persistence_fails(self):
+        task = trip._create_task_state("chk123")
+        queue = asyncio.Queue()
+        task["subscribers"].append(queue)
+        trip._tasks["chk123"] = task
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            trip, "_TASKS_DATA_DIR", Path(tmp)
+        ), patch.object(Path, "replace", side_effect=OSError("disk full")):
+            asyncio.run(
+                trip._update_task_state(
+                    "chk123", stage="segments", progress=50, message="处理中"
+                )
+            )
+
+        event = queue.get_nowait()
+        self.assertEqual(event["stage"], "segments")
+        self.assertEqual(event["progress"], 50)
+
+    def test_checkpoint_persistence_failure_reaches_callback(self):
+        previous = {"old": True}
+        task = trip._create_task_state("chk123")
+        task["checkpoint"] = previous
+        trip._tasks["chk123"] = task
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            trip, "_TASKS_DATA_DIR", Path(tmp)
+        ), patch.object(Path, "replace", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                trip._save_task_checkpoint("chk123", _checkpoint())
+
+        self.assertIs(task["checkpoint"], previous)
+
+    def test_checkpoint_callback_rejects_missing_task(self):
+        with self.assertRaisesRegex(RuntimeError, "任务不存在"):
+            trip._save_task_checkpoint("missing", _checkpoint())
+
+    def test_run_planning_passes_saved_checkpoint_and_callback(self):
+        checkpoint = _checkpoint()
+        task = trip._create_task_state("chk123")
+        task["checkpoint"] = checkpoint
+        trip._tasks["chk123"] = task
+        request = object()
+        agent = Mock()
+        plan = TripPlan(
+            city="北京",
+            cities=["北京"],
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            days=[],
+            overall_suggestions="",
+        )
+        agent.plan_trip = AsyncMock(return_value=plan)
+
+        with patch.object(trip, "get_trip_planner_agent", return_value=agent), patch.object(
+            trip, "_update_task_state", new=AsyncMock()
+        ):
+            asyncio.run(trip._run_trip_planning("chk123", request, "user-1"))
+
+        kwargs = agent.plan_trip.await_args.kwargs
+        self.assertIs(kwargs["checkpoint"], checkpoint)
+        self.assertTrue(callable(kwargs["checkpoint_callback"]))
 
 
 class LoadPersistedTasksMigrationTest(unittest.TestCase):
