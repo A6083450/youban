@@ -305,7 +305,22 @@
       </div>
 
       <div v-else class="empty-state-panel">
-        <a-empty :description="t('result.noTripPlan')">
+        <TripGenerationFailure
+          v-if="failedTaskEvent && !props.readonly"
+          :task-id="failedTaskEvent.task_id"
+          :city="failedTaskCity"
+          :date-range="failedTaskDateRange"
+          :error="failedTaskError"
+          :checkpoint-summary="failedTaskEvent.checkpoint_summary"
+          :loading="retryingFailedPlan"
+          @retry="retryFailedPlan(false)"
+          @restart-all="retryFailedPlan(true)"
+        />
+        <div v-else-if="loadingPlan && !props.readonly" class="result-task-loading" role="status" aria-live="polite">
+          <a-spin size="large" />
+          <span>{{ t('tripFailure.retrying') }}</span>
+        </div>
+        <a-empty v-else :description="t('result.noTripPlan')">
           <template #description>
             <span class="empty-desc">{{ t('result.noTripPlanDesc') }}</span>
           </template>
@@ -353,6 +368,7 @@ import TripJourney from '@/components/TripJourney.vue'
 import DailyItinerary from '@/components/DailyItinerary.vue'
 import TripMap from '@/components/TripMap.vue'
 import TripToday from '@/components/TripToday.vue'
+import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import type {
   Attraction,
   ExecutionMap,
@@ -362,6 +378,7 @@ import type {
   ShareLoadErrorKind,
   TripPlan,
   TripPlanResponse,
+  TripTaskEvent,
   WeatherInfo,
 } from '@/types'
 import {
@@ -369,10 +386,14 @@ import {
   getRuntimeApiBaseUrl,
   getSharedTripPlan,
   pollTaskStatus,
+  retryTripPlan,
   SharedTripPlanError,
   TripShareCreationError,
   updateItemStatus,
+  watchTripTask,
 } from '@/services/api'
+import { currentUser } from '@/stores/auth'
+import { notifyPlansUpdated } from '@/stores/plans'
 import { canUseCachedPlan } from '@/utils/planConversation.js'
 import { normalizeReferenceTime, resolveTripBlueprint } from '@/utils/tripPresentation.js'
 import { findTodayArrayIndex } from '@/utils/tripExecution'
@@ -391,6 +412,54 @@ const planId = ref('')
 const attractionPhotos = ref<Record<string, string>>({})
 const activeSection = ref('overview')
 const pendingDayScrollIndex = ref<number | null>(null)
+const failedTaskEvent = ref<TripTaskEvent | null>(null)
+const retryingFailedPlan = ref(false)
+const loadingPlan = ref(false)
+let isAlive = true
+let planOperationToken = 0
+
+type PlanOperation = {
+  token: number
+  lookupId: string
+  ownerId: string
+  readonly: boolean
+}
+
+let activeLookupId = ''
+
+const planOperation = (lookupId: string, token = planOperationToken): PlanOperation => ({
+  token,
+  lookupId,
+  ownerId: props.readonly ? '' : (currentUser.value?.user_id || ''),
+  readonly: props.readonly,
+})
+
+const beginPlanOperation = (lookupId: string): PlanOperation => {
+  activeLookupId = lookupId
+  return planOperation(lookupId, ++planOperationToken)
+}
+
+const ownsPlanOperation = (operation: PlanOperation): boolean =>
+  isAlive
+  && operation.token === planOperationToken
+  && operation.lookupId === activeLookupId
+  && operation.readonly === props.readonly
+  && (operation.readonly || operation.ownerId === (currentUser.value?.user_id || ''))
+
+const failedTaskCity = computed(() => {
+  const request = failedTaskEvent.value?.request_payload
+  if (request?.city) return request.city
+  return request?.cities?.map((item) => item.city).filter(Boolean).join(' / ') || ''
+})
+const failedTaskDateRange = computed(() => {
+  const request = failedTaskEvent.value?.request_payload
+  return request?.start_date && request.end_date
+    ? `${request.start_date} ${t('common.to')} ${request.end_date}`
+    : ''
+})
+const failedTaskError = computed(() =>
+  failedTaskEvent.value?.error || failedTaskEvent.value?.message || t('result.noTripPlanDesc')
+)
 
 // ─── 今日行程执行状态(V1.1) ───
 const executionMap = ref<ExecutionMap>({})
@@ -413,11 +482,11 @@ const applyInitialSection = () => {
 }
 
 // 后台刷新 execution;缓存计划缺 id 时顺带换成后端带 id 版本
-const refreshExecutionFromBackend = async (targetPlanId: string) => {
-  if (!targetPlanId) return
+const refreshExecutionFromBackend = async (targetPlanId: string, operation?: PlanOperation) => {
+  if (!targetPlanId || (operation && !ownsPlanOperation(operation))) return
   try {
     const task = await pollTaskStatus(targetPlanId)
-    if (task?.status !== 'completed') return
+    if (task?.status !== 'completed' || (operation && !ownsPlanOperation(operation))) return
     executionMap.value = task.execution || {}
     const missingIds = tripPlan.value?.days.some((day) =>
       day.attractions.some((a) => !a.id) || day.meals.some((m) => !m.id),
@@ -433,6 +502,8 @@ const refreshExecutionFromBackend = async (targetPlanId: string) => {
 
 // 乐观更新 + 失败回滚
 const handleUpdateItemStatus = async (payload: { itemId: string; status: ItemExecutionStatus; actualCost?: number }) => {
+  const operation = planOperation(activeLookupId)
+  const targetPlanId = planId.value
   const prev = executionMap.value[payload.itemId]
   const optimistic: ExecutionMap = { ...executionMap.value }
   if (payload.status === 'pending') {
@@ -446,12 +517,14 @@ const handleUpdateItemStatus = async (payload: { itemId: string; status: ItemExe
   }
   executionMap.value = optimistic
   try {
-    const entry = await updateItemStatus(planId.value, payload.itemId, payload.status, payload.actualCost)
+    const entry = await updateItemStatus(targetPlanId, payload.itemId, payload.status, payload.actualCost)
+    if (!ownsPlanOperation(operation)) return
     const confirmed: ExecutionMap = { ...executionMap.value }
     if (entry) confirmed[payload.itemId] = entry
     else delete confirmed[payload.itemId]
     executionMap.value = confirmed
   } catch {
+    if (!ownsPlanOperation(operation)) return
     const rollback: ExecutionMap = { ...executionMap.value }
     if (prev) rollback[payload.itemId] = prev
     else delete rollback[payload.itemId]
@@ -546,6 +619,8 @@ watch(() => Object.keys(attractionPhotos.value).length, async () => {
 })
 
 onBeforeUnmount(() => {
+  isAlive = false
+  planOperationToken += 1
   overviewGsapCtx?.revert()
 })
 
@@ -693,8 +768,8 @@ watch(() => overviewAttractions.value.length, async (len) => {
 })
 
 // 加载所有景点图片
-const loadAttractionPhotos = async () => {
-  if (!tripPlan.value) return
+const loadAttractionPhotos = async (operation?: PlanOperation) => {
+  if (!tripPlan.value || (operation && !ownsPlanOperation(operation))) return
 
   const apiBase = getRuntimeApiBaseUrl()
   const uniqueNames = Array.from(
@@ -733,7 +808,7 @@ const loadAttractionPhotos = async () => {
             `${apiBase}/api/poi/photo?name=${encodeURIComponent(name)}&city=${encodeURIComponent(city)}`
           )
           const data = await response.json()
-          if (data.success && data.data.photo_url) {
+          if (data.success && data.data.photo_url && (!operation || ownsPlanOperation(operation))) {
             const url = String(data.data.photo_url)
             attractionPhotos.value[name] = url.startsWith('/') ? `${apiBase}${url}` : url
           }
@@ -800,17 +875,112 @@ const applyAgentPlan = async (plan: TripPlan) => {
   message.success(t('result.agent.changesTitle'))
 }
 
-const restoreTripPlanFromResponse = async (response?: TripPlanResponse | null) => {
-  if (!response?.data) return false
-  await applyTripPlanPayload({
-    plan: response.data,
-    planId: String(response.plan_id || planId.value || ''),
-  })
-  return true
+const restoreTripPlanFromResponse = async (
+  response?: TripPlanResponse | null,
+  operation?: PlanOperation,
+) => {
+  if (!response?.data || (operation && !ownsPlanOperation(operation))) return false
+  tripPlan.value = response.data
+  pendingBudgetItems.value = []
+  const responsePlanId = String(response.plan_id || planId.value || '')
+  if (responsePlanId) {
+    planId.value = responsePlanId
+    sessionStorage.setItem('planId', responsePlanId)
+  }
+  sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+  await loadAttractionPhotos(operation)
+  return !operation || ownsPlanOperation(operation)
+}
+
+const failedEvent = (
+  taskId: string,
+  error: unknown,
+  latest?: TripTaskEvent,
+  fallback?: TripTaskEvent,
+): TripTaskEvent => ({
+  task_id: taskId,
+  plan_id: taskId,
+  status: 'failed',
+  stage: 'failed',
+  progress: 100,
+  message: error instanceof Error ? error.message : t('result.noTripPlanDesc'),
+  error: error instanceof Error ? error.message : t('result.noTripPlanDesc'),
+  checkpoint_summary: latest?.checkpoint_summary || fallback?.checkpoint_summary,
+  request_payload: latest?.request_payload || fallback?.request_payload,
+})
+
+const focusFailedPlan = (operation: PlanOperation) => nextTick(() => {
+  if (!ownsPlanOperation(operation)) return
+  document.getElementById(`trip-failure-${operation.lookupId}`)
+    ?.querySelector<HTMLButtonElement>('button')?.focus()
+})
+
+const watchPlanUntilSettled = async (
+  operation: PlanOperation,
+  wsPath?: string,
+  fallbackEvent?: TripTaskEvent,
+) => {
+  if (!ownsPlanOperation(operation)) return
+  loadingPlan.value = true
+  let latestEvent = fallbackEvent
+  try {
+    const response = await watchTripTask(operation.lookupId, {
+      onTaskEvent: (event) => {
+        if (!ownsPlanOperation(operation)) return
+        latestEvent = event
+        if (event.status === 'failed') failedTaskEvent.value = event
+      },
+    }, wsPath)
+    if (!ownsPlanOperation(operation)) return
+    const restored = await restoreTripPlanFromResponse(response, operation)
+    if (!restored || !ownsPlanOperation(operation)) return
+    failedTaskEvent.value = null
+    applyInitialSection()
+    notifyPlansUpdated()
+  } catch (error: unknown) {
+    if (!ownsPlanOperation(operation)) return
+    failedTaskEvent.value = failedEvent(
+      operation.lookupId,
+      error,
+      failedTaskEvent.value || latestEvent,
+      fallbackEvent,
+    )
+    if (fallbackEvent) focusFailedPlan(operation)
+  } finally {
+    if (ownsPlanOperation(operation)) {
+      loadingPlan.value = false
+      retryingFailedPlan.value = false
+    }
+  }
+}
+
+const retryFailedPlan = async (restartAll: boolean) => {
+  if (retryingFailedPlan.value || !failedTaskEvent.value || props.readonly) return
+  const failedSnapshot = failedTaskEvent.value
+  const targetPlanId = failedSnapshot.task_id
+  const operation = beginPlanOperation(targetPlanId)
+  retryingFailedPlan.value = true
+  try {
+    const task = await retryTripPlan(targetPlanId, restartAll)
+    if (!ownsPlanOperation(operation)) return
+    if (task.task_id !== targetPlanId) throw new Error(t('result.noTripPlanDesc'))
+    failedTaskEvent.value = null
+    await watchPlanUntilSettled(operation, task.ws_url, failedSnapshot)
+  } catch (error: unknown) {
+    if (!ownsPlanOperation(operation)) return
+    failedTaskEvent.value = failedEvent(targetPlanId, error, failedTaskEvent.value || undefined, failedSnapshot)
+    retryingFailedPlan.value = false
+    focusFailedPlan(operation)
+  }
 }
 
 const loadPlanById = async (targetPlanId: string) => {
+  planId.value = targetPlanId
+  const operation = beginPlanOperation(targetPlanId)
   tripPlan.value = null
+  failedTaskEvent.value = null
+  loadingPlan.value = false
+  retryingFailedPlan.value = false
   pendingBudgetItems.value = []
   attractionPhotos.value = {}
   activeSection.value = 'overview'
@@ -820,19 +990,17 @@ const loadPlanById = async (targetPlanId: string) => {
   const data = sessionStorage.getItem('tripPlan')
   const storedPlanId = String(sessionStorage.getItem('planId') || '')
   const canUseCachedData = canUseCachedPlan(data, storedPlanId, targetPlanId)
-
-  planId.value = targetPlanId
-  if (targetPlanId) {
-    sessionStorage.setItem('planId', targetPlanId)
-  }
+  if (targetPlanId) sessionStorage.setItem('planId', targetPlanId)
 
   if (props.readonly) {
     try {
       const task = await getSharedTripPlan(targetPlanId)
+      if (!ownsPlanOperation(operation)) return
       if (task?.status === 'completed' && task.result) {
-        await restoreTripPlanFromResponse(task.result)
+        await restoreTripPlanFromResponse(task.result, operation)
       }
     } catch (error: unknown) {
+      if (!ownsPlanOperation(operation)) return
       const kind = error instanceof SharedTripPlanError ? error.kind : 'network'
       emit('share-load-error', kind)
     }
@@ -840,32 +1008,45 @@ const loadPlanById = async (targetPlanId: string) => {
   }
 
   if (data && canUseCachedData) {
-    await applyTripPlanPayload({
-      plan: JSON.parse(data),
-      planId: targetPlanId || storedPlanId,
-    })
+    const restored = await restoreTripPlanFromResponse({
+      success: true,
+      message: '',
+      plan_id: targetPlanId || storedPlanId,
+      data: JSON.parse(data),
+    }, operation)
+    if (!restored || !ownsPlanOperation(operation)) return
     applyInitialSection()
-    void refreshExecutionFromBackend(targetPlanId || storedPlanId)
+    void refreshExecutionFromBackend(targetPlanId || storedPlanId, operation)
     return
   }
 
-  if (targetPlanId) {
-    try {
-      const task = await pollTaskStatus(targetPlanId)
-      if (task?.status === 'completed' && task.result) {
-        const restored = await restoreTripPlanFromResponse(task.result)
-        if (restored) {
-          executionMap.value = task.execution || {}
-          applyInitialSection()
-          return
-        }
-      }
-      if (task?.status === 'failed') {
-        message.error(task.error || t('result.noTripPlanDesc'))
-      }
-    } catch (error) {
-      console.error('结果页从后端回补旅行计划失败:', error)
+  if (!targetPlanId) return
+  loadingPlan.value = true
+  try {
+    const task = await pollTaskStatus(targetPlanId)
+    if (!ownsPlanOperation(operation)) return
+    if (task?.status === 'completed' && task.result) {
+      const restored = await restoreTripPlanFromResponse(task.result, operation)
+      if (!restored || !ownsPlanOperation(operation)) return
+      executionMap.value = task.execution || {}
+      loadingPlan.value = false
+      applyInitialSection()
+      return
     }
+    if (task?.status === 'failed') {
+      failedTaskEvent.value = task as TripTaskEvent
+      loadingPlan.value = false
+      return
+    }
+    if (task?.status === 'processing') {
+      await watchPlanUntilSettled(operation, undefined, task as TripTaskEvent)
+      return
+    }
+    loadingPlan.value = false
+  } catch (error: unknown) {
+    if (!ownsPlanOperation(operation)) return
+    loadingPlan.value = false
+    console.error('结果页从后端回补旅行计划失败:', error)
   }
 }
 
@@ -879,6 +1060,21 @@ watch(
   },
   { immediate: true }
 )
+
+watch(() => currentUser.value?.user_id, async () => {
+  if (props.readonly) return
+  planOperationToken += 1
+  tripPlan.value = null
+  failedTaskEvent.value = null
+  loadingPlan.value = false
+  retryingFailedPlan.value = false
+  executionMap.value = {}
+  attractionPhotos.value = {}
+  sessionStorage.removeItem('tripPlan')
+  sessionStorage.removeItem('planId')
+  const targetPlanId = String(props.planId || '')
+  if (targetPlanId) await loadPlanById(targetPlanId)
+})
 
 watch(activeSection, async (section) => {
   if (!tripPlan.value) return
@@ -1780,6 +1976,16 @@ const escapeHtml = (value: unknown): string => {
   box-shadow: 0 24px 80px rgba(61, 50, 41, 0.1);
   padding: 44px 20px;
   text-align: center;
+}
+
+.result-task-loading {
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(61, 50, 41, 0.65);
 }
 
 .empty-desc {

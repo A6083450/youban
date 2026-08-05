@@ -118,7 +118,7 @@ const preparePlanPage = async (page: Page): Promise<void> => {
 
 const detailedSections = [
   { label: '行程概览', cardSelector: '.overview-card' },
-  { label: '旅行蓝图', cardSelector: '.flow-card' },
+  { label: '行程脉络图', cardSelector: '.flow-card' },
   { label: '预算明细', cardSelector: '.top-info-section' },
 ] as const
 

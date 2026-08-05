@@ -55,7 +55,7 @@ The current code predates semantic CSS variables and still contains equivalent r
 ## 5. Components
 
 ### Fixed Sidenav Shell
-- **Structure**: `.app-shell > .sidebar + .main-area`.
+- **Structure**: `.app-shell > .sidebar + .main-area`; the sidebar is ordered as primary actions, active generation, scrollable plan history, then a fixed utility zone.
 - **Variants**: desktop fixed rail; mobile drawer with top bar.
 - **Spacing**: 260px desktop rail and 52px mobile top bar.
 - **States**: drawer closed/open; sidebar list empty/loading/populated.
@@ -105,17 +105,25 @@ The current code predates semantic CSS variables and still contains equivalent r
 ### Conversation History Item
 - **Structure**: city, date, status, and a contextual delete action.
 - **Variants**: default, active, processing, failed.
-- **States**: hover, focus-visible, active, delete confirmation.
-- **Accessibility**: keyboard activation and labelled delete control.
+- **States**: hover, focus-visible, active, processing with an explicit recovery action, failed, delete confirmation.
+- **Accessibility**: keyboard activation, labelled delete control, and a visible 44px-high recovery action for processing plans.
 - **Layout**: stack within the independently scrolling sidebar list.
+
+### Active Generation Return
+- **Structure**: one solid-accent sidebar action containing generation status, destination, date range, and a directional return command.
+- **Data source**: the user-scoped active-task record, independent of history refresh timing.
+- **States**: generating, hover, press, focus-visible, and reduced motion.
+- **Accessibility**: one native button with a complete accessible name and a persistent visible return label.
+- **Layout**: full sidebar width inside 12px gutters; the same action appears inside the mobile drawer without truncating CJK labels.
 
 ### Share Code Entry
 - **Structure**: visible label, single-line code input, primary icon-and-text submit button, and inline validation message.
-- **Variants**: full-width login/error-page form; compact sidebar form reused inside the mobile drawer.
+- **Variants**: full-width login/error-page form; progressive-disclosure sidebar tool reused inside the mobile drawer.
 - **Spacing**: 8px label-to-control gap and 8px input-to-button gap, using the 4px base scale.
-- **States**: empty, normalized input, invalid input, and focus-visible.
-- **Accessibility**: the input has a persistent visible label; invalid feedback uses `role="alert"`; submit remains keyboard accessible.
-- **Layout**: input and action share one shrinkable row; at narrow widths the input owns remaining space and the action keeps a stable touch target without horizontal overflow.
+- **States**: collapsed, expanded with input focus, empty, normalized input, invalid input, and focus-visible.
+- **Accessibility**: the 44px disclosure trigger exposes `aria-expanded` and `aria-controls`; opening moves focus to the persistently labelled input; invalid feedback uses `role="alert"`.
+- **Layout**: the collapsed trigger lives in the fixed sidebar utility zone below the independently scrolling plan list. The expanded input and action share one shrinkable row without changing plan-history scroll ownership.
+- **Motion**: the panel uses the existing 150ms opacity/transform feedback; reduced motion shows and hides it without transition.
 
 ### Trip Map
 - **Structure**: one map surface containing the AMap canvas, transient loading mask, and optional multi-day legend.

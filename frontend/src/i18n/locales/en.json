@@ -4,6 +4,10 @@
     "plans": "Trip plans",
     "empty": "No plans yet, start with one sentence",
     "processing": "Generating",
+    "resumeGeneration": "Resume generation",
+    "resuming": "Resuming",
+    "activeGeneration": "Generating now",
+    "returnToGeneration": "Return to generation",
     "failed": "Failed",
     "ongoing": "On trip",
     "delete": "Delete plan",
@@ -51,6 +55,22 @@
     "ongoingBadge": "On trip",
     "ongoingDay": "Day {day}",
     "ongoingCta": "Open today"
+  },
+  "tripFailure": {
+    "title": "Trip generation stopped",
+    "lastStage": "Last completed stage",
+    "completedSegments": "Completed sections",
+    "retry": "Resume from failure",
+    "restartAll": "Start over",
+    "retrying": "Retrying…",
+    "unknownStage": "No stage completed yet",
+    "errorLabel": "Error:",
+    "stages": {
+      "search": "Travel research",
+      "segments": "Itinerary sections",
+      "summary": "Itinerary summary",
+      "review": "Quality review"
+    }
   },
   "composer": {
     "placeholder": "e.g. 3 days in Xi'an next weekend, love food and history…",

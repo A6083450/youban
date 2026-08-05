@@ -68,7 +68,7 @@ const prepareOwnedPlan = async (page: Page, planId: string): Promise<void> => {
     sessionStorage.setItem('tripPlan', JSON.stringify(storedPlan))
   }, { storedUser: user, storedPlan: ownedPlan, storedPlanId: planId })
   await page.goto(`/plan/${planId}`)
-  await expect(page.getByRole('button', { name: '分享' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /分享$/ })).toBeVisible()
 }
 
 test.beforeEach(async ({ page }) => {
@@ -140,17 +140,30 @@ for (const locale of [
   })
 }
 
-test('shows the same entry in the authenticated sidebar and mobile drawer', async ({ page }) => {
+test('keeps share-code entry in a collapsible sidebar utility area', async ({ page }) => {
   await page.addInitScript((storedUser) => {
     localStorage.setItem('tripstar.user', JSON.stringify(storedUser))
   }, user)
   await page.goto('/')
-  await expect(page.getByText('输入分享码')).toBeVisible()
-  await expect(page.getByRole('textbox', { name: '分享码' })).toBeVisible()
+  const desktopTrigger = page.getByRole('button', { name: '查看朋友分享的计划' })
+  const input = page.getByRole('textbox', { name: '分享码' })
+  await expect(desktopTrigger).toBeVisible()
+  await expect(desktopTrigger).toHaveAttribute('aria-expanded', 'false')
+  await expect(input).toBeHidden()
+  await desktopTrigger.click()
+  await expect(input).toBeVisible()
+  await expect(input).toBeFocused()
+  await desktopTrigger.click()
+  await expect(input).toBeHidden()
 
   await page.setViewportSize({ width: 375, height: 812 })
   await page.getByRole('button', { name: '游玩计划' }).click()
-  await expect(page.getByRole('textbox', { name: '分享码' })).toBeVisible()
+  const mobileTrigger = page.getByRole('button', { name: '查看朋友分享的计划' })
+  await expect(mobileTrigger).toBeVisible()
+  await expect(input).toBeHidden()
+  await mobileTrigger.click()
+  await expect(input).toBeVisible()
+  await expect(input).toBeFocused()
 })
 
 test('publishes and copies a high-entropy code from the share modal', async ({ page, context }) => {
@@ -162,7 +175,7 @@ test('publishes and copies a high-entropy code from the share modal', async ({ p
     const path = new URL(request.url()).pathname
     return path === `/api/trip/share/${ownedPlanId}` && request.method() === 'POST'
   })
-  await page.getByRole('button', { name: '分享' }).click()
+  await page.getByRole('button', { name: /分享$/ }).click()
   await publishRequest
 
   const dialog = page.getByRole('dialog', { name: '分享游玩计划' })

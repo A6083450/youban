@@ -4,6 +4,10 @@
     "plans": "游玩计划",
     "empty": "还没有计划，说一句话开始吧",
     "processing": "生成中",
+    "resumeGeneration": "恢复生成",
+    "resuming": "正在恢复",
+    "activeGeneration": "正在生成计划",
+    "returnToGeneration": "返回生成对话",
     "failed": "失败",
     "ongoing": "进行中",
     "delete": "删除计划",
@@ -51,6 +55,22 @@
     "ongoingBadge": "进行中",
     "ongoingDay": "第 {day} 天",
     "ongoingCta": "进入今日行程"
+  },
+  "tripFailure": {
+    "title": "行程生成未完成",
+    "lastStage": "最后完成阶段",
+    "completedSegments": "已完成分段",
+    "retry": "从失败处重试",
+    "restartAll": "重新生成全部",
+    "retrying": "重试中…",
+    "unknownStage": "暂无已完成阶段",
+    "errorLabel": "错误摘要：",
+    "stages": {
+      "search": "资料搜索",
+      "segments": "分段行程规划",
+      "summary": "行程汇总",
+      "review": "质量检查"
+    }
   },
   "composer": {
     "placeholder": "例如：下周末去西安玩3天，喜欢美食和历史文化…",

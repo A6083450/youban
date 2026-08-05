@@ -50,6 +50,19 @@
                 />
               </div>
 
+              <!-- 生成失败 -->
+              <TripGenerationFailure
+                v-else-if="item.type === 'failed'"
+                :task-id="item.taskId"
+                :city="item.city"
+                :date-range="item.dateRange"
+                :error="item.error"
+                :checkpoint-summary="item.checkpointSummary"
+                :loading="generating"
+                @retry="retryFailedItem(item, false)"
+                @restart-all="retryFailedItem(item, true)"
+              />
+
               <!-- 完成卡片 -->
               <div v-else class="done-card" role="button" tabindex="0" @click="openPlan(item.planId)" @keydown.enter="openPlan(item.planId)">
                 <div class="done-title">✅ {{ t('chatHome.doneTitle') }}</div>
@@ -122,17 +135,19 @@ import { message } from 'ant-design-vue'
 import dayjs from 'dayjs'
 import PlanComposer from '@/components/PlanComposer.vue'
 import TripDraftConfirmCard from '@/components/TripDraftConfirmCard.vue'
+import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import WorkProgress from '@/components/WorkProgress.vue'
-import { parseTripTextStream, confirmTripReplyStream, generateTripPlan, watchTripTask } from '@/services/api'
+import { parseTripTextStream, confirmTripReplyStream, generateTripPlan, retryTripPlan, watchTripTask } from '@/services/api'
 import { getCurrentLocale } from '@/i18n'
 import { notifyPlansUpdated, plans, refreshPlans } from '@/stores/plans'
 import { currentUser } from '@/stores/auth'
+import { clearActiveTripTask, readActiveTripTask, saveActiveTripTask } from '@/stores/activeTripTask'
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 import { isConversationNearBottom, scrollConversationToBottom } from '@/utils/chatScroll.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
-import type { ChatMessage, ParsedTripDraft, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
+import type { ChatMessage, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
 
 interface WorkProgressStatus {
   visible: boolean
@@ -149,6 +164,15 @@ type ChatItemData =
   | { role: 'assistant'; type: 'streaming'; text: string }
   | { role: 'assistant'; type: 'confirm'; draft: ParsedTripDraft }
   | { role: 'assistant'; type: 'progress'; status: WorkProgressStatus }
+  | {
+      role: 'assistant'
+      type: 'failed'
+      taskId: string
+      city: string
+      dateRange?: string
+      error: string
+      checkpointSummary?: TripCheckpointSummary
+    }
   | { role: 'assistant'; type: 'done'; planId: string; city: string; days: number }
 
 type ChatItem = ChatItemData & { id: number }
@@ -181,6 +205,13 @@ if (previousScrollRestoration !== null) {
 const items = ref<ChatItem[]>([])
 const busy = ref(false)
 const generating = ref(false)
+let operationToken = 0
+let isAlive = true
+
+const userId = () => currentUser.value?.user_id || 'anonymous'
+const sessionOwnerId = userId()
+const ownsOperation = (token: number, ownerId: string) =>
+  isAlive && token === operationToken && ownerId === userId()
 // 待确认的行程卡片:用户可直接在输入框里回复"确定/再想想/补充修改",不必点卡片按钮
 const pendingConfirmId = ref<number | null>(null)
 const pendingDraft = ref<ParsedTripDraft | null>(null)
@@ -276,51 +307,13 @@ const stageText = (stage: TripTaskStage) => {
   return t('home.loading.initializing')
 }
 
-// ─── 进行中任务持久化:刷新页面后可凭 task_id 重连 WebSocket 恢复进度 ───
-// key 按用户命名空间隔离,切换用户后互不干扰
-const activeTaskStorageKey = (): string => {
-  const uid = currentUser.value?.user_id || 'anonymous'
-  return `tripstar.active_task.${uid}`
-}
-
-interface ActiveTaskRecord {
-  taskId: string
-  city: string
-  days: number
-  userText: string
-}
-
-const saveActiveTask = (record: ActiveTaskRecord) => {
-  try {
-    localStorage.setItem(activeTaskStorageKey(), JSON.stringify(record))
-  } catch { /* 存储不可用时静默降级 */ }
-}
-
-const clearActiveTask = () => {
-  localStorage.removeItem(activeTaskStorageKey())
-}
-
-const readActiveTask = (): ActiveTaskRecord | null => {
-  try {
-    const raw = localStorage.getItem(activeTaskStorageKey())
-    if (!raw) return null
-    const data = JSON.parse(raw)
-    return data && typeof data.taskId === 'string' && data.taskId ? data : null
-  } catch {
-    return null
-  }
-}
-
 // ─── 对话会话持久化:刷新后整段恢复;中途被打断那条自动重发续上 ───
-const chatSessionStorageKey = (): string => {
-  const uid = currentUser.value?.user_id || 'anonymous'
-  return `tripstar.chat_session.${uid}`
-}
+const chatSessionStorageKey = (): string => `tripstar.chat_session.${sessionOwnerId}`
 
 // 仅持久化稳定对话项;typing/streaming/progress 等瞬态不落盘
-type PersistItem = Extract<ChatItem, { type: 'text' | 'confirm' | 'done' }>
+type PersistItem = Extract<ChatItem, { type: 'text' | 'confirm' | 'failed' | 'done' }>
 const isPersistable = (item: ChatItem): item is PersistItem =>
-  item.type === 'text' || item.type === 'confirm' || item.type === 'done'
+  item.type === 'text' || item.type === 'confirm' || item.type === 'failed' || item.type === 'done'
 
 interface ChatSessionSnapshot {
   items: PersistItem[]
@@ -398,12 +391,46 @@ const applyTaskEvent = (status: WorkProgressStatus, event: TripTaskEvent) => {
   scrollToBottom()
 }
 
+const formatDateRange = (startDate?: string, endDate?: string): string | undefined =>
+  startDate && endDate ? `${startDate} ${t('common.to')} ${endDate}` : undefined
+
+const failedItem = (
+  taskId: string,
+  city: string,
+  dateRange: string | undefined,
+  error: unknown,
+  event?: TripTaskEvent,
+  checkpointSummary?: TripCheckpointSummary,
+): ChatItemData => ({
+  role: 'assistant',
+  type: 'failed',
+  taskId,
+  city,
+  dateRange: dateRange || formatDateRange(
+    event?.request_payload?.start_date,
+    event?.request_payload?.end_date,
+  ),
+  error: event?.error || (error instanceof Error ? error.message : '') || t('home.messages.generateRetry'),
+  checkpointSummary: event?.checkpoint_summary || checkpointSummary,
+})
+
 const openPlan = (planId: string) => {
   if (!planId) return
   router.push(`/plan/${planId}`)
 }
 
-const handlePlanResponse = (response: TripPlanResponse, progressId: number): boolean => {
+const focusFailedCard = (taskId: string, token: number, ownerId: string) => nextTick(() => {
+  if (!ownsOperation(token, ownerId)) return
+  document.getElementById(`trip-failure-${taskId}`)?.querySelector<HTMLButtonElement>('button')?.focus()
+})
+
+const handlePlanResponse = (
+  response: TripPlanResponse,
+  progressId: number,
+  token: number,
+  ownerId: string,
+): boolean => {
+  if (!ownsOperation(token, ownerId)) return false
   const planId = String(response.plan_id || '').trim()
   if (response.success && response.data && planId) {
     sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
@@ -417,11 +444,8 @@ const handlePlanResponse = (response: TripPlanResponse, progressId: number): boo
       city: response.data.city,
       days: response.data.days.length,
     })
-    // 计划已生成并即将进入结果页,当前新建对话到此完结,清掉会话快照
     clearChatSession()
-    setTimeout(() => {
-      router.push(`/plan/${planId}`)
-    }, 900)
+    void router.push(`/plan/${planId}`)
     return true
   } else {
     replaceItem(progressId, {
@@ -456,13 +480,22 @@ const resetConversation = () => {
 
 // 页面刷新后:若存在进行中任务,重建对话并重连订阅(后端会先推送当前快照)
 const resumeActiveTask = async () => {
-  const record = readActiveTask()
+  const ownerId = userId()
+  const record = readActiveTripTask(ownerId)
   if (!record) return
 
-  if (record.userText) {
+  const token = ++operationToken
+  const restoredFailure = items.value.find(
+    (item): item is Extract<ChatItem, { type: 'failed' }> =>
+      item.type === 'failed' && item.taskId === record.taskId,
+  )
+  const hasContext = items.value.length > 0
+  if (!hasContext && record.userText) {
     pushItem({ role: 'user', type: 'text', text: record.userText })
   }
-  pushItem({ role: 'assistant', type: 'text', text: t('chatHome.resumeNotice') })
+  if (!hasContext) {
+    pushItem({ role: 'assistant', type: 'text', text: t('chatHome.resumeNotice') })
+  }
 
   generating.value = true
   busy.value = true
@@ -473,27 +506,116 @@ const resumeActiveTask = async () => {
     stage: 'submitted',
     details: [],
   })
-  const progressId = pushItem({ role: 'assistant', type: 'progress', status })
+  const progressId = restoredFailure?.id
+    ?? pushItem({ role: 'assistant', type: 'progress', status })
+  if (restoredFailure) replaceItem(progressId, { role: 'assistant', type: 'progress', status })
+  let lastTaskEvent: TripTaskEvent | undefined
 
   try {
     const response = await watchTripTask(record.taskId, {
-      onTaskEvent: (event) => applyTaskEvent(status, event),
+      onTaskEvent: (event) => {
+        if (!ownsOperation(token, ownerId)) return
+        lastTaskEvent = event
+        applyTaskEvent(status, event)
+      },
     })
-    if (handlePlanResponse(response, progressId)) clearActiveTask()
-  } catch (error: any) {
-    replaceItem(progressId, {
-      role: 'assistant',
-      type: 'text',
-      text: error?.message || t('home.messages.generateRetry'),
-    })
+    if (handlePlanResponse(response, progressId, token, ownerId)) {
+      clearActiveTripTask(record.taskId, ownerId)
+    }
+  } catch (error: unknown) {
+    if (!ownsOperation(token, ownerId)) return
+    replaceItem(progressId, failedItem(
+      record.taskId,
+      record.city,
+      formatDateRange(record.startDate, record.endDate),
+      error,
+      lastTaskEvent,
+      restoredFailure?.checkpointSummary,
+    ))
     notifyPlansUpdated()
   } finally {
-    generating.value = false
-    busy.value = false
+    if (ownsOperation(token, ownerId)) {
+      generating.value = false
+      busy.value = false
+    }
   }
 }
 
 // 刷新后恢复整段对话;若上次回复被打断,自动重发续上
+const retryFailedItem = async (
+  item: Extract<ChatItem, { type: 'failed' }>,
+  restartAll: boolean,
+) => {
+  if (generating.value) return
+
+  const ownerId = userId()
+  const activeTaskIdAtClick = readActiveTripTask(ownerId)?.taskId ?? null
+  const token = ++operationToken
+  generating.value = true
+  busy.value = true
+  const status = reactive<WorkProgressStatus>({
+    visible: true,
+    progress: 5,
+    message: t('home.loading.initializing'),
+    stage: 'submitted',
+    details: [],
+  })
+  let lastTaskEvent: TripTaskEvent | undefined
+
+  try {
+    const task = await retryTripPlan(item.taskId, restartAll)
+    if (task.task_id !== item.taskId) {
+      throw new Error(t('home.messages.generateRetry'))
+    }
+    const currentActiveTaskId = readActiveTripTask(ownerId)?.taskId ?? null
+    const canClaimActive = currentActiveTaskId === null
+      || currentActiveTaskId === item.taskId
+      || currentActiveTaskId === activeTaskIdAtClick
+    if (canClaimActive) {
+      const [startDate, endDate] = item.dateRange?.match(/\d{4}-\d{2}-\d{2}/g) ?? []
+      saveActiveTripTask({
+        taskId: task.task_id,
+        city: item.city,
+        days: startDate && endDate ? dayjs(endDate).diff(dayjs(startDate), 'day') + 1 : 0,
+        userText: '',
+        startDate,
+        endDate,
+      }, ownerId)
+    }
+    if (!ownsOperation(token, ownerId)) return
+    if (!canClaimActive) throw new Error(t('home.messages.generateRetry'))
+    replaceItem(item.id, { role: 'assistant', type: 'progress', status })
+    persistChatSession()
+    const response = await watchTripTask(item.taskId, {
+      onTaskEvent: (event) => {
+        if (!ownsOperation(token, ownerId)) return
+        lastTaskEvent = event
+        applyTaskEvent(status, event)
+      },
+    }, task.ws_url)
+    if (handlePlanResponse(response, item.id, token, ownerId)) {
+      clearActiveTripTask(item.taskId, ownerId)
+    }
+  } catch (error: unknown) {
+    if (!ownsOperation(token, ownerId)) return
+    replaceItem(item.id, failedItem(
+      item.taskId,
+      item.city,
+      item.dateRange,
+      error,
+      lastTaskEvent,
+      item.checkpointSummary,
+    ))
+    notifyPlansUpdated()
+    focusFailedCard(item.taskId, token, ownerId)
+  } finally {
+    if (ownsOperation(token, ownerId)) {
+      generating.value = false
+      busy.value = false
+    }
+  }
+}
+
 const restoreChatSession = () => {
   const snap = readChatSession()
   if (!snap || !snap.items.length) return
@@ -508,7 +630,7 @@ const restoreChatSession = () => {
   scrollToBottom()
 
   // 被打断那条自动重发续上;生成中(存在 active_task)的恢复交给 resumeActiveTask,此处不重发
-  if (snap.pendingUserText && !readActiveTask()) {
+  if (snap.pendingUserText && !readActiveTripTask(userId())) {
     const lastUser = [...items.value].reverse().find((i) => i.role === 'user' && i.type === 'text')
     const lastUserId = lastUser
       ? lastUser.id
@@ -534,6 +656,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  isAlive = false
+  operationToken += 1
   window.removeEventListener(NEW_PLAN_EVENT, resetConversation)
   if (previousScrollRestoration !== null) {
     window.history.scrollRestoration = previousScrollRestoration
@@ -543,6 +667,11 @@ onUnmounted(() => {
 
 // 对话状态变化后防抖落盘,供刷新恢复
 watch([items, pendingConfirmId, pendingDraft, pendingUserText], persistSoon, { deep: true })
+watch(() => currentUser.value?.user_id, () => {
+  operationToken += 1
+  generating.value = false
+  busy.value = false
+})
 watch(() => items.value.length, (length) => {
   if (length > 0) scrollToBottom(true)
 })
@@ -706,6 +835,11 @@ const runParseStream = async (text: string, userItemId: number) => {
   }
 }
 
+const restoreComposerFocus = async (): Promise<void> => {
+  await nextTick()
+  if (!busy.value) composerRef.value?.focus()
+}
+
 const handleUserSend = async (text: string) => {
   if (busy.value) return
   // 用户主动发送新消息时重新跟随最新对话
@@ -713,12 +847,16 @@ const handleUserSend = async (text: string) => {
   const userItemId = pushItem({ role: 'user', type: 'text', text })
 
   // 有待确认的行程卡片时,优先用对话方式处理,不要求用户点卡片按钮
-  if (pendingConfirmId.value !== null && pendingDraft.value) {
-    await handlePendingReply(text, pendingConfirmId.value, pendingDraft.value, userItemId)
-    return
-  }
+  try {
+    if (pendingConfirmId.value !== null && pendingDraft.value) {
+      await handlePendingReply(text, pendingConfirmId.value, pendingDraft.value, userItemId)
+      return
+    }
 
-  await runParseStream(text, userItemId)
+    await runParseStream(text, userItemId)
+  } finally {
+    await restoreComposerFocus()
+  }
 }
 
 const onConfirmGenerate = async (
@@ -733,6 +871,8 @@ const onConfirmGenerate = async (
   }
   requestData.conversation = buildArchivedConversation(items.value)
   const travelDays = requestData.travel_days
+  const ownerId = userId()
+  const token = ++operationToken
 
   generating.value = true
   busy.value = true
@@ -746,6 +886,7 @@ const onConfirmGenerate = async (
   const progressId = pushItem({ role: 'assistant', type: 'progress', status })
 
   let createdTaskId = ''
+  let lastTaskEvent: TripTaskEvent | undefined
   try {
     sessionStorage.removeItem('tripPlan')
     sessionStorage.removeItem('graphData')
@@ -753,38 +894,60 @@ const onConfirmGenerate = async (
 
     const response = await generateTripPlan(requestData, {
       onTaskCreated: (task) => {
+        if (!ownsOperation(token, ownerId)) return
         // 拿到 task_id 立即落地,刷新页面后可恢复;并让侧栏立刻出现"生成中"的任务
         createdTaskId = task.task_id
-        saveActiveTask({
+        saveActiveTripTask({
           taskId: task.task_id,
           city: draft.city,
           days: travelDays,
           userText: draft.origin_text || draft.free_text_input || '',
-        })
+          startDate: requestData.start_date,
+          endDate: requestData.end_date,
+        }, ownerId)
         notifyPlansUpdated()
       },
-      onTaskEvent: (event) => applyTaskEvent(status, event),
+      onTaskEvent: (event) => {
+        if (!ownsOperation(token, ownerId)) return
+        lastTaskEvent = event
+        applyTaskEvent(status, event)
+      },
     })
 
-    const completed = handlePlanResponse(response, progressId)
+    const completed = handlePlanResponse(response, progressId, token, ownerId)
     const outcome: PlanGenerationOutcome = completed
       ? { status: 'completed' }
       : { status: 'watch_failed', taskId: createdTaskId }
-    if (shouldClearActiveTask(outcome)) clearActiveTask()
+    if (shouldClearActiveTask(outcome) && createdTaskId) {
+      clearActiveTripTask(createdTaskId, ownerId)
+    }
     return outcome
-  } catch (error: any) {
-    replaceItem(progressId, {
-      role: 'assistant',
-      type: 'text',
-      text: error?.message || t('home.messages.generateRetry'),
-    })
+  } catch (error: unknown) {
+    if (!ownsOperation(token, ownerId)) return createdTaskId
+      ? { status: 'watch_failed', taskId: createdTaskId }
+      : { status: 'submit_failed' }
+    replaceItem(progressId, createdTaskId
+      ? failedItem(
+          createdTaskId,
+          draft.city,
+          formatDateRange(requestData.start_date, requestData.end_date),
+          error,
+          lastTaskEvent,
+        )
+      : {
+          role: 'assistant',
+          type: 'text',
+          text: error instanceof Error ? error.message : t('home.messages.generateRetry'),
+        })
     notifyPlansUpdated()
     return createdTaskId
       ? { status: 'watch_failed', taskId: createdTaskId }
       : { status: 'submit_failed' }
   } finally {
-    generating.value = false
-    busy.value = false
+    if (ownsOperation(token, ownerId)) {
+      generating.value = false
+      busy.value = false
+    }
   }
 }
 </script>

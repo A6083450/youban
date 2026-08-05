@@ -4,6 +4,10 @@
     "plans": "旅行プラン",
     "empty": "まだプランがありません",
     "processing": "生成中",
+    "resumeGeneration": "生成を再開",
+    "resuming": "再開中",
+    "activeGeneration": "プランを生成中",
+    "returnToGeneration": "生成画面に戻る",
     "failed": "失敗",
     "ongoing": "旅行中",
     "delete": "プランを削除",
@@ -51,6 +55,22 @@
     "ongoingBadge": "旅行中",
     "ongoingDay": "{day}日目",
     "ongoingCta": "本日の行程へ"
+  },
+  "tripFailure": {
+    "title": "旅程の生成が完了しませんでした",
+    "lastStage": "最後に完了した段階",
+    "completedSegments": "完了した区間",
+    "retry": "失敗した箇所から再試行",
+    "restartAll": "最初から生成",
+    "retrying": "再試行中…",
+    "unknownStage": "完了した段階はありません",
+    "errorLabel": "エラー：",
+    "stages": {
+      "search": "旅行情報の検索",
+      "segments": "区間ごとの旅程作成",
+      "summary": "旅程のまとめ",
+      "review": "品質チェック"
+    }
   },
   "composer": {
     "placeholder": "例：来週末に西安へ3日間、グルメと歴史文化が好き…",

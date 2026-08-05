@@ -2,6 +2,7 @@
   <div class="composer">
     <div class="input-box" :class="{ disabled }">
       <textarea
+        ref="textareaRef"
         v-model="inputText"
         class="input-textarea"
         :placeholder="t('composer.placeholder')"
@@ -31,6 +32,7 @@ const emit = defineEmits<{ (e: 'send', text: string): void }>()
 
 const { t } = useI18n()
 const inputText = ref('')
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const handleSend = () => {
   const text = inputText.value.trim()
@@ -43,7 +45,11 @@ const setText = (text: string) => {
   inputText.value = text
 }
 
-defineExpose({ setText })
+const focus = () => {
+  textareaRef.value?.focus()
+}
+
+defineExpose({ focus, setText })
 </script>
 
 <style scoped>

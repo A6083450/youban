@@ -209,21 +209,22 @@ const mockSharedPlan = async (page: Page, plan: TripPlan): Promise<void> => {
   })
 }
 
-test('shows planning stages without duplicating daily logistics', async ({ page }) => {
+test('shows journey context without duplicating daily logistics', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   const blueprint = page.locator('.flow-card')
   await expect(blueprint.getByRole('heading', { name: '江南慢游' })).toBeVisible()
-  await expect(blueprint.getByRole('button', { name: /城市序章/ })).toBeVisible()
-  await expect(blueprint.getByText('先适应城市节奏。')).toBeVisible()
+  await expect(blueprint.getByText('从上海城市文化进入杭州湖滨慢游。')).toBeVisible()
+  await expect(blueprint.getByText('城市文化', { exact: true })).toBeVisible()
+  await expect(blueprint.getByRole('button', { name: /D1 上海.*外滩/ })).toBeVisible()
   await expect(blueprint.getByText('测试酒店')).toHaveCount(0)
   await expect(blueprint.getByText('测试餐厅')).toHaveCount(0)
 })
 
-test('scrolls the continuous itinerary to a selected blueprint stage', async ({ page }) => {
+test('scrolls the continuous itinerary to a selected journey day', async ({ page }) => {
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
-  await page.getByRole('button', { name: /湖滨收尾/ }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  await page.getByRole('button', { name: /D3 杭州.*断桥/ }).click()
   await expect(page.getByRole('menuitem', { name: '每日行程' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(3)
   await expect.poll(() => page.evaluate(() => {
@@ -256,7 +257,7 @@ test('shows untimed legacy items after timed items', async ({ page }) => {
 test('uses the same blueprint and daily views on a readonly share page', async ({ page }) => {
   await mockSharedPlan(page, tripPlanWithBlueprint)
   await page.goto('/share/blueprint')
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   await expect(page.getByRole('heading', { name: '江南慢游' })).toBeVisible()
   await page.getByRole('menuitem', { name: '每日行程' }).click()
   await expect(page.getByText('以下时间为参考时间').first()).toBeVisible()
@@ -267,12 +268,12 @@ test('uses the same blueprint and daily views on a readonly share page', async (
 test('keeps blueprint and daily views inside a 375px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await preparePlanPage(page)
-  for (const label of ['旅行蓝图', '每日行程']) {
+  for (const label of ['行程脉络图', '每日行程']) {
     await page.getByRole('menuitem', { name: label }).click()
     const layout = await page.evaluate((sectionLabel) => {
       const navigation = document.querySelector<HTMLElement>('.top-switch-nav')
       const content = document.querySelector<HTMLElement>(
-        sectionLabel === '旅行蓝图' ? '.trip-blueprint__header' : '.itinerary-mode',
+        sectionLabel === '行程脉络图' ? '.journey__hero' : '.itinerary-mode',
       )
       return {
         widths: [document.documentElement.clientWidth, document.documentElement.scrollWidth],
@@ -288,7 +289,7 @@ test('keeps blueprint and daily views inside a 375px viewport', async ({ page })
 test('keeps the mobile result navigation pinned while the plan scrolls', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   await page.locator('.main-area').evaluate((main) => {
     main.scrollTop = main.scrollHeight
   })
@@ -335,7 +336,7 @@ test('keeps all five days visible while display grouping changes', async ({ page
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(5)
   await expect(page.getByText('第 1 周 · 第 1～5 天 · 8月1日—8月5日')).toBeVisible()
 
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   await page.getByRole('menuitem', { name: '每日行程' }).click()
   await expect(page.getByRole('radio', { name: '周' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(5)
@@ -373,7 +374,7 @@ test('renders blueprint and daily sections without nested Ant cards', async ({ p
   await page.setViewportSize({ width: 1440, height: 900 })
   await preparePlanPage(page)
 
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   await expect(page.locator('.flow-card > .ant-card-body')).toHaveCount(0)
   await page.getByRole('menuitem', { name: '每日行程' }).click()
   await expect(page.locator('.days-card > .ant-card-body')).toHaveCount(0)
@@ -397,19 +398,19 @@ test('exports a non-empty itinerary image', async ({ page }, testInfo) => {
   await testInfo.attach('exported-itinerary', { path: artifactPath, contentType: 'image/png' })
 })
 
-test('supports keyboard stage selection and captures visual QA artifacts', async ({ page }, testInfo) => {
+test('supports keyboard day selection and captures visual QA artifacts', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await preparePlanPage(page)
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
-  const firstStage = page.locator('.trip-blueprint__stage').first()
-  await firstStage.focus()
-  await expect(firstStage).toBeFocused()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
+  const firstDay = page.getByRole('button', { name: /D1 上海.*外滩/ }).first()
+  await firstDay.focus()
+  await expect(firstDay).toBeFocused()
   await page.screenshot({
     path: testInfo.outputPath('trip-blueprint-desktop.png'),
     animations: 'disabled',
   })
 
-  await page.keyboard.press('Enter')
+  await firstDay.press('Enter')
   await expect(page.getByRole('menuitem', { name: '每日行程' })).toHaveAttribute('aria-selected', 'true')
   await page.screenshot({
     path: testInfo.outputPath('daily-itinerary-desktop.png'),
@@ -417,7 +418,7 @@ test('supports keyboard stage selection and captures visual QA artifacts', async
   })
 
   await page.setViewportSize({ width: 375, height: 812 })
-  await page.getByRole('menuitem', { name: '旅行蓝图' }).click()
+  await page.getByRole('menuitem', { name: '行程脉络图' }).click()
   await page.screenshot({
     path: testInfo.outputPath('trip-blueprint-mobile.png'),
     animations: 'disabled',

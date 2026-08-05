@@ -189,6 +189,12 @@ export interface TripTaskDetail {
   timestamp?: number
 }
 
+export interface TripCheckpointSummary {
+  completed_segments: number
+  total_segments: number
+  last_successful_stage: string
+}
+
 export interface TripTaskEvent {
   task_id: string
   plan_id: string
@@ -199,6 +205,8 @@ export interface TripTaskEvent {
   details?: TripTaskDetail[]
   error?: string
   result?: TripPlanResponse
+  checkpoint_summary?: TripCheckpointSummary
+  request_payload?: Partial<TripFormData>
 }
 
 export interface BackendRuntimeSettings {

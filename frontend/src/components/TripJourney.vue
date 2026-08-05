@@ -456,7 +456,10 @@ const { loop: cardsLoop, duration: cardsLoopDuration } = useMarqueeLoop(cardsVie
   transform: translateY(-4px);
 }
 
+/* 绝对定位填充：grid auto 行内百分比高度不解析，竖图会溢出圆圈 */
 .journey__pin img {
+  position: absolute;
+  inset: 0;
   inline-size: 100%;
   block-size: 100%;
   border-radius: 50%;

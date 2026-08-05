@@ -83,7 +83,7 @@ const resolveDefaultApiBaseUrl = (): string => {
 const DEFAULT_API_BASE_URL = resolveDefaultApiBaseUrl()
 const DEFAULT_AMAP_WEB_JS_KEY = normalizeText(ENV_AMAP_WEB_JS_KEY)
 
-interface SubmitTripPlanResponse {
+export interface SubmitTripPlanResponse {
   task_id: string
   plan_id: string
   status: 'processing'
@@ -373,6 +373,22 @@ export async function submitTripPlan(formData: TripFormData): Promise<SubmitTrip
     return response.data
   } catch (error: any) {
     console.error('提交旅行计划失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || t('api.submitTripPlanFailed'))
+  }
+}
+
+export async function retryTripPlan(
+  taskId: string,
+  restartAll = false,
+): Promise<SubmitTripPlanResponse> {
+  try {
+    const response = await apiClient.post(
+      `/api/trip/plan/${encodeURIComponent(taskId)}/retry`,
+      { restart_all: restartAll },
+    )
+    return response.data
+  } catch (error: any) {
+    console.error('重试旅行计划失败:', error)
     throw new Error(error.response?.data?.detail || error.message || t('api.submitTripPlanFailed'))
   }
 }

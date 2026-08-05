@@ -34,10 +34,11 @@
         </button>
       </div>
 
-      <div class="sidebar-share-code">
-        <div class="sidebar-share-code__title">{{ t('shareCode.sidebarTitle') }}</div>
-        <ShareCodeEntry compact />
-      </div>
+      <ActiveTripTaskButton
+        v-if="activeTripTask"
+        :task="activeTripTask"
+        @activate="returnToActiveTask"
+      />
 
       <div class="sidebar-section-title">{{ t('sidebar.plans') }}</div>
       <div class="sidebar-list">
@@ -48,18 +49,34 @@
           :key="item.plan_id"
           class="sidebar-item"
           :class="{ active: activePlanId === item.plan_id }"
-          role="button"
-          tabindex="0"
-          @click="openPlan(item.plan_id)"
-          @keydown.enter="openPlan(item.plan_id)"
         >
-          <span class="sidebar-item-city">{{ item.city }}</span>
-          <span class="sidebar-item-date">
-            {{ item.start_date }} ~ {{ item.end_date }}
-            <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
-            <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
-            <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
-          </span>
+          <button
+            type="button"
+            class="sidebar-item-main"
+            :aria-current="activePlanId === item.plan_id ? 'page' : undefined"
+            @click="openPlan(item.plan_id)"
+          >
+            <span class="sidebar-item-city">{{ item.city }}</span>
+            <span class="sidebar-item-date">
+              {{ item.start_date }} ~ {{ item.end_date }}
+              <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
+              <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
+              <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
+            </span>
+          </button>
+          <button
+            v-if="item.status === 'processing'"
+            type="button"
+            class="sidebar-item-resume"
+            :disabled="resumingPlanId === item.plan_id"
+            :aria-busy="resumingPlanId === item.plan_id"
+            @click.stop="resumePlan(item.plan_id)"
+            @keydown.enter.stop
+          >
+            <LoadingOutlined v-if="resumingPlanId === item.plan_id" aria-hidden="true" />
+            <PlayCircleOutlined v-else aria-hidden="true" />
+            <span>{{ resumingPlanId === item.plan_id ? t('sidebar.resuming') : t('sidebar.resumeGeneration') }}</span>
+          </button>
           <a-popconfirm
             :title="t('sidebar.deleteConfirm')"
             :ok-text="t('common.ok')"
@@ -79,24 +96,28 @@
         </div>
       </div>
 
-      <div class="sidebar-footer">
-        <div class="lang-switch" role="group" :aria-label="t('app.language.label')">
-          <button
-            v-for="opt in localeOptions"
-            :key="opt.value"
-            type="button"
-            class="lang-switch-btn"
-            :class="{ active: locale === opt.value }"
-            :aria-pressed="locale === opt.value"
-            @click="switchLocale(opt.value)"
-          >
-            {{ t(opt.labelKey) }}
-          </button>
-        </div>
-      </div>
+      <div class="sidebar-tools">
+        <SidebarShareCodeTool />
 
-      <div class="sidebar-user">
-        <UserBadge />
+        <div class="sidebar-footer">
+          <div class="lang-switch" role="group" :aria-label="t('app.language.label')">
+            <button
+              v-for="opt in localeOptions"
+              :key="opt.value"
+              type="button"
+              class="lang-switch-btn"
+              :class="{ active: locale === opt.value }"
+              :aria-pressed="locale === opt.value"
+              @click="switchLocale(opt.value)"
+            >
+              {{ t(opt.labelKey) }}
+            </button>
+          </div>
+        </div>
+
+        <div class="sidebar-user">
+          <UserBadge />
+        </div>
       </div>
     </aside>
 
@@ -117,14 +138,18 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import { LoadingOutlined, PlayCircleOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import { setAppLocale, type AppLocale } from '@/i18n'
 import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
-import ShareCodeEntry from '@/components/ShareCodeEntry.vue'
+import ActiveTripTaskButton from '@/components/ActiveTripTaskButton.vue'
+import SidebarShareCodeTool from '@/components/SidebarShareCodeTool.vue'
 import YoubanSplash from '@/splash/YoubanSplash.vue'
 import { AUTH_UPDATED_EVENT } from '@/stores/auth'
+import { ACTIVE_TRIP_TASK_UPDATED_EVENT, readActiveTripTask } from '@/stores/activeTripTask'
+import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
 import type { TripHistoryItem } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 
@@ -161,6 +186,8 @@ const isBareRoute = computed(() => isAdminRoute.value || isShareRoute.value || r
 
 // 移动端抽屉
 const mobileMenuOpen = ref(false)
+const resumingPlanId = ref('')
+const activeTripTask = ref<ActiveTripTaskRecord | null>(null)
 
 watch(
   locale,
@@ -188,13 +215,34 @@ const goNewPlan = () => {
   }
 }
 
-const openPlan = (planId: string) => {
+const openPlan = async (planId: string): Promise<void> => {
   if (!planId) return
   mobileMenuOpen.value = false
   sessionStorage.removeItem('tripPlan')
   sessionStorage.removeItem('graphData')
   sessionStorage.setItem('planId', planId)
-  router.push(`/plan/${planId}`)
+  await router.push(`/plan/${planId}`)
+}
+
+const syncActiveTripTask = (): void => {
+  const ownerId = getStoredUser()?.user_id || 'anonymous'
+  activeTripTask.value = readActiveTripTask(ownerId)
+}
+
+const returnToActiveTask = async (): Promise<void> => {
+  mobileMenuOpen.value = false
+  clearPlanResultSession()
+  await router.push('/')
+}
+
+const resumePlan = async (planId: string): Promise<void> => {
+  if (!planId || resumingPlanId.value) return
+  resumingPlanId.value = planId
+  try {
+    await openPlan(planId)
+  } finally {
+    resumingPlanId.value = ''
+  }
 }
 
 const deletePlan = async (item: TripHistoryItem) => {
@@ -215,22 +263,27 @@ const deletePlan = async (item: TripHistoryItem) => {
 }
 
 const onPlansUpdated = () => {
+  syncActiveTripTask()
   void refreshPlans()
 }
 
 const onAuthUpdated = () => {
+  syncActiveTripTask()
   void refreshPlans()
 }
 
 onMounted(() => {
+  syncActiveTripTask()
   void refreshPlans()
   window.addEventListener(PLANS_UPDATED_EVENT, onPlansUpdated)
   window.addEventListener(AUTH_UPDATED_EVENT, onAuthUpdated)
+  window.addEventListener(ACTIVE_TRIP_TASK_UPDATED_EVENT, syncActiveTripTask)
 })
 
 onUnmounted(() => {
   window.removeEventListener(PLANS_UPDATED_EVENT, onPlansUpdated)
   window.removeEventListener(AUTH_UPDATED_EVENT, onAuthUpdated)
+  window.removeEventListener(ACTIVE_TRIP_TASK_UPDATED_EVENT, syncActiveTripTask)
 })
 </script>
 
@@ -309,22 +362,6 @@ onUnmounted(() => {
   line-height: 1;
 }
 
-.sidebar-share-code {
-  margin: 0 12px 16px;
-  padding: 12px;
-  background: #faf7f2;
-  border: 1px solid rgba(61, 50, 41, 0.1);
-  border-radius: 8px;
-}
-
-.sidebar-share-code__title {
-  margin-bottom: 8px;
-  color: #3d3229;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-
 .sidebar-section-title {
   padding: 4px 16px 8px;
   font-size: 12px;
@@ -335,6 +372,7 @@ onUnmounted(() => {
 
 .sidebar-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 0 8px 12px;
   display: flex;
@@ -355,12 +393,28 @@ onUnmounted(() => {
   background: transparent;
   padding: 10px 12px;
   text-align: left;
-  cursor: pointer;
   transition: background 0.15s ease;
   display: flex;
   flex-direction: column;
   gap: 2px;
   position: relative;
+}
+
+.sidebar-item-main {
+  width: 100%;
+  padding: 0 28px 0 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-item-main:focus-visible {
+  outline: 2px solid #D97757;
+  outline-offset: 4px;
 }
 
 .sidebar-item-delete {
@@ -416,6 +470,40 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
+.sidebar-item-resume {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(217, 119, 87, 0.35);
+  border-radius: 8px;
+  background: rgba(217, 119, 87, 0.08);
+  color: #C4603D;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-item-resume:hover:not(:disabled) {
+  background: rgba(217, 119, 87, 0.16);
+  border-color: rgba(217, 119, 87, 0.55);
+}
+
+.sidebar-item-resume:focus-visible {
+  outline: 2px solid #D97757;
+  outline-offset: 2px;
+}
+
+.sidebar-item-resume:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .sidebar-item-badge {
   display: inline-block;
   margin-left: 6px;
@@ -437,12 +525,17 @@ onUnmounted(() => {
 
 .sidebar-item-badge.ongoing { color: #a8752a; background: rgba(216, 169, 78, 0.18); }
 
+.sidebar-tools {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(61, 50, 41, 0.08);
+  background: #fff;
+}
+
 .sidebar-footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px;
-  border-top: 1px solid rgba(61, 50, 41, 0.08);
+  padding: 4px 12px 8px;
 }
 
 /* 侧栏底部用户区 */
@@ -505,6 +598,12 @@ onUnmounted(() => {
 .page-enter-from {
   opacity: 0;
   transform: translateY(8px);
+}
+
+/* A transformed route becomes the containing block for its fixed chat dock. */
+.main-area > .page-enter-active .agent-dock,
+.main-area > .page-leave-active .agent-dock {
+  left: 50%;
 }
 
 .page-leave-to {

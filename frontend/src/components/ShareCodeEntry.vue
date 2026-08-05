@@ -9,6 +9,7 @@
     </label>
     <div class="share-code-entry__row">
       <a-input
+        ref="inputRef"
         :id="inputId"
         :value="code"
         :placeholder="t('shareCode.placeholder')"
@@ -27,21 +28,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, useId, watch } from 'vue'
+import { nextTick, onMounted, ref, useId, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowRightOutlined } from '@ant-design/icons-vue'
 import { isValidShareCode, normalizeShareCode } from '@/utils/shareCode'
 
-const props = withDefaults(defineProps<{ compact?: boolean; initialCode?: string }>(), {
+const props = withDefaults(defineProps<{
+  autofocus?: boolean
+  compact?: boolean
+  initialCode?: string
+}>(), {
+  autofocus: false,
   compact: false,
   initialCode: '',
 })
 const router = useRouter()
 const { t } = useI18n()
 const inputId = `share-code-${useId()}`
+const inputRef = ref<{ focus: () => void } | null>(null)
 const code = ref(normalizeShareCode(props.initialCode))
 const invalid = ref(false)
+
+onMounted(() => {
+  if (props.autofocus) {
+    void nextTick(() => inputRef.value?.focus())
+  }
+})
 
 watch(
   () => props.initialCode,
