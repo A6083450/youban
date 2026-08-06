@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import {
   CarOutlined,
   ClockCircleOutlined,
+  CompassOutlined,
   EnvironmentOutlined,
   HomeOutlined,
   ShopOutlined,
@@ -11,7 +12,7 @@ import {
   TagOutlined,
 } from '@ant-design/icons-vue'
 import { useI18n } from 'vue-i18n'
-import type { DayPlan, TripPlan } from '@/types'
+import type { DayPlan, Location, TripPlan } from '@/types'
 import type { ItineraryDayGroup, ItineraryDisplayMode } from '@/utils/tripPresentation.js'
 import {
   buildDayTimeline,
@@ -19,6 +20,7 @@ import {
   parseTripDate,
   resolveItineraryDisplayMode,
 } from '@/utils/tripPresentation.js'
+import { buildAmapNavigationUrl } from '@/utils/tripNavigation'
 
 const props = defineProps<{
   tripPlan: TripPlan
@@ -90,6 +92,9 @@ const mealLabel = (type: string): string => {
   const translated = t(key)
   return translated === key ? type : translated
 }
+
+const navigationUrl = (name: string, location?: Location | null): string | null =>
+  buildAmapNavigationUrl(name, location)
 </script>
 
 <template>
@@ -186,6 +191,17 @@ const mealLabel = (type: string): string => {
               <span v-if="entry.item.estimated_cost" class="daily-timeline__meta">
                 ¥{{ entry.item.estimated_cost }}
               </span>
+              <a
+                v-if="navigationUrl(entry.item.name, entry.item.location)"
+                class="daily-timeline__navigate"
+                :href="navigationUrl(entry.item.name, entry.item.location)!"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <CompassOutlined aria-hidden="true" />
+                {{ t('result.daily.navigate') }}
+                <span class="sr-only">{{ entry.item.name }}</span>
+              </a>
             </template>
 
             <template v-else>
@@ -228,6 +244,17 @@ const mealLabel = (type: string): string => {
                   <p v-if="entry.item.reservation_required" class="daily-timeline__reservation">
                     {{ entry.item.reservation_tips || t('result.reservationRequired') }}
                   </p>
+                  <a
+                    v-if="navigationUrl(entry.item.name, entry.item.location)"
+                    class="daily-timeline__navigate"
+                    :href="navigationUrl(entry.item.name, entry.item.location)!"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <CompassOutlined aria-hidden="true" />
+                    {{ t('result.daily.navigate') }}
+                    <span class="sr-only">{{ entry.item.name }}</span>
+                  </a>
                 </div>
               </div>
             </template>
@@ -588,6 +615,46 @@ const mealLabel = (type: string): string => {
   font-weight: 600;
 }
 
+.daily-timeline__navigate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  min-block-size: 32px;
+  margin-block-start: 2px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.daily-timeline__navigate:hover {
+  border-color: var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+.daily-timeline__navigate:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .daily-itinerary__empty {
   margin: 0;
   padding: 24px 0;
@@ -606,6 +673,11 @@ const mealLabel = (type: string): string => {
 
   .daily-timeline__details--with-image {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .daily-timeline__navigate {
+    min-block-size: 44px;
+    padding-inline: 16px;
   }
 }
 

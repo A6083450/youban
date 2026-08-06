@@ -48,6 +48,10 @@
                 <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 {{ t('result.exportImage') }}
               </a-button>
+              <a-button type="default" @click="exportAsCalendar" class="action-btn">
+                <CalendarOutlined class="action-icon" />
+                {{ t('result.exportCalendar') }}
+              </a-button>
             </a-space>
           </div>
         </div>
@@ -351,7 +355,7 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
-import { ShareAltOutlined } from '@ant-design/icons-vue'
+import { CalendarOutlined, ShareAltOutlined } from '@ant-design/icons-vue'
 import { gsap } from 'gsap'
 import html2canvas from 'html2canvas'
 import dayjs from 'dayjs'
@@ -393,6 +397,7 @@ import { notifyPlansUpdated } from '@/stores/plans'
 import { canUseCachedPlan } from '@/utils/planConversation.js'
 import { normalizeReferenceTime, resolveTripBlueprint } from '@/utils/tripPresentation.js'
 import { findTodayArrayIndex } from '@/utils/tripExecution'
+import { buildTripCalendar, countCalendarEvents } from '@/utils/tripCalendar'
 
 const props = withDefaults(defineProps<{ planId?: string; readonly?: boolean }>(), {
   readonly: false,
@@ -1801,6 +1806,35 @@ const exportAsImage = async () => {
     message.error({ content: t('result.messages.imageFailed', { error: error.message }), key: 'export' })
   }
 }
+// 导出为日历订阅文件（.ics）
+const exportAsCalendar = () => {
+  const plan = tripPlan.value
+  if (!plan) return
+
+  if (countCalendarEvents(plan) === 0) {
+    message.warning(t('result.messages.calendarEmpty'))
+    return
+  }
+
+  let url = ''
+  try {
+    const blob = new Blob([buildTripCalendar(plan)], {
+      type: 'text/calendar;charset=utf-8',
+    })
+    url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.download = `${t('result.export.filePrefix')}_${plan.city}_${plan.start_date}.ics`
+    link.href = url
+    link.click()
+    message.success(t('result.messages.calendarSuccess'))
+  } catch (error: any) {
+    console.error('导出日历失败:', error)
+    message.error(t('result.messages.calendarFailed', { error: error.message }))
+  } finally {
+    if (url) URL.revokeObjectURL(url)
+  }
+}
+
 const escapeHtml = (value: unknown): string => {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
