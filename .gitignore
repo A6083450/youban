@@ -20,6 +20,7 @@ output
 .codegraph
 .claude
 .superpowers
+.worktrees/
 .idea
 .debug-journal.md
 *.png
