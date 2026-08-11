@@ -420,7 +420,7 @@ youban/
 │   └── users.json              # 用户数据
 ├── imgs/                        # 截图资源
 │   ├── pc/                     # PC 端截图
-│   └── phome/                  # 移动端截图
+│   └── mobile/                 # 移动端截图
 ├── Dockerfile                  # 生产环境镜像
 ├── Dockerfile.dev              # 开发环境镜像
 ├── docker-compose.yaml         # 生产环境编排
