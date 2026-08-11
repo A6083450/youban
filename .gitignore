@@ -26,3 +26,4 @@ output
 *.png
 !imgs/**/*.png
 youban-spec
+/docs/superpowers
