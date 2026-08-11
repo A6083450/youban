@@ -53,6 +53,7 @@ const mobileViewports = [
 for (const viewport of mobileViewports) {
   test(`keeps ongoing trips compact inside the ${viewport.name} mobile viewport`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await page.clock.setFixedTime(new Date('2026-08-05T12:00:00+08:00'))
     await mockOngoingTrips(page)
     await page.goto('/')
 

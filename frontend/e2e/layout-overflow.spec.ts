@@ -210,19 +210,13 @@ test('keeps the budget card inside the main pane at a 1024px viewport', async ({
 test('centers the plan conversation panel in the desktop main pane', async ({ page }) => {
   await preparePlanPage(page)
 
-  const centers = await page.evaluate(() => {
-    const main = document.querySelector<HTMLElement>('.main-area')
-    const panel = document.querySelector<HTMLElement>('.agent-dock')
-    const mainRect = main?.getBoundingClientRect()
-    const panelRect = panel?.getBoundingClientRect()
-
-    return {
-      main: mainRect ? mainRect.left + mainRect.width / 2 : 0,
-      panel: panelRect ? panelRect.left + panelRect.width / 2 : 0,
-    }
-  })
-
-  expect(Math.abs(centers.main - centers.panel)).toBeLessThanOrEqual(1)
+  await expect.poll(() => page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('.main-area')?.getBoundingClientRect()
+    const panel = document.querySelector<HTMLElement>('.agent-dock')?.getBoundingClientRect()
+    return main && panel
+      ? Math.abs(main.left + main.width / 2 - panel.left - panel.width / 2)
+      : Number.POSITIVE_INFINITY
+  })).toBeLessThanOrEqual(1)
 })
 
 test('renders an unframed two-column overview waterfall on narrow screens', async ({ page }) => {
