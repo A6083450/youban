@@ -46,81 +46,66 @@
 
 ## 🆕 本次更新
 
-- **旅行蓝图**：AI 生成旅程主题、阶段划分、路线逻辑、节奏与亮点；旧行程缺少蓝图时会按城市连续区间生成兼容视图。
-- **自适应每日行程**：新增日/周/月分组切换，参考时间线统一展示城际移动、景点与餐饮，长行程默认按周或月组织。
-- **更清晰的结果页**：行程概览改为响应式瀑布流，蓝图和每日行程使用连续阅读布局，并修复窄屏溢出与滚动定位。
-- **安全分享码**：计划拥有者显式发布后生成可复用的 32 位随机分享码；公开页面只读最终行程，不暴露用户、对话和任务过程数据。
-- **分享入口**：登录页、桌面侧栏和移动端抽屉均可输入分享码，分享弹窗支持复制链接、复制分享码和下载二维码。
-- **质量保障**：补充后端模型/API 回归测试、前端展示工具测试和 Playwright 端到端布局/分享场景。
+- **规划首页**：进行中旅程可以直接回到今日行程。
+- **今日行程**：按实际执行进度打卡、跳过并查看当天回响。
+- **行程总览**：旅行蓝图、路线脉络和代表体验集中展示。
+- **出行衔接**：每日地点支持一键导航，完整行程可导出为日历文件。
+- **生成体验**：使用当前品牌化加载状态，并保留任务恢复与失败重试能力。
 
 ---
 
 ## 🖼️ 应用展示
 
-### 💻 PC 端
+### PC 端
 
-#### 1. 登录界面 - 昵称登录，无需密码
+#### 1. 开始使用 - 昵称登录，无需密码
 
 <p align="center">
-  <img src="imgs/pc/1.png" alt="登录界面" width="800">
+  <img src="imgs/pc/login.png" alt="开始使用" width="800">
 </p>
 
-#### 2. 主界面 - 一句话描述你的旅行
+#### 2. 规划首页 - 描述旅程，继续进行中的行程
 
 <p align="center">
-  <img src="imgs/pc/2.png" alt="主界面" width="800">
+  <img src="imgs/pc/planning-home.png" alt="规划首页" width="800">
 </p>
 
-#### 3. 对话交互 - AI 理解你的需求并确认
+#### 3. 对话确认 - 游伴理解需求并与你确认
 
 <p align="center">
-  <img src="imgs/pc/3.png" alt="对话交互" width="800">
+  <img src="imgs/pc/requirements-confirmation.png" alt="对话确认" width="800">
 </p>
 
-#### 4. 行程生成 - 实时展示生成进度
+#### 4. 生成行程 - 清晰展示当前规划进度
 
 <p align="center">
-  <img src="imgs/pc/4.png" alt="行程生成" width="800">
+  <img src="imgs/pc/generation-progress.png" alt="生成行程" width="800">
 </p>
 
-#### 5. 行程概览 - 景点卡片一目了然
+#### 5. 行程总览 - 从旅行蓝图把握整段旅程
 
 <p align="center">
-  <img src="imgs/pc/5.png" alt="行程概览" width="800">
+  <img src="imgs/pc/trip-overview.png" alt="行程总览" width="800">
 </p>
 
-#### 6. 预算明细 - 详细费用分类统计
+#### 6. 详细日程 - 查看安排、发起导航并加入日历
 
 <p align="center">
-  <img src="imgs/pc/6.png" alt="预算明细" width="800">
-</p>
-
-#### 7. 每日行程 - 景点、住宿、餐饮安排
-
-<p align="center">
-  <img src="imgs/pc/7.png" alt="每日行程" width="800">
-</p>
-
-#### 8. 天气信息 - 出行天气预报
-
-<p align="center">
-  <img src="imgs/pc/8.png" alt="天气信息" width="800">
+  <img src="imgs/pc/daily-itinerary.png" alt="详细日程" width="800">
 </p>
 
 ---
 
-### 📱 移动端
+### 移动端
 
 <p align="center">
-  <img src="imgs/phome/1.png" alt="移动端登录" width="200">
+  <img src="imgs/mobile/planning-home.png" alt="随时开始规划" width="200">
   &nbsp;&nbsp;
-  <img src="imgs/phome/2.png" alt="移动端聊天" width="200">
+  <img src="imgs/mobile/planning-progress.png" alt="查看规划进度" width="200">
   &nbsp;&nbsp;
-  <img src="imgs/phome/3.png" alt="移动端生成" width="200">
+  <img src="imgs/mobile/today-trip.png" alt="跟随今日行程" width="200">
   &nbsp;&nbsp;
-  <img src="imgs/phome/4.png" alt="移动端结果" width="200">
-  &nbsp;&nbsp;
-  <img src="imgs/phome/5.png" alt="移动端分享" width="200">
+  <img src="imgs/mobile/trip-details-share.png" alt="查看并分享完整计划" width="200">
 </p>
 
 ---
@@ -158,6 +143,9 @@
 - **行程编辑** - 随时修改已规划行程
 - **收藏功能** - 收藏喜欢的行程
 - **导出功能** - 导出行程为图片
+- **一键导航** - 从每日地点直接发起导航
+- **日历导出** - 将完整行程加入日历
+- **今日反馈** - 记录打卡和跳过后的当天回响
 
 ### 📱 分享功能
 - **显式发布** - 仅计划拥有者可以为已完成行程创建分享码
