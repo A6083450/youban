@@ -2,6 +2,8 @@ import axios from 'axios'
 import type {
   AdminTripItem,
   BackendRuntimeSettings,
+  BudgetItemInput,
+  BudgetLedgerResponse,
   ChatMessage,
   CreateTripShareResponse,
   ExecutionEntry,
@@ -641,6 +643,46 @@ export async function updateItemStatus(
   } catch (error: any) {
     throw new Error(error.response?.data?.detail || error.message || 'update item status failed')
   }
+}
+
+export async function getBudgetItems(planId: string): Promise<BudgetLedgerResponse> {
+  const response = await apiClient.get(
+    `/api/trip/plan/${encodeURIComponent(planId)}/budget-items`,
+  )
+  return response.data as BudgetLedgerResponse
+}
+
+export async function createBudgetItem(
+  planId: string,
+  payload: BudgetItemInput,
+): Promise<BudgetLedgerResponse> {
+  const response = await apiClient.post(
+    `/api/trip/plan/${encodeURIComponent(planId)}/budget-items`,
+    payload,
+  )
+  return response.data as BudgetLedgerResponse
+}
+
+export async function updateBudgetItem(
+  planId: string,
+  itemId: string,
+  payload: Partial<BudgetItemInput> & { deleted?: boolean },
+): Promise<BudgetLedgerResponse> {
+  const response = await apiClient.patch(
+    `/api/trip/plan/${encodeURIComponent(planId)}/budget-items/${encodeURIComponent(itemId)}`,
+    payload,
+  )
+  return response.data as BudgetLedgerResponse
+}
+
+export async function deleteBudgetItem(
+  planId: string,
+  itemId: string,
+): Promise<BudgetLedgerResponse> {
+  const response = await apiClient.delete(
+    `/api/trip/plan/${encodeURIComponent(planId)}/budget-items/${encodeURIComponent(itemId)}`,
+  )
+  return response.data as BudgetLedgerResponse
 }
 
 /**

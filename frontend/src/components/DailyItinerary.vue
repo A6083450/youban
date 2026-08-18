@@ -164,7 +164,9 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
                 <strong v-if="item.day.hotel?.name">{{ item.day.hotel.name }}</strong>
                 <span>{{ item.day.accommodation }}</span>
                 <span v-if="item.day.hotel?.address">{{ item.day.hotel.address }}</span>
+                <span v-if="item.day.hotel?.source === 'amap'">{{ t('result.hotelVerifiedByAmap') }}</span>
                 <span v-if="item.day.hotel?.price_range">{{ item.day.hotel.price_range }}</span>
+                <span v-if="item.day.hotel?.price_status === 'unavailable'">{{ t('result.hotelPriceUnavailable') }}</span>
               </dd>
             </div>
           </dl>

@@ -21,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import RetryPolicy
 
+from ..config import get_settings
 from ..models.schemas import TripPlan, TripRequest
 from ..services.llm_service import get_chat_model
 from .trip_plan_orchestrator import (
@@ -29,6 +30,7 @@ from .trip_plan_orchestrator import (
     build_weather_info,
     merge_segment_days,
     normalize_checkpoint,
+    parse_hotel_candidates,
     parse_segment_output,
 )
 from .trip_research_agents import (
@@ -58,16 +60,7 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
       "description": "第1天行程概述",
       "transportation": "交通方式",
       "accommodation": "住宿类型",
-      "hotel": {
-        "name": "酒店名称",
-        "address": "酒店地址",
-        "location": {"longitude": 116.397128, "latitude": 39.916527},
-        "price_range": "300-500元",
-        "rating": "4.5",
-        "distance": "距离景点2公里",
-        "type": "经济型酒店",
-        "estimated_cost": 400
-      },
+      "hotel_id": "高德酒店POI ID或null",
       "attractions": [
         {
           "name": "景点名称",
@@ -105,7 +98,7 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
   "overall_suggestions": "总体建议",
   "budget": {
     "total_attractions": 180,
-    "total_hotels": 1200,
+    "total_hotels": 0,
     "total_meals": 480,
     "total_transportation": 200,
     "total_inter_city_transport": 0,
@@ -146,7 +139,7 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
 7. **必须包含预算信息**:
    - 景点门票价格(ticket_price)
    - 餐饮预估费用(estimated_cost)
-   - 酒店预估费用(estimated_cost)
+   - 酒店价格由后端供应商提供，当前 total_hotels 必须为 0，禁止估算
    - 预算汇总(budget)包含各项总费用
 8. **预约信息透传**: 如果景点搜索数据中包含 reservation_required 和 reservation_tips 字段，请务必将它们完整保留在对应景点的JSON中。需要预约的景点请在 description 中也提醒游客提前预约
 9. **景点图片**: 不需要在JSON中填写 image_url 字段，图片由前端根据景点名称自动从高德地图获取。
@@ -157,7 +150,8 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
     - budget 中的 "total_inter_city_transport" 统计城际交通费用(单城市时为0)
     - "cities" 数组列出所有途经城市(单城市时只有一个元素)
 11. transfer_time、景点 start_time/end_time 和餐饮 time 都是 HH:MM 格式的**参考时间**，仅用于安排节奏，不是实时班次、到达或预约确认；不得编造火车/航班号、具体班次、座位、实时出到达信息或任何预约结果。
-12. 必须生成完整 blueprint：所有 day_index 必须恰好出现一次；每个 stage 的 highlights 最多 3 项；blueprint 只说明旅行主题、阶段、路线和体力逻辑，不得复制酒店名称、住宿信息、餐饮推荐或菜品等明细。
+12. 酒店只能通过 hotel_id 从提供的高德候选列表中选择；禁止生成酒店名称、地址、坐标和价格。没有候选酒店时 hotel_id 必须为 null。
+13. 必须生成完整 blueprint：所有 day_index 必须恰好出现一次；每个 stage 的 highlights 最多 3 项；blueprint 只说明旅行主题、阶段、路线和体力逻辑，不得复制酒店名称、住宿信息、餐饮推荐或菜品等明细。
 """
 
 
@@ -217,10 +211,7 @@ def _fetch_weather_text(city: str) -> str:
 def _fetch_hotels_text(city: str, accommodation: str) -> str:
     from ..services.amap_service import get_amap_service
     try:
-        svc = get_amap_service()
-        pois = svc.search_poi(accommodation or "酒店", city)
-        if not pois:
-            pois = svc.search_poi("酒店", city)
+        pois = get_amap_service().search_hotels(city, accommodation)
         return json.dumps([p.model_dump() for p in pois[:10]], ensure_ascii=False)
     except Exception as e:
         return f"{city} 酒店搜索失败: {e}"
@@ -337,12 +328,13 @@ async def research_trip(state: PlannerState, runtime: "Runtime[PlannerContext]")
 SEGMENT_AGENT_PROMPT = """你是分段行程规划者。只规划指定分段并输出严格 JSON，禁止输出解释文字：
 {"segment_id":"seg-01","days":[{"date":"YYYY-MM-DD","day_index":0,"city":"城市",\
 "description":"当日概述","transportation":"市内交通","accommodation":"住宿安排",\
-"hotel":{"name":"酒店","estimated_cost":300},\
+"hotel_id":"高德酒店POI ID或null",\
 "attractions":[{"name":"景点","address":"地址","location":{"longitude":116.4,"latitude":39.9},\
 "visit_duration":120,"description":"说明","ticket_price":0}],\
 "meals":[{"type":"lunch","name":"餐厅","estimated_cost":50}]}]}
 禁止输出 budget、overall_suggestions、blueprint、weather_info。每天必须严格使用指定的 day_index、date、city，
-并生成可执行的景点、餐饮、交通和住宿安排；所有价格只能是数字。"""
+并生成可执行的景点、餐饮、交通和住宿安排；所有价格只能是数字。
+酒店只能填写候选列表中的 hotel_id，禁止输出 hotel 对象、酒店名称、地址、坐标或价格；候选列表为空时 hotel_id 必须为 null。"""
 
 SUMMARY_AGENT_PROMPT = """你负责根据完整行程生成总体建议与旅行蓝图。
 只输出严格 JSON：{"overall_suggestions":"...","blueprint":null}。不得修改或重写 days。"""
@@ -361,7 +353,8 @@ def _completed_previous_boundary(segment: dict, checkpoint: dict) -> str:
         return "无已完成的前一段边界"
     day = days[-1]
     return json.dumps({
-        "city": day.get("city"), "hotel": day.get("hotel"),
+        "city": day.get("city"),
+        "hotel_id": (day.get("hotel") or {}).get("source_hotel_id"),
         "accommodation": day.get("accommodation"),
     }, ensure_ascii=False)
 
@@ -394,7 +387,7 @@ def _build_segment_query(request, segment, attractions, weather, hotels,
         f"segment_id: {segment['segment_id']}\n精确日期与城市: {json.dumps(days, ensure_ascii=False)}\n"
         f"前一段边界: {boundary}\n下一段请求城市: {_next_city(request, segment)}\n"
         f"景点: {attractions.get(segment['city'], '无')}\n天气: {weather.get(segment['city'], '无')}\n"
-        f"酒店: {hotels.get(segment['city'], '无')}\n用户记忆: {memory_context or '无'}\n"
+        f"高德已验证酒店候选: {hotels.get(segment['city'], '[]')}\n用户记忆: {memory_context or '无'}\n"
         f"交通: {request.transportation};住宿偏好: {request.accommodation};"
         f"额外要求: {request.free_text_input or '无'}\n上次错误: {previous_error or '无'}\n"
         f"语言要求: {_language_instruction(request)}"
@@ -402,6 +395,9 @@ def _build_segment_query(request, segment, attractions, weather, hotels,
 
 
 async def _generate_segment(model, request, segment, state) -> list[dict]:
+    hotel_candidates = parse_hotel_candidates(
+        state.get("hotels", {}).get(segment["city"], "[]")
+    )
     query = _build_segment_query(
         request, segment, state.get("attractions", {}), state.get("weather", {}),
         state.get("hotels", {}), state.get("memory_context", ""),
@@ -412,7 +408,13 @@ async def _generate_segment(model, request, segment, state) -> list[dict]:
         {"role": "system", "content": SEGMENT_AGENT_PROMPT},
         {"role": "user", "content": query},
     ])
-    output = parse_segment_output(response.text, segment)
+    output = parse_segment_output(
+        response.text,
+        segment,
+        hotel_candidates=hotel_candidates,
+        allow_llm_hotel_fallback=get_settings().allow_llm_hotel_fallback,
+        last_travel_day_index=request.travel_days - 1,
+    )
     _validate_segment_days(request, segment, output)
     return output
 
@@ -427,17 +429,33 @@ def _validate_segment_days(request: TripRequest, segment: dict, days: list[dict]
             raise ValueError("城市与分段范围不符")
 
 
-def _prepare_segments(request: TripRequest, checkpoint: dict) -> tuple[list[dict], bool]:
+def _prepare_segments(
+    request: TripRequest,
+    checkpoint: dict,
+    hotels: Optional[dict[str, str]] = None,
+) -> tuple[list[dict], bool]:
     segments = build_segments(request)
     changed = False
+    allow_fallback = get_settings().allow_llm_hotel_fallback
     for segment in segments:
+        hotel_candidates = parse_hotel_candidates(
+            (hotels or {}).get(segment["city"], "[]")
+        )
         saved = checkpoint["segments"].get(segment["segment_id"])
         if saved and saved.get("day_indices") == segment["day_indices"]:
             try:
                 if saved["status"] == "completed":
-                    output = parse_segment_output(json.dumps({
-                        "segment_id": segment["segment_id"], "days": saved["output"],
-                    }), segment)
+                    output = parse_segment_output(
+                        json.dumps({
+                            "segment_id": segment["segment_id"],
+                            "days": saved["output"],
+                        }),
+                        segment,
+                        hotel_candidates=hotel_candidates,
+                        allow_llm_hotel_fallback=allow_fallback,
+                        trusted_hotel_data=True,
+                        last_travel_day_index=request.travel_days - 1,
+                    )
                     _validate_segment_days(request, segment, output)
                     continue
             except (ValueError, TypeError):
@@ -639,7 +657,7 @@ async def _revise_selected(model, request, segments, review, state, runtime,
 async def plan_itinerary(state: PlannerState, runtime: "Runtime[PlannerContext]") -> dict:
     request = _request_from(state)
     checkpoint = state["checkpoint"]
-    segments, changed = _prepare_segments(request, checkpoint)
+    segments, changed = _prepare_segments(request, checkpoint, state.get("hotels", {}))
     revision_resume = checkpoint["review"].get("error") == _REVISION_CONSUMED
     if changed:
         checkpoint["summary"].update(status="pending", output=None, error="")
@@ -867,11 +885,11 @@ def _build_planner_query(
 **要求:**
 1. 每天安排2-3个景点(城际移动日可减少为1-2个)
 2. 每天必须包含早中晚三餐
-3. 每天推荐一个具体的酒店(从酒店信息中选择)
+3. 每天只能填写酒店信息中的高德 POI ID 到 hotel_id，不得生成酒店名称、地址、坐标和价格；无候选时填 null
 4. 考虑景点之间的距离和交通方式
 5. 返回完整的JSON格式数据
 6. 景点的经纬度坐标要真实准确
-7. 如果天气或酒店信息不足，请基于保守、通用的旅行建议补齐，但不要输出"无法查询"之类的解释文字
+7. 天气信息不足时可使用保守建议；酒店信息不足时 hotel_id 必须为 null，绝对不能自行补齐酒店
 """
         if is_multi_city:
             query += """
@@ -893,7 +911,7 @@ def _build_planner_query(
             _lang_names = {"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
             _target_lang = _lang_names.get(_lang, _lang)
             query += f"""\n\n**语言要求 (Language Requirement):**
-请用 {_target_lang} 语言输出所有文字内容（包括 description, overall_suggestions, meals 中的 name/description, hotel 中的 name/address, attractions 中的 name/address/description 等）。
+请用 {_target_lang} 语言输出所有文字内容（包括 description, overall_suggestions, meals 中的 name/description, attractions 中的 name/address/description 等）。
 JSON 的 key 名称保持英文不变，只翻译 value 中的文字。"""
 
         return query

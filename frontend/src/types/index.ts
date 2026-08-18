@@ -47,6 +47,9 @@ export interface Hotel {
   distance: string
   type: string
   estimated_cost?: number
+  source?: string
+  source_hotel_id?: string
+  price_status?: 'unavailable' | 'estimated' | 'live'
 }
 
 export interface Budget {
@@ -55,7 +58,40 @@ export interface Budget {
   total_meals: number
   total_transportation: number
   total_inter_city_transport?: number
+  total_other?: number
   total: number
+}
+
+export type BudgetItemType = 'attraction' | 'hotel' | 'meal' | 'transport' | 'other'
+
+export interface BudgetLedgerItem {
+  id: string
+  type: BudgetItemType
+  day_index: number | null
+  name: string
+  amount: number | null
+  origin: 'itinerary' | 'user'
+  price_source: 'unavailable' | 'estimated' | 'live' | 'user'
+  linked_item_id: string
+  entity_source: string
+  note: string
+  user_locked: boolean
+  deleted: boolean
+}
+
+export interface BudgetLedgerResponse {
+  plan_id: string
+  items: BudgetLedgerItem[]
+  totals: Budget
+  pending_count: number
+}
+
+export interface BudgetItemInput {
+  type: BudgetItemType
+  day_index: number | null
+  name: string
+  amount: number | null
+  note?: string
 }
 
 export interface DayPlan {

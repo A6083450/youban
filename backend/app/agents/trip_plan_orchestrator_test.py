@@ -65,6 +65,25 @@ def _day(day_index, city="北京", attraction_cost=0, hotel_cost=0, meal_cost=0)
     }
 
 
+HOTEL_CANDIDATES = {
+    "amap-hotel-1": {
+        "id": "amap-hotel-1",
+        "name": "高德测试酒店",
+        "type": "住宿服务;宾馆酒店",
+        "address": "北京市测试路1号",
+        "location": {"longitude": 116.41, "latitude": 39.91},
+        "tel": None,
+    },
+}
+
+
+def _agent_day(day_index, city="北京"):
+    day = _day(day_index, city=city)
+    day.pop("hotel")
+    day["hotel_id"] = "amap-hotel-1"
+    return day
+
+
 def _segment(day_indices, segment_id="seg-01"):
     return {
         "segment_id": segment_id,
@@ -187,46 +206,52 @@ class CheckpointTest(unittest.TestCase):
 class SegmentOutputTest(unittest.TestCase):
     def test_parse_valid_segment(self):
         days = parse_segment_output(
-            json.dumps({"segment_id": "seg-01", "days": [_day(0)]}),
+            json.dumps({"segment_id": "seg-01", "days": [_agent_day(0)]}),
             _segment([0]),
+            hotel_candidates=HOTEL_CANDIDATES,
         )
         self.assertEqual([day["day_index"] for day in days], [0])
+        self.assertEqual(days[0]["hotel"]["source"], "amap")
+        self.assertEqual(days[0]["hotel"]["source_hotel_id"], "amap-hotel-1")
+        self.assertEqual(days[0]["hotel"]["estimated_cost"], 0)
 
     def test_parse_tolerates_fenced_json_and_trailing_comma(self):
-        payload = json.dumps({"segment_id": "seg-01", "days": [_day(0)]})
+        payload = json.dumps({"segment_id": "seg-01", "days": [_agent_day(0)]})
         text = f"```json\n{payload[:-1]},}}\n```"
-        days = parse_segment_output(text, _segment([0]))
+        days = parse_segment_output(text, _segment([0]), hotel_candidates=HOTEL_CANDIDATES)
         self.assertEqual([day["day_index"] for day in days], [0])
 
     def test_rejects_missing_or_extra_day(self):
         with self.assertRaisesRegex(ValueError, "day_index"):
             parse_segment_output(
-                json.dumps({"segment_id": "seg-01", "days": [_day(1)]}),
+                json.dumps({"segment_id": "seg-01", "days": [_agent_day(1)]}),
                 _segment([0]),
+                hotel_candidates=HOTEL_CANDIDATES,
             )
 
     def test_rejects_wrong_segment_id(self):
         with self.assertRaisesRegex(ValueError, "segment_id"):
             parse_segment_output(
-                json.dumps({"segment_id": "seg-02", "days": [_day(0)]}),
+                json.dumps({"segment_id": "seg-02", "days": [_agent_day(0)]}),
                 _segment([0]),
+                hotel_candidates=HOTEL_CANDIDATES,
             )
 
     def test_rejects_multiple_top_level_json_values(self):
         text = " ".join([
-            json.dumps({"segment_id": "seg-01", "days": [_day(0)]}),
-            json.dumps({"segment_id": "seg-02", "days": [_day(0)]}),
+            json.dumps({"segment_id": "seg-01", "days": [_agent_day(0)]}),
+            json.dumps({"segment_id": "seg-02", "days": [_agent_day(0)]}),
         ])
         with self.assertRaisesRegex(ValueError, "额外 JSON"):
             parse_segment_output(text, _segment([0]))
 
     def test_rejects_unknown_segment_field(self):
-        payload = {"segment_id": "seg-01", "days": [_day(0)], "budget": {}}
+        payload = {"segment_id": "seg-01", "days": [_agent_day(0)], "budget": {}}
         with self.assertRaisesRegex(ValueError, "未知字段"):
             parse_segment_output(json.dumps(payload), _segment([0]))
 
     def test_rejects_repaired_object_followed_by_another_json_value(self):
-        valid = json.dumps({"segment_id": "seg-01", "days": [_day(0)]})
+        valid = json.dumps({"segment_id": "seg-01", "days": [_agent_day(0)]})
         broken = valid.replace('", "days"', '" "days"', 1)
         with self.assertRaisesRegex(ValueError, "额外 JSON"):
             parse_segment_output(f"{broken} {{}}", _segment([0]))
@@ -234,6 +259,55 @@ class SegmentOutputTest(unittest.TestCase):
     def test_rejects_non_object_top_level_with_value_error(self):
         with self.assertRaisesRegex(ValueError, "JSON object"):
             parse_segment_output(json.dumps([{"segment_id": "seg-01", "days": []}]), _segment([0]))
+
+    def test_rejects_agent_generated_hotel_object(self):
+        with self.assertRaisesRegex(ValueError, "Agent 不得生成酒店"):
+            parse_segment_output(
+                json.dumps({"segment_id": "seg-01", "days": [_day(0)]}),
+                _segment([0]),
+                hotel_candidates=HOTEL_CANDIDATES,
+            )
+
+    def test_rejects_unknown_hotel_id(self):
+        day = _agent_day(0)
+        day["hotel_id"] = "made-up-hotel"
+        with self.assertRaisesRegex(ValueError, "hotel_id 不在"):
+            parse_segment_output(
+                json.dumps({"segment_id": "seg-01", "days": [day]}),
+                _segment([0]),
+                hotel_candidates=HOTEL_CANDIDATES,
+            )
+
+    def test_allows_null_hotel_only_when_no_verified_candidates_exist(self):
+        day = _agent_day(0)
+        day["hotel_id"] = None
+        result = parse_segment_output(
+            json.dumps({"segment_id": "seg-01", "days": [day]}),
+            _segment([0]),
+        )
+        self.assertIsNone(result[0]["hotel"])
+
+    def test_uses_first_verified_candidate_when_agent_omits_hotel_id(self):
+        day = _agent_day(0)
+        day["hotel_id"] = None
+        result = parse_segment_output(
+            json.dumps({"segment_id": "seg-01", "days": [day]}),
+            _segment([0]),
+            hotel_candidates=HOTEL_CANDIDATES,
+        )
+        self.assertEqual(result[0]["hotel"]["source"], "amap")
+        self.assertEqual(result[0]["hotel"]["source_hotel_id"], "amap-hotel-1")
+        self.assertEqual(result[0]["hotel"]["estimated_cost"], 0)
+
+    def test_last_travel_day_never_adds_an_extra_hotel_night(self):
+        result = parse_segment_output(
+            json.dumps({"segment_id": "seg-01", "days": [_agent_day(0), _agent_day(1)]}),
+            _segment([0, 1]),
+            hotel_candidates=HOTEL_CANDIDATES,
+            last_travel_day_index=1,
+        )
+        self.assertEqual(result[0]["hotel"]["source"], "amap")
+        self.assertIsNone(result[1]["hotel"])
 
 
 class MergeAndBudgetTest(unittest.TestCase):

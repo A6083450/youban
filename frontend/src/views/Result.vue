@@ -130,6 +130,7 @@
                       <a-select-option value="hotel">{{ t('result.budget.hotel') }}</a-select-option>
                       <a-select-option value="meal">{{ t('result.budget.meal') }}</a-select-option>
                       <a-select-option value="transport">{{ t('result.budget.transport') }}</a-select-option>
+                      <a-select-option value="other">{{ t('result.budget.other') }}</a-select-option>
                     </a-select>
                   </div>
                   <div class="budget-toolbar-item">
@@ -141,6 +142,16 @@
                       <a-select-option value="dayDesc">{{ t('result.budget.sortDayDesc') }}</a-select-option>
                     </a-select>
                   </div>
+                  <a-button
+                    v-if="!props.readonly"
+                    type="primary"
+                    class="budget-add-btn"
+                    :disabled="budgetLoading"
+                    @click="openBudgetEditor()"
+                  >
+                    <template #icon><PlusOutlined /></template>
+                    {{ t('result.budget.addItem') }}
+                  </a-button>
                 </div>
 
                 <div v-if="filteredBudgetItems.length > 0" class="budget-detail-list">
@@ -162,30 +173,33 @@
                   >
                     <span class="budget-detail-type">{{ getBudgetTypeLabel(item.type) }}</span>
                     <span class="budget-detail-day">
-                      {{ item.dayNumber ? t('common.dayNumber', { day: item.dayNumber }) : '--' }}
+                      {{ item.dayNumber ? t('common.dayNumber', { day: item.dayNumber }) : t('result.budget.wholeTrip') }}
                     </span>
-                    <span class="budget-detail-name">{{ item.name }}</span>
-                    <span class="budget-detail-amount">¥{{ formatBudgetAmount(item.amount) }}</span>
+                    <span class="budget-detail-name">
+                      <span>{{ item.name }}</span>
+                      <span v-if="item.origin === 'user' || item.user_locked" class="budget-origin-tag">
+                        {{ t('result.budget.userDiy') }}
+                      </span>
+                    </span>
+                    <span class="budget-detail-amount" :class="{ 'budget-detail-amount--pending': item.amount === null }">
+                      {{ item.amount === null ? t('result.budget.amountPending') : `¥${formatBudgetAmount(item.amount)}` }}
+                    </span>
                     <span v-if="!props.readonly" class="budget-action-wrap">
                       <button
                         type="button"
                         class="budget-icon-btn budget-edit-btn"
-                        :title="t('result.budget.editPrice')"
-                        @click="editBudgetItemAmount(item)"
+                        :title="t('result.budget.editItem')"
+                        @click="openBudgetEditor(item)"
                       >
-                        <svg fill="currentColor" width="20px" height="20px" viewBox="0 0 256.00098 256.00098" id="Flat" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M216.001,203.833h-76l27.91015-27.90967.00684-.00635.00635-.00683,56.563-56.5625a28.03348,28.03348,0,0,0-.001-39.59766L179.23145,34.49512a28.03347,28.03347,0,0,0-39.59766,0L83.07471,91.0542l-.01026.00928-.00927.01025L26.49609,147.63281a28.03171,28.03171,0,0,0,0,39.59766L63.585,224.31836a12.00286,12.00286,0,0,0,8.48535,3.51465H216.001a12,12,0,0,0,0-24ZM156.60449,51.46582a4.00207,4.00207,0,0,1,5.65625,0L207.51562,96.7207a4.005,4.005,0,0,1,0,5.65723l-48.083,48.083L108.521,99.54932ZM106.05957,203.833H77.041L43.4668,170.25977a4.00385,4.00385,0,0,1,0-5.65625L91.55029,116.52l50.91114,50.91113Z"/>
-                        </svg>
+                        <EditOutlined />
                       </button>
                       <button
                         type="button"
                         class="budget-icon-btn budget-delete-btn"
                         :title="t('common.delete')"
-                        @click="deleteBudgetItem(item)"
+                        @click="removeBudgetItem(item)"
                       >
-                        <svg fill="currentColor" width="21px" height="21px" viewBox="0 0 256 256" id="Flat" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M215.99609,48H180V36A28.03146,28.03146,0,0,0,152,8H104A28.03146,28.03146,0,0,0,76,36V48H39.99609a12,12,0,0,0,0,24h4V208a20.0226,20.0226,0,0,0,20,20h128a20.0226,20.0226,0,0,0,20-20V72h4a12,12,0,0,0,0-24ZM100,36a4.00458,4.00458,0,0,1,4-4h48a4.00458,4.00458,0,0,1,4,4V48H100Zm87.99609,168h-120V72h120ZM116,104v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Zm48,0v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Z"/>
-                        </svg>
+                        <DeleteOutlined />
                       </button>
                     </span>
                   </div>
@@ -219,30 +233,39 @@
                   <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget?.total_transportation ?? 0) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.transport') }}</div>
                 </div>
+                <div v-if="tripPlan.budget?.total_other" class="budget-summary-sub-item">
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget.total_other) }}</div>
+                  <div class="budget-summary-sub-label">{{ t('result.budget.other') }}</div>
+                </div>
                 <div v-if="tripPlan.budget?.total_inter_city_transport" class="budget-summary-sub-item">
                   <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget.total_inter_city_transport) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.interCityTransport') }}</div>
                 </div>
               </div>
 
+              <div v-if="budgetPendingCount > 0" class="budget-unpriced-status">
+                {{ t('result.budget.pendingAmountCount', { count: budgetPendingCount }) }}
+              </div>
+
               <div v-if="!props.readonly" class="budget-pending-wrap">
-                <div class="budget-pending-title">{{ t('result.budget.pendingTitle') }}</div>
-                <div v-if="pendingBudgetItems.length === 0" class="budget-pending-empty">
-                  {{ t('result.budget.pendingEmpty') }}
+                <div class="budget-pending-title">{{ t('result.budget.deletedTitle') }}</div>
+                <div v-if="deletedBudgetItems.length === 0" class="budget-pending-empty">
+                  {{ t('result.budget.deletedEmpty') }}
                 </div>
                 <div v-else class="budget-pending-list">
                   <div
-                    v-for="pendingItem in pendingBudgetItems"
-                    :key="pendingItem.uid"
+                    v-for="pendingItem in deletedBudgetItems"
+                    :key="pendingItem.id"
                     class="budget-pending-item"
                   >
-                    <span class="budget-pending-name">{{ pendingItem.base.name }}</span>
+                    <span class="budget-pending-name">{{ pendingItem.name }}</span>
                     <a-button
                       type="link"
                       size="small"
                       class="budget-restore-btn"
                       @click="restoreBudgetItem(pendingItem)"
                     >
+                      <template #icon><UndoOutlined /></template>
                       {{ t('result.budget.restore') }}
                     </a-button>
                   </div>
@@ -347,6 +370,55 @@
       v-model:open="shareModalOpen"
       :share-code="shareCode"
     />
+    <a-modal
+      v-if="!props.readonly"
+      v-model:open="budgetEditorOpen"
+      :title="budgetEditor.id ? t('result.budget.editItem') : t('result.budget.addItem')"
+      :ok-text="t('common.ok')"
+      :cancel-text="t('common.cancel')"
+      :confirm-loading="budgetSaving"
+      @ok="saveBudgetEditor"
+    >
+      <a-form layout="vertical" class="budget-editor-form">
+        <a-form-item :label="t('result.budget.detailType')" required>
+          <a-select v-model:value="budgetEditor.type">
+            <a-select-option value="attraction">{{ t('result.budget.attraction') }}</a-select-option>
+            <a-select-option value="hotel">{{ t('result.budget.hotel') }}</a-select-option>
+            <a-select-option value="meal">{{ t('result.budget.meal') }}</a-select-option>
+            <a-select-option value="transport">{{ t('result.budget.transport') }}</a-select-option>
+            <a-select-option value="other">{{ t('result.budget.other') }}</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item :label="t('result.budget.detailDay')" required>
+          <a-select v-model:value="budgetEditor.dayIndex">
+            <a-select-option :value="-1">{{ t('result.budget.wholeTrip') }}</a-select-option>
+            <a-select-option
+              v-for="day in tripPlan?.days ?? []"
+              :key="day.day_index"
+              :value="day.day_index"
+            >
+              {{ t('common.dayNumber', { day: day.day_index + 1 }) }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item :label="t('result.budget.detailName')" required>
+          <a-input v-model:value="budgetEditor.name" :maxlength="120" />
+        </a-form-item>
+        <a-form-item :label="t('result.budget.detailAmount')">
+          <a-input-number
+            v-model:value="budgetEditor.amount"
+            :min="0"
+            :max="100000000"
+            :precision="2"
+            :placeholder="t('result.budget.amountPending')"
+            class="budget-amount-input"
+          />
+        </a-form-item>
+        <a-form-item :label="t('result.budget.note')">
+          <a-input v-model:value="budgetEditor.note" :maxlength="300" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -355,7 +427,14 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
-import { CalendarOutlined, ShareAltOutlined } from '@ant-design/icons-vue'
+import {
+  CalendarOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ShareAltOutlined,
+  UndoOutlined,
+} from '@ant-design/icons-vue'
 import { gsap } from 'gsap'
 import html2canvas from 'html2canvas'
 import dayjs from 'dayjs'
@@ -370,11 +449,12 @@ import TripToday from '@/components/TripToday.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import YoubanLoader from '@/components/YoubanLoader.vue'
 import type {
-  Attraction,
+  BudgetItemInput,
+  BudgetItemType,
+  BudgetLedgerItem,
+  BudgetLedgerResponse,
   ExecutionMap,
-  Hotel,
   ItemExecutionStatus,
-  Meal,
   ShareLoadErrorKind,
   TripPlan,
   TripPlanResponse,
@@ -382,7 +462,10 @@ import type {
   WeatherInfo,
 } from '@/types'
 import {
+  createBudgetItem,
   createTripShare,
+  deleteBudgetItem as deleteBudgetLedgerItem,
+  getBudgetItems,
   getRuntimeApiBaseUrl,
   getSharedTripPlan,
   pollTaskStatus,
@@ -390,6 +473,7 @@ import {
   SharedTripPlanError,
   TripShareCreationError,
   updateItemStatus,
+  updateBudgetItem,
   watchTripTask,
 } from '@/services/api'
 import { currentUser } from '@/stores/auth'
@@ -666,49 +750,36 @@ type OverviewAttractionItem = {
   order: number
 }
 
-type BudgetItemType = 'attraction' | 'hotel' | 'meal' | 'transport'
 type BudgetSortMode = 'amountDesc' | 'amountAsc' | 'dayAsc' | 'dayDesc'
 
-type BudgetDetailItem = {
-  id: string
-  type: BudgetItemType
-  dayIndex: number | null
+type BudgetDetailItem = BudgetLedgerItem & {
   dayNumber: number | null
-  name: string
-  amount: number
-  sourceIndex?: number
 }
 
-type BudgetRestorePayload =
-  | {
-      type: 'attraction'
-      attraction: Attraction
-      insertIndex: number
-    }
-  | {
-      type: 'meal'
-      meal: Meal
-      insertIndex: number
-    }
-  | {
-      type: 'hotel'
-      hotel: Hotel
-      accommodation: string
-    }
-  | {
-      type: 'transport'
-      transportation: string
-    }
-
-type BudgetRestoreItem = {
-  uid: string
-  base: BudgetDetailItem
-  payload: BudgetRestorePayload
+type BudgetEditorState = {
+  id: string
+  type: BudgetItemType
+  dayIndex: number
+  name: string
+  amount: number | null
+  note: string
 }
 
 const budgetFilterType = ref<'all' | BudgetItemType>('all')
 const budgetSortMode = ref<BudgetSortMode>('amountDesc')
-const pendingBudgetItems = ref<BudgetRestoreItem[]>([])
+const budgetLedgerItems = ref<BudgetLedgerItem[]>([])
+const budgetPendingCount = ref(0)
+const budgetLoading = ref(false)
+const budgetSaving = ref(false)
+const budgetEditorOpen = ref(false)
+const budgetEditor = ref<BudgetEditorState>({
+  id: '',
+  type: 'other',
+  dayIndex: -1,
+  name: '',
+  amount: null,
+  note: '',
+})
 const activeWeatherIndex = ref(0)
 
 const localeTag = computed(() => {
@@ -862,7 +933,8 @@ const applyTripPlanPayload = async (payload: {
   planId?: string
 }) => {
   tripPlan.value = payload.plan
-  pendingBudgetItems.value = []
+  budgetLedgerItems.value = []
+  budgetPendingCount.value = 0
 
   if (payload.planId) {
     planId.value = payload.planId
@@ -872,18 +944,15 @@ const applyTripPlanPayload = async (payload: {
   sessionStorage.setItem('tripPlan', JSON.stringify(payload.plan))
 
   await loadAttractionPhotos()
+  if (!props.readonly && planId.value) await loadBudgetLedger(planId.value)
 }
 
-// Agent 对话修改计划:应用新计划并重算预算、刷新当前区块
+// Agent 对话修改计划后重新同步台账；用户锁定和 DIY 条目由后端保留。
 const applyAgentPlan = async (plan: TripPlan) => {
   await applyTripPlanPayload({
     plan,
     planId: planId.value,
   })
-  recalculateBudgetTotals()
-  if (tripPlan.value) {
-    sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-  }
   message.success(t('result.agent.changesTitle'))
 }
 
@@ -893,7 +962,8 @@ const restoreTripPlanFromResponse = async (
 ) => {
   if (!response?.data || (operation && !ownsPlanOperation(operation))) return false
   tripPlan.value = response.data
-  pendingBudgetItems.value = []
+  budgetLedgerItems.value = []
+  budgetPendingCount.value = 0
   const responsePlanId = String(response.plan_id || planId.value || '')
   if (responsePlanId) {
     planId.value = responsePlanId
@@ -901,6 +971,7 @@ const restoreTripPlanFromResponse = async (
   }
   sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
   await loadAttractionPhotos(operation)
+  if (!props.readonly && responsePlanId) await loadBudgetLedger(responsePlanId, operation)
   return !operation || ownsPlanOperation(operation)
 }
 
@@ -993,7 +1064,8 @@ const loadPlanById = async (targetPlanId: string) => {
   failedTaskEvent.value = null
   loadingPlan.value = false
   retryingFailedPlan.value = false
-  pendingBudgetItems.value = []
+  budgetLedgerItems.value = []
+  budgetPendingCount.value = 0
   attractionPhotos.value = {}
   activeSection.value = 'overview'
   executionMap.value = {}
@@ -1136,22 +1208,6 @@ const goToDayFromOverview = (dayArrayIndex: number) => {
   activeSection.value = 'days'
 }
 
-const getMealLabel = (type: string): string => {
-  const labels: Record<string, string> = {
-    breakfast: t('result.meals.breakfast'),
-    lunch: t('result.meals.lunch'),
-    dinner: t('result.meals.dinner'),
-    snack: t('result.meals.snack')
-  }
-  return labels[type] || type
-}
-
-const toBudgetNumber = (value: unknown): number => {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric) || numeric <= 0) return 0
-  return numeric
-}
-
 const roundBudgetAmount = (value: number): number => {
   return Math.round((value + Number.EPSILON) * 100) / 100
 }
@@ -1167,122 +1223,48 @@ const getBudgetTypeLabel = (type: BudgetItemType): string => {
     hotel: t('result.budget.hotel'),
     meal: t('result.budget.meal'),
     transport: t('result.budget.transport'),
+    other: t('result.budget.other'),
   }
   return labels[type]
 }
 
-const cloneData = <T>(data: T): T => JSON.parse(JSON.stringify(data)) as T
-
-const recalculateBudgetTotals = (transportationOverride?: number) => {
-  if (!tripPlan.value) return
-
-  let attractionTotal = 0
-  let hotelTotal = 0
-  let mealTotal = 0
-
-  tripPlan.value.days.forEach((day) => {
-    day.attractions.forEach((attraction) => {
-      attractionTotal += toBudgetNumber(attraction.ticket_price)
-    })
-
-    if (day.hotel) {
-      hotelTotal += toBudgetNumber(day.hotel.estimated_cost)
-    }
-
-    (day.meals ?? []).forEach((meal) => {
-      mealTotal += toBudgetNumber(meal.estimated_cost)
-    })
-  })
-
-  const transportationTotal = roundBudgetAmount(
-    transportationOverride ?? toBudgetNumber(tripPlan.value.budget?.total_transportation)
-  )
-
-  tripPlan.value.budget = {
-    total_attractions: roundBudgetAmount(attractionTotal),
-    total_hotels: roundBudgetAmount(hotelTotal),
-    total_meals: roundBudgetAmount(mealTotal),
-    total_transportation: transportationTotal,
-    total: roundBudgetAmount(attractionTotal + hotelTotal + mealTotal + transportationTotal),
+const applyBudgetLedgerResponse = (response: BudgetLedgerResponse) => {
+  budgetLedgerItems.value = response.items
+  budgetPendingCount.value = response.pending_count
+  if (tripPlan.value) {
+    tripPlan.value.budget = response.totals
+    sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
   }
 }
 
-const budgetItems = computed<BudgetDetailItem[]>(() => {
-  if (!tripPlan.value) return []
-
-  const items: BudgetDetailItem[] = []
-
-  tripPlan.value.days.forEach((day, dayIndex) => {
-    const dayNumber = dayIndex + 1
-
-    day.attractions.forEach((attraction, attractionIndex) => {
-      const amount = roundBudgetAmount(toBudgetNumber(attraction.ticket_price))
-      if (amount <= 0) return
-      items.push({
-        id: `attraction-${dayIndex}-${attractionIndex}`,
-        type: 'attraction',
-        dayIndex,
-        dayNumber,
-        name: attraction.name,
-        amount,
-        sourceIndex: attractionIndex,
-      })
-    })
-
-    if (day.hotel) {
-      const amount = roundBudgetAmount(toBudgetNumber(day.hotel.estimated_cost))
-      if (amount > 0) {
-        items.push({
-          id: `hotel-${dayIndex}`,
-          type: 'hotel',
-          dayIndex,
-          dayNumber,
-          name: day.hotel.name,
-          amount,
-        })
-      }
+const loadBudgetLedger = async (targetPlanId: string, operation?: PlanOperation) => {
+  if (!targetPlanId || props.readonly) return
+  budgetLoading.value = true
+  try {
+    const response = await getBudgetItems(targetPlanId)
+    if (operation && !ownsPlanOperation(operation)) return
+    applyBudgetLedgerResponse(response)
+  } catch {
+    if (!operation || ownsPlanOperation(operation)) {
+      message.error(t('result.messages.budgetLoadFailed'))
     }
-
-    (day.meals ?? []).forEach((meal, mealIndex) => {
-      const amount = roundBudgetAmount(toBudgetNumber(meal.estimated_cost))
-      if (amount <= 0) return
-      items.push({
-        id: `meal-${dayIndex}-${mealIndex}`,
-        type: 'meal',
-        dayIndex,
-        dayNumber,
-        name: `${getMealLabel(meal.type)} · ${meal.name}`,
-        amount,
-        sourceIndex: mealIndex,
-      })
-    })
-  })
-
-  const transportTotal = roundBudgetAmount(toBudgetNumber(tripPlan.value.budget?.total_transportation))
-  const transportDays = tripPlan.value.days
-    .map((day, dayIndex) => ({ day, dayIndex }))
-    .filter(({ day }) => Boolean(day.transportation && day.transportation.trim()))
-
-  if (transportTotal > 0 && transportDays.length > 0) {
-    const avg = roundBudgetAmount(transportTotal / transportDays.length)
-    let remaining = transportTotal
-
-    transportDays.forEach(({ day, dayIndex }, index) => {
-      const amount = index === transportDays.length - 1 ? remaining : Math.min(avg, remaining)
-      remaining = roundBudgetAmount(remaining - amount)
-      items.push({
-        id: `transport-${dayIndex}`,
-        type: 'transport',
-        dayIndex,
-        dayNumber: day.day_index + 1,
-        name: day.transportation,
-        amount: roundBudgetAmount(amount),
-      })
-    })
+  } finally {
+    if (!operation || ownsPlanOperation(operation)) budgetLoading.value = false
   }
+}
 
-  return items
-})
+const budgetItems = computed<BudgetDetailItem[]>(() =>
+  budgetLedgerItems.value
+    .filter((item) => !item.deleted)
+    .map((item) => ({
+      ...item,
+      dayNumber: item.day_index === null ? null : item.day_index + 1,
+    })),
+)
+
+const deletedBudgetItems = computed<BudgetLedgerItem[]>(() =>
+  budgetLedgerItems.value.filter((item) => item.deleted),
+)
 
 const filteredBudgetItems = computed<BudgetDetailItem[]>(() => {
   let items = budgetItems.value
@@ -1295,218 +1277,109 @@ const filteredBudgetItems = computed<BudgetDetailItem[]>(() => {
   sorted.sort((a, b) => {
     const dayA = a.dayNumber ?? Number.MAX_SAFE_INTEGER
     const dayB = b.dayNumber ?? Number.MAX_SAFE_INTEGER
+    const amountA = a.amount
+    const amountB = b.amount
 
     switch (budgetSortMode.value) {
       case 'amountAsc':
-        return a.amount - b.amount
+        return (amountA ?? Number.MAX_SAFE_INTEGER) - (amountB ?? Number.MAX_SAFE_INTEGER)
       case 'dayAsc':
-        return dayA - dayB || b.amount - a.amount
+        return dayA - dayB || (amountB ?? -1) - (amountA ?? -1)
       case 'dayDesc':
-        return dayB - dayA || b.amount - a.amount
+        return dayB - dayA || (amountB ?? -1) - (amountA ?? -1)
       case 'amountDesc':
       default:
-        return b.amount - a.amount
+        return (amountB ?? -1) - (amountA ?? -1)
     }
   })
 
   return sorted
 })
 
-const editBudgetItemAmount = (item: BudgetDetailItem) => {
-  if (!tripPlan.value || item.dayIndex === null) return
+const openBudgetEditor = (item?: BudgetDetailItem) => {
+  budgetEditor.value = item
+    ? {
+        id: item.id,
+        type: item.type,
+        dayIndex: item.day_index ?? -1,
+        name: item.name,
+        amount: item.amount,
+        note: item.note || '',
+      }
+    : {
+        id: '',
+        type: 'other',
+        dayIndex: -1,
+        name: '',
+        amount: null,
+        note: '',
+      }
+  budgetEditorOpen.value = true
+}
 
-  const day = tripPlan.value.days[item.dayIndex]
-  if (!day) return
-
-  const input = window.prompt(
-    t('result.budget.editPrompt', {
-      name: item.name,
-      amount: formatBudgetAmount(item.amount),
-    }),
-    formatBudgetAmount(item.amount)
-  )
-
-  if (input === null) return
-
-  const numeric = Number(input.trim())
-  if (!Number.isFinite(numeric) || numeric < 0) {
+const saveBudgetEditor = async () => {
+  const targetPlanId = planId.value
+  const name = budgetEditor.value.name.trim()
+  if (!targetPlanId || !name) {
+    message.warning(t('result.messages.budgetNameRequired'))
+    return
+  }
+  const amount = budgetEditor.value.amount
+  if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
     message.warning(t('result.messages.budgetInvalidAmount'))
     return
   }
-
-  const nextAmount = roundBudgetAmount(numeric)
-  if (nextAmount === roundBudgetAmount(item.amount)) return
-
-  const confirmed = window.confirm(
-    t('result.budget.editConfirm', {
-      name: item.name,
-      amount: formatBudgetAmount(nextAmount),
-    })
-  )
-  if (!confirmed) return
-
-  let changed = false
-
-  if (item.type === 'attraction' && typeof item.sourceIndex === 'number' && day.attractions[item.sourceIndex]) {
-    day.attractions[item.sourceIndex].ticket_price = nextAmount
-    changed = true
+  const payload: BudgetItemInput = {
+    type: budgetEditor.value.type,
+    day_index: budgetEditor.value.dayIndex < 0 ? null : budgetEditor.value.dayIndex,
+    name,
+    amount: amount === null ? null : roundBudgetAmount(amount),
+    note: budgetEditor.value.note.trim(),
   }
 
-  if (item.type === 'meal' && typeof item.sourceIndex === 'number' && day.meals[item.sourceIndex]) {
-    day.meals[item.sourceIndex].estimated_cost = nextAmount
-    changed = true
+  budgetSaving.value = true
+  try {
+    const response = budgetEditor.value.id
+      ? await updateBudgetItem(targetPlanId, budgetEditor.value.id, payload)
+      : await createBudgetItem(targetPlanId, payload)
+    applyBudgetLedgerResponse(response)
+    budgetEditorOpen.value = false
+    message.success(
+      t(budgetEditor.value.id
+        ? 'result.messages.budgetItemUpdated'
+        : 'result.messages.budgetItemAdded'),
+    )
+  } catch {
+    message.error(t('result.messages.budgetSaveFailed'))
+  } finally {
+    budgetSaving.value = false
   }
-
-  if (item.type === 'hotel' && day.hotel) {
-    day.hotel.estimated_cost = nextAmount
-    changed = true
-  }
-
-  const transportationTotal =
-    item.type === 'transport'
-      ? Math.max(
-          0,
-          roundBudgetAmount(toBudgetNumber(tripPlan.value.budget?.total_transportation) - item.amount + nextAmount)
-        )
-      : undefined
-
-  if (item.type === 'transport' && day.transportation && day.transportation.trim()) {
-    changed = true
-  }
-
-  if (!changed) return
-
-  recalculateBudgetTotals(transportationTotal)
-  sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-  message.success(t('result.messages.budgetAmountUpdated'))
 }
 
-const deleteBudgetItem = (item: BudgetDetailItem) => {
-  if (!tripPlan.value || item.dayIndex === null) return
-
-  const day = tripPlan.value.days[item.dayIndex]
-  if (!day) return
-
-  let changed = false
-  let restorePayload: BudgetRestorePayload | null = null
-
-  if (item.type === 'attraction' && typeof item.sourceIndex === 'number') {
-    const attraction = day.attractions[item.sourceIndex]
-    if (attraction) {
-      restorePayload = {
-        type: 'attraction',
-        attraction: cloneData(attraction),
-        insertIndex: item.sourceIndex,
-      }
-      day.attractions.splice(item.sourceIndex, 1)
-      changed = true
-    }
+const removeBudgetItem = async (item: BudgetDetailItem) => {
+  if (!planId.value || budgetSaving.value) return
+  budgetSaving.value = true
+  try {
+    applyBudgetLedgerResponse(await deleteBudgetLedgerItem(planId.value, item.id))
+    message.success(t('result.messages.budgetItemDeleted'))
+  } catch {
+    message.error(t('result.messages.budgetSaveFailed'))
+  } finally {
+    budgetSaving.value = false
   }
-
-  if (item.type === 'meal' && typeof item.sourceIndex === 'number') {
-    const meal = day.meals[item.sourceIndex]
-    if (meal) {
-      restorePayload = {
-        type: 'meal',
-        meal: cloneData(meal),
-        insertIndex: item.sourceIndex,
-      }
-      day.meals.splice(item.sourceIndex, 1)
-      changed = true
-    }
-  }
-
-  if (item.type === 'hotel') {
-    if (day.hotel) {
-      restorePayload = {
-        type: 'hotel',
-        hotel: cloneData(day.hotel),
-        accommodation: day.accommodation || '',
-      }
-      day.hotel = undefined
-      day.accommodation = ''
-      changed = true
-    }
-  }
-
-  if (item.type === 'transport') {
-    if (day.transportation && day.transportation.trim()) {
-      restorePayload = {
-        type: 'transport',
-        transportation: day.transportation,
-      }
-      day.transportation = ''
-      changed = true
-    }
-  }
-
-  if (!changed || !restorePayload) return
-
-  pendingBudgetItems.value.unshift({
-    uid: `${item.id}-${Date.now()}`,
-    base: cloneData(item),
-    payload: restorePayload,
-  })
-
-  const transportationTotal =
-    item.type === 'transport'
-      ? Math.max(
-          0,
-          roundBudgetAmount(
-            toBudgetNumber(tripPlan.value.budget?.total_transportation) - roundBudgetAmount(item.amount)
-          )
-        )
-      : undefined
-
-  recalculateBudgetTotals(transportationTotal)
-  sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-
-  message.success(t('result.messages.budgetItemDeleted'))
 }
 
-const restoreBudgetItem = (pendingItem: BudgetRestoreItem) => {
-  if (!tripPlan.value || pendingItem.base.dayIndex === null) return
-
-  const day = tripPlan.value.days[pendingItem.base.dayIndex]
-  if (!day) return
-
-  let changed = false
-
-  if (pendingItem.payload.type === 'attraction') {
-    const insertAt = Math.max(0, Math.min(pendingItem.payload.insertIndex, day.attractions.length))
-    day.attractions.splice(insertAt, 0, cloneData(pendingItem.payload.attraction))
-    changed = true
+const restoreBudgetItem = async (item: BudgetLedgerItem) => {
+  if (!planId.value || budgetSaving.value) return
+  budgetSaving.value = true
+  try {
+    applyBudgetLedgerResponse(await updateBudgetItem(planId.value, item.id, { deleted: false }))
+    message.success(t('result.messages.budgetItemRestored'))
+  } catch {
+    message.error(t('result.messages.budgetSaveFailed'))
+  } finally {
+    budgetSaving.value = false
   }
-
-  if (pendingItem.payload.type === 'meal') {
-    const insertAt = Math.max(0, Math.min(pendingItem.payload.insertIndex, day.meals.length))
-    day.meals.splice(insertAt, 0, cloneData(pendingItem.payload.meal))
-    changed = true
-  }
-
-  if (pendingItem.payload.type === 'hotel') {
-    day.hotel = cloneData(pendingItem.payload.hotel)
-    day.accommodation = pendingItem.payload.accommodation
-    changed = true
-  }
-
-  if (pendingItem.payload.type === 'transport') {
-    day.transportation = pendingItem.payload.transportation
-    changed = true
-  }
-
-  if (!changed) return
-
-  const transportationTotal =
-    pendingItem.base.type === 'transport'
-      ? roundBudgetAmount(toBudgetNumber(tripPlan.value.budget?.total_transportation) + pendingItem.base.amount)
-      : undefined
-
-  recalculateBudgetTotals(transportationTotal)
-  pendingBudgetItems.value = pendingBudgetItems.value.filter((item) => item.uid !== pendingItem.uid)
-  sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-
-  message.success(t('result.messages.budgetItemRestored'))
 }
 
 
@@ -1653,6 +1526,7 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
           ${budgetCard(t('result.budget.hotel'), b.total_hotels || 0)}
           ${budgetCard(t('result.budget.meal'), b.total_meals || 0)}
           ${budgetCard(t('result.budget.transport'), b.total_transportation || 0)}
+          ${b.total_other ? budgetCard(t('result.budget.other'), b.total_other) : ''}
         </div>
         <div style="background:linear-gradient(135deg,#C17F59,#A66A47);color:#fff;padding:16px 22px;border-radius:14px;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:15px;">${t('result.budget.total')}</span>
@@ -2587,6 +2461,11 @@ const escapeHtml = (value: unknown): string => {
   gap: 8px;
 }
 
+.budget-add-btn {
+  margin-left: auto;
+  min-height: 32px;
+}
+
 .budget-toolbar-label {
   font-size: 12px;
   color: rgba(61, 50, 41, 0.6);
@@ -2652,14 +2531,39 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-detail-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.budget-detail-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.budget-origin-tag {
+  flex: 0 0 auto;
+  border: 1px solid rgba(45, 113, 89, 0.2);
+  background: rgba(45, 113, 89, 0.08);
+  color: #2d7159;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .budget-detail-amount {
   font-weight: 600;
   color: #D97757;
+}
+
+.budget-detail-amount--pending {
+  color: rgba(61, 50, 41, 0.5);
+  font-weight: 500;
 }
 
 .budget-action-wrap {
@@ -2798,6 +2702,22 @@ const escapeHtml = (value: unknown): string => {
   margin-top: 4px;
   padding-top: 12px;
   border-top: 1px solid rgba(61, 50, 41, 0.1);
+}
+
+.budget-unpriced-status {
+  border-left: 3px solid #d97757;
+  padding: 7px 10px;
+  background: rgba(217, 119, 87, 0.07);
+  color: rgba(61, 50, 41, 0.72);
+  font-size: 12px;
+}
+
+.budget-editor-form {
+  padding-top: 8px;
+}
+
+.budget-amount-input {
+  width: 100%;
 }
 
 .budget-pending-title {
@@ -3303,6 +3223,11 @@ const escapeHtml = (value: unknown): string => {
   .budget-toolbar-item {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .budget-add-btn {
+    width: 100%;
+    margin-left: 0;
   }
 
   .budget-select {

@@ -10,6 +10,7 @@ from ...models.schemas import (
     WeatherResponse
 )
 from ...services.amap_service import get_amap_service
+from ...config import get_settings
 
 router = APIRouter(prefix="/map", tags=["地图服务"])
 
@@ -147,17 +148,13 @@ async def plan_route(request: RouteRequest):
 async def health_check():
     """健康检查"""
     try:
-        # 检查服务是否可用
-        service = get_amap_service()
-        
         return {
             "status": "healthy",
             "service": "map-service",
-            "mcp_tools_count": len(service.mcp_tool._available_tools)
+            "amap_web_key_configured": bool(get_settings().vite_amap_web_key),
         }
     except Exception as e:
         raise HTTPException(
             status_code=503,
             detail=f"服务不可用: {str(e)}"
         )
-

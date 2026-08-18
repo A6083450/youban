@@ -10,6 +10,16 @@ from app.agents.trip_plan_orchestrator import build_segments, empty_checkpoint
 from app.models.schemas import TripRequest
 
 
+HOTEL_RESEARCH_TEXT = json.dumps([{
+    "id": "amap-hotel-1",
+    "name": "高德测试酒店",
+    "type": "住宿服务;宾馆酒店",
+    "address": "北京市测试路1号",
+    "location": {"longitude": 116.41, "latitude": 39.91},
+    "tel": None,
+}], ensure_ascii=False)
+
+
 def _request(days=6, language="zh"):
     start = date(2026, 8, 1)
     return TripRequest(
@@ -32,7 +42,16 @@ def _day(day_index, city="北京"):
         "description": f"第{day_index + 1}天",
         "transportation": "公共交通",
         "accommodation": "经济型酒店",
-        "hotel": {"name": "测试酒店", "estimated_cost": 300},
+        "hotel": {
+            "name": "高德测试酒店",
+            "address": "北京市测试路1号",
+            "location": {"longitude": 116.41, "latitude": 39.91},
+            "type": "住宿服务;宾馆酒店",
+            "estimated_cost": 0,
+            "source": "amap",
+            "source_hotel_id": "amap-hotel-1",
+            "price_status": "unavailable",
+        },
         "attractions": [{
             "name": f"景点{day_index + 1}",
             "address": "测试地址",
@@ -115,6 +134,9 @@ class _OrchestrationModel:
                 return _FakeMessage("invalid json")
             segment = self._segments[segment_id]
             days = [_day(index, segment["city"]) for index in segment["day_indices"]]
+            for day in days:
+                day.pop("hotel")
+                day["hotel_id"] = "amap-hotel-1"
             if segment_id in self._wrong_city_once:
                 self._wrong_city_once.remove(segment_id)
                 days[0]["city"] = "上海"
@@ -145,7 +167,7 @@ class LangGraphPlannerTest(unittest.TestCase):
         with patch.object(tpa, "get_chat_model", return_value=model), \
              patch.object(tpa, "_fetch_attractions_text", return_value="故宫|天安门"), \
              patch.object(tpa, "_fetch_weather_text", return_value="[]"), \
-             patch.object(tpa, "_fetch_hotels_text", return_value="如家酒店"), \
+             patch.object(tpa, "_fetch_hotels_text", return_value=HOTEL_RESEARCH_TEXT), \
              patch.object(tpa, "_recall_memory", return_value=recall_text), \
              patch.object(tpa, "_remember_plan", return_value=None):
             planner = tpa.LangGraphTripPlanner()

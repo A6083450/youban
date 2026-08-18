@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # 高德地图API配置
     vite_amap_web_key: str = ""
     vite_amap_web_js_key: str = ""
+    allow_llm_hotel_fallback: bool = False
 
     # Google Maps API配置
     google_maps_api_key: str = ""
@@ -229,4 +230,3 @@ def print_config():
     print(f"LLM Base URL: {llm_base_url}")
     print(f"LLM Model: {llm_model}")
     print(f"日志级别: {settings.log_level}")
-

@@ -4,7 +4,7 @@ import unittest
 from collections import Counter
 from unittest.mock import patch
 
-from app.agents.langgraph_planner_test import _OrchestrationModel, _request
+from app.agents.langgraph_planner_test import HOTEL_RESEARCH_TEXT, _OrchestrationModel, _request
 from app.agents.trip_plan_orchestrator import empty_checkpoint
 from app.agents.trip_research_agents import (
     ResearchCallbacks,
@@ -138,7 +138,7 @@ class ParallelTripResearchTest(unittest.TestCase):
              patch.object(tpa, "_fetch_weather_text",
                           side_effect=lambda *_: arrive("weather", "[]")), \
              patch.object(tpa, "_fetch_hotels_text",
-                          side_effect=lambda *_: arrive("hotels", "如家酒店")), \
+                          side_effect=lambda *_: arrive("hotels", HOTEL_RESEARCH_TEXT)), \
              patch.object(tpa, "_recall_memory", return_value=""), \
              patch.object(tpa, "_remember_plan", return_value=None):
             plan = asyncio.run(tpa.LangGraphTripPlanner().plan_trip(

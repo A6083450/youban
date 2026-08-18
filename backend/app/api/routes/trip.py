@@ -23,7 +23,19 @@ from pydantic import BaseModel, Field
 from ...agents.stream_json import stream_extract_string_field
 from ...agents.trip_planner_agent import get_trip_planner_agent
 from ...config import get_data_dir
-from ...models.schemas import ItemStatusUpdateRequest, TripPlanResponse, TripRequest
+from ...models.schemas import (
+    BudgetItemCreateRequest,
+    BudgetItemUpdateRequest,
+    BudgetLedgerItem,
+    ItemStatusUpdateRequest,
+    TripPlanResponse,
+    TripRequest,
+)
+from ...services.budget_ledger import (
+    apply_budget_totals,
+    calculate_budget_totals,
+    sync_budget_items,
+)
 from ...services import memory_service
 from ...services.llm_service import iter_llm_stream, llm_complete
 from ...services.trip_confirmation import consume_execution_token, register_confirm_decision
@@ -82,6 +94,7 @@ def _create_task_state(task_id: str) -> Dict[str, Any]:
         "share_token": "",
         "request_payload": None,
         "checkpoint": {},
+        "budget_items": None,
         "subscribers": [],  # list[asyncio.Queue]
     }
 
@@ -159,6 +172,7 @@ def _normalize_loaded_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, A
             "request_payload": payload.get("request_payload"),
             "checkpoint": payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {},
             "execution": payload.get("execution") or {},
+            "budget_items": payload.get("budget_items") if isinstance(payload.get("budget_items"), list) else None,
         }
     )
     task["subscribers"] = []
@@ -198,6 +212,7 @@ def _persist_task_state(
             "request_payload": task.get("request_payload"),
             "checkpoint": task.get("checkpoint") if isinstance(task.get("checkpoint"), dict) else {},
             "execution": task.get("execution") or {},
+            "budget_items": task.get("budget_items"),
         }
         target = _task_file_path(task_id)
         tmp = target.with_suffix(".json.tmp")
@@ -1558,6 +1573,167 @@ async def get_shared_plan(share_token: str):
         "status": "completed",
         "result": _serialize_result(task.get("result")),
     }
+
+
+def _budget_plan_days(task: Dict[str, Any]) -> list[Any]:
+    result = task.get("result")
+    plan = result.get("data") if isinstance(result, dict) else getattr(result, "data", None)
+    if plan is None:
+        return []
+    days = plan.get("days") if isinstance(plan, dict) else getattr(plan, "days", None)
+    return list(days or [])
+
+
+def _validate_budget_day(task: Dict[str, Any], day_index: int | None) -> None:
+    if day_index is None:
+        return
+    valid_indices = {
+        int(day.get("day_index", position))
+        if isinstance(day, dict)
+        else int(getattr(day, "day_index", position))
+        for position, day in enumerate(_budget_plan_days(task))
+    }
+    if day_index not in valid_indices:
+        raise HTTPException(status_code=422, detail="预算条目的天数不在行程范围内")
+
+
+def _editable_budget_task(
+    plan_id: str,
+    x_user_id: Any,
+    x_admin_token: Any = "",
+) -> Dict[str, Any]:
+    task = _get_task(plan_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="计划不存在")
+    _require_task_owner(task, x_user_id, detail="无权修改该计划", admin_token=x_admin_token)
+    if task.get("status") != "completed" or not task.get("result"):
+        raise HTTPException(status_code=409, detail="计划尚未生成完成,无法修改预算")
+    return task
+
+
+def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+    items = sync_budget_items(task.get("result"), task.get("budget_items"))
+    task["budget_items"] = [item.model_dump(mode="json") for item in items]
+    totals = calculate_budget_totals(items)
+    apply_budget_totals(task.get("result"), totals)
+    _persist_task_state(plan_id, task, raise_errors=True)
+    return {
+        "plan_id": plan_id,
+        "items": task["budget_items"],
+        "totals": totals,
+        "pending_count": sum(
+            1 for item in items if not item.deleted and item.amount is None
+        ),
+    }
+
+
+@router.get(
+    "/plan/{plan_id}/budget-items",
+    summary="读取预算台账",
+    description="读取并同步计划预算台账;用户修改和 DIY 条目优先于 Agent 生成结果",
+)
+async def get_budget_items(
+    plan_id: str,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    with _TASK_STATE_LOCK:
+        return _budget_ledger_response(plan_id, task)
+
+
+@router.post(
+    "/plan/{plan_id}/budget-items",
+    summary="新增 DIY 预算条目",
+)
+async def create_budget_item(
+    plan_id: str,
+    payload: BudgetItemCreateRequest,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="项目名称不能为空")
+    _validate_budget_day(task, payload.day_index)
+    with _TASK_STATE_LOCK:
+        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        items.append(BudgetLedgerItem(
+            id=f"budget:{secrets.token_hex(6)}",
+            type=payload.type,
+            day_index=payload.day_index,
+            name=name,
+            amount=payload.amount,
+            origin="user",
+            price_source="user" if payload.amount is not None else "unavailable",
+            note=payload.note.strip(),
+            user_locked=True,
+        ))
+        task["budget_items"] = [item.model_dump(mode="json") for item in items]
+        return _budget_ledger_response(plan_id, task)
+
+
+@router.patch(
+    "/plan/{plan_id}/budget-items/{budget_item_id}",
+    summary="修改预算条目",
+)
+async def update_budget_item(
+    plan_id: str,
+    budget_item_id: str,
+    payload: BudgetItemUpdateRequest,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    changes = payload.model_dump(exclude_unset=True)
+    if "type" in changes and changes["type"] is None:
+        raise HTTPException(status_code=422, detail="预算类型不能为空")
+    if "deleted" in changes and changes["deleted"] is None:
+        raise HTTPException(status_code=422, detail="删除状态不能为空")
+    if "name" in changes:
+        changes["name"] = str(changes["name"] or "").strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=422, detail="项目名称不能为空")
+    if "note" in changes:
+        changes["note"] = str(changes["note"] or "").strip()
+    if "day_index" in changes:
+        _validate_budget_day(task, changes["day_index"])
+
+    with _TASK_STATE_LOCK:
+        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        target = next((item for item in items if item.id == budget_item_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="预算条目不存在")
+        for key, value in changes.items():
+            setattr(target, key, value)
+        if "amount" in changes:
+            target.price_source = "user" if target.amount is not None else "unavailable"
+        target.user_locked = True
+        task["budget_items"] = [item.model_dump(mode="json") for item in items]
+        return _budget_ledger_response(plan_id, task)
+
+
+@router.delete(
+    "/plan/{plan_id}/budget-items/{budget_item_id}",
+    summary="删除预算条目",
+)
+async def delete_budget_item(
+    plan_id: str,
+    budget_item_id: str,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    with _TASK_STATE_LOCK:
+        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        target = next((item for item in items if item.id == budget_item_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="预算条目不存在")
+        target.deleted = True
+        target.user_locked = True
+        task["budget_items"] = [item.model_dump(mode="json") for item in items]
+        return _budget_ledger_response(plan_id, task)
 
 
 @router.patch(

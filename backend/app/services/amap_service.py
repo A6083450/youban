@@ -1,8 +1,28 @@
 """高德地图服务封装(REST API)"""
 
 from typing import List, Dict, Any, Optional
+
+import requests
+
 from ..config import get_settings
 from ..models.schemas import Location, POIInfo, WeatherInfo
+
+
+_AMAP_PLACE_TEXT_URL = "https://restapi.amap.com/v5/place/text"
+
+
+def _string_value(value: Any) -> str:
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
+def _parse_amap_location(value: Any) -> Optional[Location]:
+    try:
+        longitude, latitude = _string_value(value).split(",", 1)
+        return Location(longitude=float(longitude), latitude=float(latitude))
+    except (TypeError, ValueError):
+        return None
 
 
 class AmapService:
@@ -13,7 +33,13 @@ class AmapService:
         # 历史 MCP 工具已移除,仅保留占位;当前图片/搜索均走高德 REST API
         self.mcp_tool = None
     
-    def search_poi(self, keywords: str, city: str, citylimit: bool = True) -> List[POIInfo]:
+    def search_poi(
+        self,
+        keywords: str,
+        city: str,
+        citylimit: bool = True,
+        types: Optional[str] = None,
+    ) -> List[POIInfo]:
         """
         搜索POI
         
@@ -25,29 +51,66 @@ class AmapService:
         Returns:
             POI信息列表
         """
+        api_key = get_settings().vite_amap_web_key.strip()
+        if not api_key:
+            print("⚠️ 高德 Web 服务 Key 未配置，跳过 POI 搜索")
+            return []
+
+        params = {
+            "key": api_key,
+            "keywords": keywords.strip(),
+            "region": city.strip(),
+            "city_limit": str(citylimit).lower(),
+            "page_size": 20,
+            "page_num": 1,
+            "show_fields": "business",
+        }
+        if types:
+            params["types"] = types
+
         try:
-            # 调用MCP工具
-            result = self.mcp_tool.run({
-                "action": "call_tool",
-                "tool_name": "maps_text_search",
-                "arguments": {
-                    "keywords": keywords,
-                    "city": city,
-                    "citylimit": str(citylimit).lower()
-                }
-            })
-            
-            # 解析结果
-            # 注意: MCP工具返回的是字符串,需要解析
-            # 这里简化处理,实际应该解析JSON
-            print(f"POI搜索结果: {result[:200]}...")  # 打印前200字符
-            
-            # TODO: 解析实际的POI数据
+            response = requests.get(_AMAP_PLACE_TEXT_URL, params=params, timeout=8)
+            response.raise_for_status()
+            payload = response.json()
+            if str(payload.get("status")) != "1":
+                print(
+                    "❌ 高德 POI 搜索失败: "
+                    f"{payload.get('info') or 'unknown error'} "
+                    f"({payload.get('infocode') or 'unknown code'})"
+                )
+                return []
+
+            results: List[POIInfo] = []
+            for item in payload.get("pois") or []:
+                if not isinstance(item, dict):
+                    continue
+                poi_id = _string_value(item.get("id"))
+                name = _string_value(item.get("name"))
+                location = _parse_amap_location(item.get("location"))
+                if not poi_id or not name or location is None:
+                    continue
+                results.append(POIInfo(
+                    id=poi_id,
+                    name=name,
+                    type=_string_value(item.get("type")),
+                    address=_string_value(item.get("address")),
+                    location=location,
+                    tel=_string_value(item.get("tel")) or None,
+                ))
+            return results
+        except (requests.RequestException, ValueError, TypeError) as error:
+            print(f"❌ 高德 POI 搜索异常: {error}")
             return []
-            
-        except Exception as e:
-            print(f"❌ POI搜索失败: {str(e)}")
-            return []
+
+    def search_hotels(self, city: str, accommodation: str) -> List[POIInfo]:
+        """搜索高德已登记的住宿 POI，结果不包含实时房价。"""
+        preferred = accommodation.strip() or "酒店"
+        keywords = list(dict.fromkeys((preferred, "酒店")))
+        for keyword in keywords:
+            results = self.search_poi(keyword, city, citylimit=True, types="100000")
+            if results:
+                return results
+        return []
     
     def get_weather(self, city: str) -> List[WeatherInfo]:
         """

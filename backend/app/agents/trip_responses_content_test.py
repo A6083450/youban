@@ -40,7 +40,7 @@ class TripResponsesContentTest(unittest.IsolatedAsyncioTestCase):
                 "description": f"第{index + 1}天",
                 "transportation": "公共交通",
                 "accommodation": "经济型酒店",
-                "hotel": {"name": "测试酒店", "estimated_cost": 300},
+                "hotel_id": None,
                 "attractions": [
                     {
                         "name": f"景点{index + 1}",

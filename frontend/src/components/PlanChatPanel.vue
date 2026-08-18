@@ -154,7 +154,8 @@ watch(
     messages.value = []
     snapshots.value = []
     loading.value = false
-    collapsed.value = false
+    // Keep restored conversation history from covering plan controls after a route switch.
+    collapsed.value = true
 
     const targetPlanId = String(planId || '').trim()
     if (!targetPlanId) return

@@ -155,6 +155,12 @@ class Hotel(BaseModel):
     distance: str = Field(default="", description="距离景点距离")
     type: str = Field(default="", description="酒店类型")
     estimated_cost: int = Field(default=0, description="预估费用(元/晚)")
+    source: str = Field(default="", description="酒店数据来源")
+    source_hotel_id: str = Field(default="", description="来源平台酒店ID")
+    price_status: Literal["unavailable", "estimated", "live"] = Field(
+        default="estimated",
+        description="价格状态: unavailable/estimated/live",
+    )
 
 
 class DayPlan(BaseModel):
@@ -207,12 +213,49 @@ class WeatherInfo(BaseModel):
 
 class Budget(BaseModel):
     """预算信息"""
-    total_attractions: int = Field(default=0, description="景点门票总费用")
-    total_hotels: int = Field(default=0, description="酒店总费用")
-    total_meals: int = Field(default=0, description="餐饮总费用")
-    total_transportation: int = Field(default=0, description="交通总费用")
-    total_inter_city_transport: int = Field(default=0, description="城际交通总费用")
-    total: int = Field(default=0, description="总费用")
+    total_attractions: float = Field(default=0, description="景点门票总费用")
+    total_hotels: float = Field(default=0, description="酒店总费用")
+    total_meals: float = Field(default=0, description="餐饮总费用")
+    total_transportation: float = Field(default=0, description="交通总费用")
+    total_inter_city_transport: float = Field(default=0, description="城际交通总费用")
+    total_other: float = Field(default=0, description="其他费用")
+    total: float = Field(default=0, description="总费用")
+
+
+BudgetItemType = Literal["attraction", "hotel", "meal", "transport", "other"]
+
+
+class BudgetLedgerItem(BaseModel):
+    """独立预算台账条目；用户修改后不再被行程同步覆盖。"""
+    id: str
+    type: BudgetItemType
+    day_index: Optional[int] = Field(default=None, ge=0)
+    name: str = Field(min_length=1, max_length=120)
+    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    origin: Literal["itinerary", "user"] = "itinerary"
+    price_source: Literal["unavailable", "estimated", "live", "user"] = "unavailable"
+    linked_item_id: str = ""
+    entity_source: str = ""
+    note: str = Field(default="", max_length=300)
+    user_locked: bool = False
+    deleted: bool = False
+
+
+class BudgetItemCreateRequest(BaseModel):
+    type: BudgetItemType
+    day_index: Optional[int] = Field(default=None, ge=0)
+    name: str = Field(min_length=1, max_length=120)
+    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    note: str = Field(default="", max_length=300)
+
+
+class BudgetItemUpdateRequest(BaseModel):
+    type: Optional[BudgetItemType] = None
+    day_index: Optional[int] = Field(default=None, ge=0)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    note: Optional[str] = Field(default=None, max_length=300)
+    deleted: Optional[bool] = None
 
 
 class TripBlueprintStage(BaseModel):

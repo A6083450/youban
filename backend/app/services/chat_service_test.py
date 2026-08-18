@@ -47,6 +47,33 @@ class ChatServiceBlueprintTest(unittest.TestCase):
         self.assertEqual(result["days"][0]["description"], "调整后的城市文化")
         self.assertIsNone(result["blueprint"])
 
+    def test_edit_agent_cannot_replace_verified_hotel(self):
+        original = plan_payload()
+        original["days"][0]["hotel"] = {
+            "name": "高德测试酒店",
+            "address": "北京市测试路1号",
+            "location": {"longitude": 116.41, "latitude": 39.91},
+            "price_range": "",
+            "rating": "",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店",
+            "source": "amap",
+            "source_hotel_id": "B000A1",
+            "price_status": "unavailable",
+            "estimated_cost": 0,
+        }
+        updated = copy.deepcopy(original)
+        updated["days"][0]["hotel"] = {
+            "name": "模型编造酒店",
+            "address": "虚构地址",
+            "estimated_cost": 999,
+        }
+
+        result = _validate_updated_plan(updated, original)
+
+        self.assertEqual(original["days"][0]["hotel"], result["days"][0]["hotel"])
+        self.assertIn("绝对不能修改酒店", EDIT_SYSTEM_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,9 +3,9 @@
 import copy
 import json
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Optional
 
-from ..models.schemas import Budget, DayPlan, TripRequest, WeatherInfo
+from ..models.schemas import Budget, DayPlan, POIInfo, TripRequest, WeatherInfo
 from .plan_parser import error_guided_json_fix, fix_unescaped_quotes, sanitize_json_str
 
 
@@ -146,7 +146,104 @@ def _decode_single_object(candidate: str) -> dict:
     return data
 
 
-def parse_segment_output(text: str, expected: dict) -> list[dict]:
+def parse_hotel_candidates(value: Any) -> dict[str, dict]:
+    """Parse trusted hotel candidates collected from the AMap REST API."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(value, list):
+        return {}
+
+    candidates = {}
+    for item in value:
+        try:
+            poi = POIInfo.model_validate(item)
+        except (TypeError, ValueError):
+            continue
+        candidates[poi.id] = poi.model_dump(mode="json")
+    return candidates
+
+
+def _verified_hotel(candidate: dict) -> dict:
+    return {
+        "name": candidate["name"],
+        "address": candidate.get("address", ""),
+        "location": candidate.get("location"),
+        "price_range": "",
+        "rating": "",
+        "distance": "",
+        "type": candidate.get("type", ""),
+        "estimated_cost": 0,
+        "source": "amap",
+        "source_hotel_id": candidate["id"],
+        "price_status": "unavailable",
+    }
+
+
+def _resolve_day_hotel(
+    day: dict,
+    candidates: dict[str, dict],
+    allow_llm_fallback: bool,
+    trusted_hotel_data: bool,
+    hotel_required: bool = True,
+) -> None:
+    if not isinstance(day, dict):
+        raise ValueError("day 必须为 JSON object")
+
+    if not hotel_required:
+        day.pop("hotel_id", None)
+        day["hotel"] = None
+        return
+
+    if trusted_hotel_data:
+        hotel = day.get("hotel")
+        if hotel is None:
+            if candidates:
+                raise ValueError("checkpoint 缺少已验证酒店")
+            return
+        if not isinstance(hotel, dict):
+            raise ValueError("checkpoint 酒店结构无效")
+        source_id = str(hotel.get("source_hotel_id") or "").strip()
+        if hotel.get("source") == "amap" and source_id in candidates:
+            day["hotel"] = _verified_hotel(candidates[source_id])
+            return
+        if allow_llm_fallback:
+            return
+        raise ValueError("checkpoint 酒店未通过高德来源验证")
+
+    selected_id = str(day.pop("hotel_id", "") or "").strip()
+    generated_hotel = day.get("hotel")
+    if generated_hotel is not None:
+        if not allow_llm_fallback:
+            raise ValueError("Agent 不得生成酒店名称、坐标或价格")
+        if not isinstance(generated_hotel, dict):
+            raise ValueError("hotel 必须为 JSON object")
+        generated_hotel.setdefault("source", "llm")
+        generated_hotel.setdefault("source_hotel_id", "")
+        generated_hotel.setdefault("price_status", "estimated")
+        return
+
+    if not selected_id:
+        if candidates:
+            selected_id = next(iter(candidates))
+        else:
+            day["hotel"] = None
+            return
+    if selected_id not in candidates:
+        raise ValueError("hotel_id 不在高德酒店候选列表中")
+    day["hotel"] = _verified_hotel(candidates[selected_id])
+
+
+def parse_segment_output(
+    text: str,
+    expected: dict,
+    hotel_candidates: Optional[dict[str, dict]] = None,
+    allow_llm_hotel_fallback: bool = False,
+    trusted_hotel_data: bool = False,
+    last_travel_day_index: Optional[int] = None,
+) -> list[dict]:
     data = _decode_single_object(_extract_json_object(text))
     if set(data) != {"segment_id", "days"}:
         raise ValueError("segment 顶层包含未知字段")
@@ -155,6 +252,18 @@ def parse_segment_output(text: str, expected: dict) -> list[dict]:
     days = data.get("days")
     if not isinstance(days, list):
         raise ValueError("days 必须为列表")
+    candidates = hotel_candidates or {}
+    for day in days:
+        _resolve_day_hotel(
+            day,
+            candidates,
+            allow_llm_hotel_fallback,
+            trusted_hotel_data,
+            hotel_required=(
+                last_travel_day_index is None
+                or day.get("day_index") != last_travel_day_index
+            ),
+        )
     validated = [DayPlan.model_validate(day) for day in days]
     if [day.day_index for day in validated] != expected["day_indices"]:
         raise ValueError("day_index 与分段范围不符")
