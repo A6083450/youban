@@ -392,20 +392,31 @@ def search_amap_attractions(city: str, keywords: str, language: str = "zh") -> s
 
     # 组装 POI 摘要供 LLM 提纯
     poi_lines = []
-    poi_locations: dict = {}
+    poi_records: dict[str, dict] = {}
     for poi in pois[:12]:
         name = poi.get("name", "")
-        if not name:
+        poi_id = str(poi.get("id") or "").strip()
+        if not name or not poi_id:
             continue
+        record = {
+            "poi_id": poi_id,
+            "address": _string_value(poi.get("address")),
+            "location": None,
+        }
         loc_str = poi.get("location", "")
         if "," in loc_str:
             try:
                 lon, lat = loc_str.split(",")
-                poi_locations[name] = {"longitude": float(lon), "latitude": float(lat)}
+                record["location"] = {
+                    "longitude": float(lon),
+                    "latitude": float(lat),
+                }
             except ValueError:
                 pass
+        poi_records[name] = record
         poi_lines.append(
-            f"- {name} | 地址: {poi.get('address', '无')} | 类型: {poi.get('type', '')}"
+            f"- {name} | POI ID: {poi_id} | 地址: {poi.get('address', '无')} | "
+            f"类型: {poi.get('type', '')}"
         )
     poi_text = "\n".join(poi_lines)
 
@@ -422,7 +433,8 @@ def search_amap_attractions(city: str, keywords: str, language: str = "zh") -> s
 
     extract_prompt = f"""
 以下是高德地图 POI 接口返回的【{city}】真实景点列表（名称、地址、类型均真实存在）。
-请从中筛选出最值得游玩的 6-10 个景点，返回严格的 JSON 数组，不要输出 JSON 以外的任何文字！
+请从中筛选出最多 12 个最值得游玩的景点；候选不足时按实际数量返回，不要为了凑数重复景点。
+返回严格的 JSON 数组，不要输出 JSON 以外的任何文字！
 {translation_instruction}
 数组中每个对象必须包含以下字段:
 "name": 景点官方名称(按目标语言填写；中文则与 name_zh 相同，必须来自 POI 列表)
@@ -458,11 +470,18 @@ JSON 返回示例:
         if not name:
             continue
         name_zh = item.get("name_zh", name)
+        record = poi_records.get(name_zh) or poi_records.get(name)
+        if not record:
+            continue
         # 优先使用 POI 真实坐标（高德 GCJ-02，与前端高德地图一致）
-        loc = poi_locations.get(name_zh) or poi_locations.get(name)
+        loc = record["location"]
         if not loc:
             from .map_dispatcher import geocode_unified
             loc = geocode_unified(name, city, address_zh=name_zh, address_en=item.get("name_en", name))
+        if not loc:
+            continue
+        item["poi_id"] = record["poi_id"]
+        item["address"] = record["address"]
         item["location"] = loc
         final_result += _json.dumps(item, ensure_ascii=False) + "\n"
 

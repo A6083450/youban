@@ -12,6 +12,7 @@ export interface Location {
 
 export interface Attraction {
   id?: string
+  poi_id?: string
   name: string
   address: string
   location: Location
@@ -25,6 +26,8 @@ export interface Attraction {
   reservation_tips?: string
   start_time?: string
   end_time?: string
+  time_recommendation_basis?: 'weather' | 'seasonal'
+  crowd_recommendation_basis?: 'heuristic'
 }
 
 export interface Meal {
@@ -36,6 +39,7 @@ export interface Meal {
   description?: string
   estimated_cost?: number
   time?: string
+  time_recommendation_basis?: 'schedule'
 }
 
 export interface Hotel {
@@ -49,6 +53,10 @@ export interface Hotel {
   estimated_cost?: number
   source?: string
   source_hotel_id?: string
+  source_url?: string
+  image_url?: string
+  price_checked_at?: string
+  price_method?: string
   price_status?: 'unavailable' | 'estimated' | 'live'
 }
 
@@ -63,17 +71,30 @@ export interface Budget {
 }
 
 export type BudgetItemType = 'attraction' | 'hotel' | 'meal' | 'transport' | 'other'
+export type BudgetAmountBasis = 'group_total' | 'per_person'
 
 export interface BudgetLedgerItem {
   id: string
   type: BudgetItemType
   day_index: number | null
+  day_end_index: number | null
   name: string
+  // 固定语义：全体出行人的合计金额，是后端持久化与汇总的唯一标准口径。
   amount: number | null
+  // 仅说明来源/录入口径，不改变 amount 始终为合计金额的语义。
+  amount_basis: BudgetAmountBasis
+  traveler_count: number
+  per_person_amount: number | null
+  calculation_summary: string
+  unit_amount: number | null
+  room_count: number | null
+  nights: number | null
   origin: 'itinerary' | 'user'
   price_source: 'unavailable' | 'estimated' | 'live' | 'user'
   linked_item_id: string
   entity_source: string
+  source_url: string
+  price_checked_at: string
   note: string
   user_locked: boolean
   deleted: boolean
@@ -83,6 +104,9 @@ export interface BudgetLedgerResponse {
   plan_id: string
   items: BudgetLedgerItem[]
   totals: Budget
+  per_person_totals: Budget
+  traveler_count: number
+  room_count: number
   pending_count: number
 }
 
@@ -90,8 +114,33 @@ export interface BudgetItemInput {
   type: BudgetItemType
   day_index: number | null
   name: string
+  // 用户录入值；后端按照 amount_basis 解释并换算为合计金额后保存。
   amount: number | null
+  amount_basis: BudgetAmountBasis
   note?: string
+}
+
+export interface PoiSearchItem {
+  id: string
+  name: string
+  type: string
+  address: string
+  location: Location
+  tel?: string | null
+}
+
+export interface ItineraryAttractionInput {
+  day_index: number
+  poi_id: string
+  name: string
+  address: string
+  location: Location
+  visit_duration: number
+  description: string
+  ticket_price: number
+  start_time: string
+  reservation_required: boolean
+  reservation_tips: string
 }
 
 export interface DayPlan {
@@ -143,11 +192,19 @@ export interface TripPlan {
   cities?: string[]
   start_date: string
   end_date: string
+  traveler_count?: number
+  room_count?: number
+  budget_amount?: number | null
+  budget_basis?: BudgetAmountBasis
   days: DayPlan[]
   weather_info: WeatherInfo[]
   overall_suggestions: string
   budget?: Budget
   blueprint?: TripBlueprint
+}
+
+export interface ItineraryMutationResponse extends BudgetLedgerResponse {
+  plan: TripPlan
 }
 
 export interface TripFormData {
@@ -158,6 +215,10 @@ export interface TripFormData {
   travel_days: number
   transportation: string
   accommodation: string
+  traveler_count: number
+  room_count: number
+  budget_amount?: number | null
+  budget_basis: BudgetAmountBasis
   preferences: string[]
   free_text_input: string
   origin_text?: string
@@ -316,6 +377,10 @@ export interface ParsedTripDraft {
   travel_days: number
   transportation: string
   accommodation: string
+  traveler_count: number
+  room_count: number
+  budget_amount: number | null
+  budget_basis: BudgetAmountBasis
   preferences: string[]
   free_text_input: string
   origin_text: string

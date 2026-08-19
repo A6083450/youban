@@ -1,8 +1,9 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.services.amap_service import AmapService
+from app.services.amap_service import AmapService, search_amap_attractions
 
 
 class _FakeResponse:
@@ -17,6 +18,46 @@ class _FakeResponse:
 
 
 class AmapServiceTest(unittest.TestCase):
+    @patch("app.services.llm_service.llm_complete")
+    @patch("httpx.get")
+    @patch("app.services.amap_service.get_settings")
+    def test_attraction_research_preserves_trusted_poi_identity(
+        self, settings, httpx_get, llm_complete
+    ):
+        settings.return_value = SimpleNamespace(vite_amap_web_key="test-web-key")
+        httpx_get.return_value = _FakeResponse({
+            "status": "1",
+            "pois": [{
+                "id": "B0MOGAO",
+                "name": "莫高窟",
+                "type": "风景名胜",
+                "address": "甘肃省敦煌市",
+                "location": "94.809000,40.041000",
+            }],
+        })
+        llm_complete.return_value = """[{
+            "name": "莫高窟",
+            "name_zh": "莫高窟",
+            "name_en": "Mogao Caves",
+            "reason": "世界文化遗产",
+            "duration": 240,
+            "reservation_required": true,
+            "reservation_tips": "提前预约"
+        }]"""
+
+        result = search_amap_attractions("敦煌", "历史文化")
+        attraction = json.loads(result.splitlines()[-1])
+
+        self.assertEqual(attraction["poi_id"], "B0MOGAO")
+        self.assertEqual(attraction["address"], "甘肃省敦煌市")
+        self.assertEqual(attraction["location"], {
+            "longitude": 94.809,
+            "latitude": 40.041,
+        })
+        extract_prompt = llm_complete.call_args.args[0]
+        self.assertIn("最多 12 个", extract_prompt)
+        self.assertIn("不要为了凑数重复景点", extract_prompt)
+
     @patch("app.services.amap_service.get_settings")
     @patch("app.services.amap_service.requests.get")
     def test_search_hotels_returns_only_valid_amap_pois(self, request_get, settings):

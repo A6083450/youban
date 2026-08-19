@@ -122,6 +122,14 @@
             >
               <div class="budget-detail-panel">
                 <div class="budget-toolbar">
+                  <div class="budget-toolbar-item budget-basis-control">
+                    <span class="budget-toolbar-label">{{ t('result.budget.amountBasis') }}</span>
+                    <a-segmented
+                      v-model:value="budgetDisplayBasis"
+                      :options="budgetBasisOptions"
+                      size="small"
+                    />
+                  </div>
                   <div class="budget-toolbar-item">
                     <span class="budget-toolbar-label">{{ t('result.budget.filterLabel') }}</span>
                     <a-select v-model:value="budgetFilterType" size="small" class="budget-select">
@@ -160,9 +168,10 @@
                     :class="{ 'budget-detail-row--readonly': props.readonly }"
                   >
                     <span>{{ t('result.budget.detailType') }}</span>
-                    <span>{{ t('result.budget.detailDay') }}</span>
+                    <span>{{ t('result.budget.detailDateRange') }}</span>
                     <span>{{ t('result.budget.detailName') }}</span>
-                    <span>{{ t('result.budget.detailAmount') }}</span>
+                    <span>{{ t('result.budget.calculation') }}</span>
+                    <span>{{ budgetAmountHeader }}</span>
                     <span v-if="!props.readonly">{{ t('result.budget.detailAction') }}</span>
                   </div>
                   <div
@@ -173,16 +182,26 @@
                   >
                     <span class="budget-detail-type">{{ getBudgetTypeLabel(item.type) }}</span>
                     <span class="budget-detail-day">
-                      {{ item.dayNumber ? t('common.dayNumber', { day: item.dayNumber }) : t('result.budget.wholeTrip') }}
+                      {{ formatBudgetDayRange(item) }}
                     </span>
                     <span class="budget-detail-name">
-                      <span>{{ item.name }}</span>
-                      <span v-if="item.origin === 'user' || item.user_locked" class="budget-origin-tag">
-                        {{ t('result.budget.userDiy') }}
+                      <span class="budget-detail-name-main">
+                        <span>{{ item.name }}</span>
+                        <span v-if="item.origin === 'user' || item.user_locked" class="budget-origin-tag">
+                          {{ t('result.budget.userDiy') }}
+                        </span>
+                      </span>
+                      <span v-if="item.entity_source" class="budget-detail-source">
+                        {{ formatBudgetSource(item) }}
                       </span>
                     </span>
-                    <span class="budget-detail-amount" :class="{ 'budget-detail-amount--pending': item.amount === null }">
-                      {{ item.amount === null ? t('result.budget.amountPending') : `¥${formatBudgetAmount(item.amount)}` }}
+                    <span class="budget-detail-calculation">
+                      {{ formatBudgetCalculation(item) }}
+                    </span>
+                    <span class="budget-detail-amount" :class="{ 'budget-detail-amount--pending': displayBudgetItemAmount(item) === null }">
+                      {{ displayBudgetItemAmount(item) === null
+                        ? t('result.budget.amountPending')
+                        : formatBudgetDisplayAmount(displayBudgetItemAmount(item)) }}
                     </span>
                     <span v-if="!props.readonly" class="budget-action-wrap">
                       <button
@@ -212,33 +231,39 @@
           <div class="right-budget-summary" v-show="activeSection === 'budget' && !!tripPlan.budget">
             <div class="budget-summary-panel">
               <div class="budget-summary-title">{{ t('result.budget.title') }}</div>
+              <div class="budget-summary-basis">
+                {{ budgetDisplayBasis === 'per_person'
+                  ? t('result.budget.perPersonFor', { count: effectiveBudgetTravelerCount })
+                  : t('result.budget.groupFor', { count: effectiveBudgetTravelerCount }) }}
+              </div>
               <div class="budget-summary-total-wrap">
                 <span class="budget-summary-currency">¥</span>
-                <span class="budget-summary-total-value">{{ formatBudgetAmount(tripPlan.budget?.total ?? 0) }}</span>
+                <span class="budget-summary-total-value">{{ formatBudgetAmount(displayBudgetTotals.total) }}</span>
+                <span v-if="budgetDisplayBasis === 'per_person'" class="budget-summary-unit">/人</span>
               </div>
               <div class="budget-summary-sub-grid">
                 <div class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget?.total_attractions ?? 0) }}</div>
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_attractions) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.attraction') }}</div>
                 </div>
                 <div class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget?.total_hotels ?? 0) }}</div>
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_hotels) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.hotel') }}</div>
                 </div>
                 <div class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget?.total_meals ?? 0) }}</div>
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_meals) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.meal') }}</div>
                 </div>
                 <div class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget?.total_transportation ?? 0) }}</div>
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_transportation) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.transport') }}</div>
                 </div>
-                <div v-if="tripPlan.budget?.total_other" class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget.total_other) }}</div>
+                <div v-if="displayBudgetTotals.total_other" class="budget-summary-sub-item">
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_other) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.budget.other') }}</div>
                 </div>
-                <div v-if="tripPlan.budget?.total_inter_city_transport" class="budget-summary-sub-item">
-                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(tripPlan.budget.total_inter_city_transport) }}</div>
+                <div v-if="displayBudgetTotals.total_inter_city_transport" class="budget-summary-sub-item">
+                  <div class="budget-summary-sub-value">¥{{ formatBudgetAmount(displayBudgetTotals.total_inter_city_transport) }}</div>
                   <div class="budget-summary-sub-label">{{ t('result.interCityTransport') }}</div>
                 </div>
               </div>
@@ -373,7 +398,7 @@
     <a-modal
       v-if="!props.readonly"
       v-model:open="budgetEditorOpen"
-      :title="budgetEditor.id ? t('result.budget.editItem') : t('result.budget.addItem')"
+      :title="budgetEditorTitle"
       :ok-text="t('common.ok')"
       :cancel-text="t('common.cancel')"
       :confirm-loading="budgetSaving"
@@ -381,42 +406,150 @@
     >
       <a-form layout="vertical" class="budget-editor-form">
         <a-form-item :label="t('result.budget.detailType')" required>
-          <a-select v-model:value="budgetEditor.type">
-            <a-select-option value="attraction">{{ t('result.budget.attraction') }}</a-select-option>
+          <a-select v-model:value="budgetEditor.type" :disabled="editingItineraryAttraction">
+            <a-select-option
+              value="attraction"
+              :disabled="Boolean(budgetEditor.id) && budgetEditor.type !== 'attraction'"
+            >
+              {{ t('result.budget.attraction') }}
+            </a-select-option>
             <a-select-option value="hotel">{{ t('result.budget.hotel') }}</a-select-option>
             <a-select-option value="meal">{{ t('result.budget.meal') }}</a-select-option>
             <a-select-option value="transport">{{ t('result.budget.transport') }}</a-select-option>
             <a-select-option value="other">{{ t('result.budget.other') }}</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item :label="t('result.budget.detailDay')" required>
-          <a-select v-model:value="budgetEditor.dayIndex">
-            <a-select-option :value="-1">{{ t('result.budget.wholeTrip') }}</a-select-option>
-            <a-select-option
-              v-for="day in tripPlan?.days ?? []"
-              :key="day.day_index"
-              :value="day.day_index"
-            >
-              {{ t('common.dayNumber', { day: day.day_index + 1 }) }}
-            </a-select-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item :label="t('result.budget.detailName')" required>
-          <a-input v-model:value="budgetEditor.name" :maxlength="120" />
-        </a-form-item>
-        <a-form-item :label="t('result.budget.detailAmount')">
-          <a-input-number
-            v-model:value="budgetEditor.amount"
-            :min="0"
-            :max="100000000"
-            :precision="2"
-            :placeholder="t('result.budget.amountPending')"
-            class="budget-amount-input"
-          />
-        </a-form-item>
-        <a-form-item :label="t('result.budget.note')">
-          <a-input v-model:value="budgetEditor.note" :maxlength="300" />
-        </a-form-item>
+
+        <template v-if="isAttractionEditorMode">
+          <a-form-item :label="t('result.budget.detailDay')" required>
+            <a-select v-model:value="attractionEditor.dayIndex">
+              <a-select-option
+                v-for="day in tripPlan?.days ?? []"
+                :key="day.day_index"
+                :value="day.day_index"
+              >
+                {{ t('common.dayNumber', { day: day.day_index + 1 }) }} · {{ day.city || tripPlan?.city }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item :label="t('result.budget.realAttraction')" required>
+            <a-input-search
+              v-model:value="attractionEditor.query"
+              :placeholder="t('result.budget.attractionSearchPlaceholder')"
+              :enter-button="t('result.budget.search')"
+              :loading="attractionSearchLoading"
+              @search="searchAttractionPoiOptions"
+            />
+            <div v-if="attractionPoiResults.length" class="attraction-poi-results">
+              <button
+                v-for="poi in attractionPoiResults"
+                :key="poi.id"
+                type="button"
+                class="attraction-poi-option"
+                :class="{ 'is-selected': attractionEditor.poi?.id === poi.id }"
+                @click="selectAttractionPoi(poi)"
+              >
+                <EnvironmentOutlined aria-hidden="true" />
+                <span>
+                  <strong>{{ poi.name }}</strong>
+                  <small>{{ poi.address || poi.type }}</small>
+                </span>
+              </button>
+            </div>
+            <div v-if="attractionEditor.poi" class="attraction-poi-selected">
+              <EnvironmentOutlined aria-hidden="true" />
+              <span>
+                <strong>{{ attractionEditor.poi.name }}</strong>
+                <small>{{ attractionEditor.poi.address }}</small>
+              </span>
+              <span>{{ t('result.budget.amapVerified') }}</span>
+            </div>
+          </a-form-item>
+          <div class="attraction-schedule-grid">
+            <a-form-item :label="t('result.budget.startTime')" required>
+              <a-input v-model:value="attractionEditor.startTime" type="time" />
+            </a-form-item>
+            <a-form-item :label="t('result.fieldVisitDurationMinutes')" required>
+              <a-input-number
+                v-model:value="attractionEditor.visitDuration"
+                :min="30"
+                :max="720"
+                :step="30"
+                class="budget-amount-input"
+              />
+            </a-form-item>
+          </div>
+          <a-form-item :label="t('result.budget.ticketPricePerPerson')">
+            <a-input-number
+              v-model:value="attractionEditor.ticketPrice"
+              :min="0"
+              :max="1000000"
+              :precision="0"
+              class="budget-amount-input"
+            />
+          </a-form-item>
+          <a-form-item :label="t('result.fieldDescription')">
+            <a-textarea
+              v-model:value="attractionEditor.description"
+              :maxlength="1000"
+              :rows="3"
+            />
+          </a-form-item>
+          <a-form-item>
+            <a-checkbox v-model:checked="attractionEditor.reservationRequired">
+              {{ t('result.reservationRequired') }}
+            </a-checkbox>
+          </a-form-item>
+          <a-form-item
+            v-if="attractionEditor.reservationRequired"
+            :label="t('result.budget.reservationTips')"
+          >
+            <a-input
+              v-model:value="attractionEditor.reservationTips"
+              :maxlength="500"
+            />
+          </a-form-item>
+        </template>
+
+        <template v-else>
+          <a-form-item :label="t('result.budget.detailDay')" required>
+            <a-select v-model:value="budgetEditor.dayIndex">
+              <a-select-option :value="-1">{{ t('result.budget.wholeTrip') }}</a-select-option>
+              <a-select-option
+                v-for="day in tripPlan?.days ?? []"
+                :key="day.day_index"
+                :value="day.day_index"
+              >
+                {{ t('common.dayNumber', { day: day.day_index + 1 }) }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item :label="t('result.budget.detailName')" required>
+            <a-input v-model:value="budgetEditor.name" :maxlength="120" />
+          </a-form-item>
+          <a-form-item :label="t('result.budget.amountBasis')" required>
+            <a-segmented
+              v-model:value="budgetEditor.amountBasis"
+              :options="budgetBasisOptions"
+              block
+            />
+          </a-form-item>
+          <a-form-item :label="budgetEditor.amountBasis === 'per_person'
+            ? t('result.budget.perPersonAmount')
+            : t('result.budget.groupTotalAmount')">
+            <a-input-number
+              v-model:value="budgetEditor.amount"
+              :min="0"
+              :max="100000000"
+              :precision="2"
+              :placeholder="t('result.budget.amountPending')"
+              class="budget-amount-input"
+            />
+          </a-form-item>
+          <a-form-item :label="t('result.budget.note')">
+            <a-input v-model:value="budgetEditor.note" :maxlength="300" />
+          </a-form-item>
+        </template>
       </a-form>
     </a-modal>
   </div>
@@ -426,11 +559,12 @@
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import {
   CalendarOutlined,
   DeleteOutlined,
   EditOutlined,
+  EnvironmentOutlined,
   PlusOutlined,
   ShareAltOutlined,
   UndoOutlined,
@@ -449,12 +583,18 @@ import TripToday from '@/components/TripToday.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import YoubanLoader from '@/components/YoubanLoader.vue'
 import type {
+  Attraction,
+  Budget,
+  BudgetAmountBasis,
   BudgetItemInput,
   BudgetItemType,
   BudgetLedgerItem,
   BudgetLedgerResponse,
   ExecutionMap,
   ItemExecutionStatus,
+  ItineraryAttractionInput,
+  ItineraryMutationResponse,
+  PoiSearchItem,
   ShareLoadErrorKind,
   TripPlan,
   TripPlanResponse,
@@ -463,23 +603,31 @@ import type {
 } from '@/types'
 import {
   createBudgetItem,
+  createItineraryAttraction,
   createTripShare,
   deleteBudgetItem as deleteBudgetLedgerItem,
+  deleteItineraryAttraction,
   getBudgetItems,
   getRuntimeApiBaseUrl,
   getSharedTripPlan,
   pollTaskStatus,
   retryTripPlan,
+  searchAttractionPois,
   SharedTripPlanError,
   TripShareCreationError,
   updateItemStatus,
   updateBudgetItem,
+  updateItineraryAttraction,
   watchTripTask,
 } from '@/services/api'
 import { currentUser } from '@/stores/auth'
 import { notifyPlansUpdated } from '@/stores/plans'
 import { canUseCachedPlan } from '@/utils/planConversation.js'
-import { normalizeReferenceTime, resolveTripBlueprint } from '@/utils/tripPresentation.js'
+import {
+  buildDayTimeline,
+  normalizeReferenceTime,
+  resolveTripBlueprint,
+} from '@/utils/tripPresentation.js'
 import { findTodayArrayIndex } from '@/utils/tripExecution'
 import { buildTripCalendar, countCalendarEvents } from '@/utils/tripCalendar'
 
@@ -754,6 +902,7 @@ type BudgetSortMode = 'amountDesc' | 'amountAsc' | 'dayAsc' | 'dayDesc'
 
 type BudgetDetailItem = BudgetLedgerItem & {
   dayNumber: number | null
+  endDayNumber: number | null
 }
 
 type BudgetEditorState = {
@@ -762,12 +911,29 @@ type BudgetEditorState = {
   dayIndex: number
   name: string
   amount: number | null
+  amountBasis: BudgetAmountBasis
   note: string
+}
+
+type AttractionEditorState = {
+  itemId: string
+  dayIndex: number
+  query: string
+  poi: PoiSearchItem | null
+  startTime: string
+  visitDuration: number
+  ticketPrice: number
+  description: string
+  reservationRequired: boolean
+  reservationTips: string
 }
 
 const budgetFilterType = ref<'all' | BudgetItemType>('all')
 const budgetSortMode = ref<BudgetSortMode>('amountDesc')
+const budgetDisplayBasis = ref<BudgetAmountBasis>('per_person')
 const budgetLedgerItems = ref<BudgetLedgerItem[]>([])
+const budgetPerPersonTotals = ref<Budget | null>(null)
+const budgetTravelerCount = ref(0)
 const budgetPendingCount = ref(0)
 const budgetLoading = ref(false)
 const budgetSaving = ref(false)
@@ -778,7 +944,23 @@ const budgetEditor = ref<BudgetEditorState>({
   dayIndex: -1,
   name: '',
   amount: null,
+  amountBasis: 'per_person',
   note: '',
+})
+const editingItineraryAttraction = ref(false)
+const attractionSearchLoading = ref(false)
+const attractionPoiResults = ref<PoiSearchItem[]>([])
+const attractionEditor = ref<AttractionEditorState>({
+  itemId: '',
+  dayIndex: 0,
+  query: '',
+  poi: null,
+  startTime: '09:00',
+  visitDuration: 90,
+  ticketPrice: 0,
+  description: '',
+  reservationRequired: false,
+  reservationTips: '',
 })
 const activeWeatherIndex = ref(0)
 
@@ -934,6 +1116,8 @@ const applyTripPlanPayload = async (payload: {
 }) => {
   tripPlan.value = payload.plan
   budgetLedgerItems.value = []
+  budgetPerPersonTotals.value = null
+  budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
 
   if (payload.planId) {
@@ -963,6 +1147,8 @@ const restoreTripPlanFromResponse = async (
   if (!response?.data || (operation && !ownsPlanOperation(operation))) return false
   tripPlan.value = response.data
   budgetLedgerItems.value = []
+  budgetPerPersonTotals.value = null
+  budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
   const responsePlanId = String(response.plan_id || planId.value || '')
   if (responsePlanId) {
@@ -1065,6 +1251,8 @@ const loadPlanById = async (targetPlanId: string) => {
   loadingPlan.value = false
   retryingFailedPlan.value = false
   budgetLedgerItems.value = []
+  budgetPerPersonTotals.value = null
+  budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
   attractionPhotos.value = {}
   activeSection.value = 'overview'
@@ -1228,9 +1416,115 @@ const getBudgetTypeLabel = (type: BudgetItemType): string => {
   return labels[type]
 }
 
+const budgetBasisOptions = computed(() => [
+  { label: t('result.budget.perPerson'), value: 'per_person' },
+  { label: t('result.budget.groupTotal'), value: 'group_total' },
+])
+
+const effectiveBudgetTravelerCount = computed(() => Math.max(
+  1,
+  budgetTravelerCount.value || tripPlan.value?.traveler_count || 1,
+))
+
+const emptyBudget = (): Budget => ({
+  total_attractions: 0,
+  total_hotels: 0,
+  total_meals: 0,
+  total_transportation: 0,
+  total_inter_city_transport: 0,
+  total_other: 0,
+  total: 0,
+})
+
+const divideBudget = (budget: Budget, divisor: number): Budget => ({
+  total_attractions: roundBudgetAmount((budget.total_attractions || 0) / divisor),
+  total_hotels: roundBudgetAmount((budget.total_hotels || 0) / divisor),
+  total_meals: roundBudgetAmount((budget.total_meals || 0) / divisor),
+  total_transportation: roundBudgetAmount((budget.total_transportation || 0) / divisor),
+  total_inter_city_transport: roundBudgetAmount((budget.total_inter_city_transport || 0) / divisor),
+  total_other: roundBudgetAmount((budget.total_other || 0) / divisor),
+  total: roundBudgetAmount((budget.total || 0) / divisor),
+})
+
+const displayBudgetTotals = computed<Budget>(() => {
+  const groupTotals = tripPlan.value?.budget || emptyBudget()
+  if (budgetDisplayBasis.value === 'group_total') return groupTotals
+  return budgetPerPersonTotals.value
+    || divideBudget(groupTotals, effectiveBudgetTravelerCount.value)
+})
+
+const budgetAmountHeader = computed(() => budgetDisplayBasis.value === 'per_person'
+  ? t('result.budget.perPersonAmount')
+  : t('result.budget.groupTotalAmount'))
+
+const displayBudgetItemAmount = (item: BudgetLedgerItem): number | null => (
+  budgetDisplayBasis.value === 'per_person' ? item.per_person_amount : item.amount
+)
+
+const formatBudgetDisplayAmount = (value: number | null): string => {
+  if (value === null) return t('result.budget.amountPending')
+  const amount = formatBudgetAmount(value)
+  return budgetDisplayBasis.value === 'per_person'
+    ? t('result.budget.perPersonValue', { amount })
+    : t('result.budget.groupValue', { amount })
+}
+
+const formatBudgetDayRange = (item: BudgetLedgerItem): string => {
+  if (item.day_index === null) return t('result.budget.wholeTrip')
+  const start = item.day_index + 1
+  const end = item.day_end_index === null ? start : item.day_end_index + 1
+  return end > start
+    ? t('result.budget.dayRange', { start, end })
+    : t('common.dayNumber', { day: start })
+}
+
+const formatBudgetCalculation = (item: BudgetLedgerItem): string => {
+  if (item.calculation_summary === 'room_night'
+    && item.unit_amount !== null && item.room_count && item.nights) {
+    return t('result.budget.roomNightCalculation', {
+      unit: formatBudgetAmount(item.unit_amount),
+      rooms: item.room_count,
+      nights: item.nights,
+    })
+  }
+  if (item.calculation_summary === 'per_person' && item.unit_amount !== null) {
+    return t('result.budget.perPersonCalculation', {
+      unit: formatBudgetAmount(item.unit_amount),
+      travelers: item.traveler_count,
+    })
+  }
+  if (item.calculation_summary === 'shared_total' && item.amount !== null) {
+    return t('result.budget.sharedCalculation', {
+      travelers: item.traveler_count,
+    })
+  }
+  return item.amount_basis === 'per_person'
+    ? t('result.budget.enteredPerPerson')
+    : t('result.budget.enteredGroupTotal')
+}
+
+const formatBudgetSource = (item: BudgetLedgerItem): string => {
+  const provider = item.entity_source === 'flyai'
+    ? 'FlyAI'
+    : item.entity_source === 'amap'
+      ? t('result.budget.amap')
+      : item.entity_source
+  if (item.price_source === 'user') {
+    return provider
+      ? t('result.budget.userPriceWithSource', { provider })
+      : t('result.budget.userPrice')
+  }
+  const checked = dayjs(item.price_checked_at)
+  return checked.isValid()
+    ? t('result.budget.sourceChecked', { provider, date: checked.format('YYYY-MM-DD') })
+    : provider
+}
+
 const applyBudgetLedgerResponse = (response: BudgetLedgerResponse) => {
   budgetLedgerItems.value = response.items
   budgetPendingCount.value = response.pending_count
+  budgetPerPersonTotals.value = response.per_person_totals
+  budgetTravelerCount.value = response.traveler_count
   if (tripPlan.value) {
     tripPlan.value.budget = response.totals
     sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
@@ -1259,6 +1553,7 @@ const budgetItems = computed<BudgetDetailItem[]>(() =>
     .map((item) => ({
       ...item,
       dayNumber: item.day_index === null ? null : item.day_index + 1,
+      endDayNumber: item.day_end_index === null ? null : item.day_end_index + 1,
     })),
 )
 
@@ -1277,8 +1572,8 @@ const filteredBudgetItems = computed<BudgetDetailItem[]>(() => {
   sorted.sort((a, b) => {
     const dayA = a.dayNumber ?? Number.MAX_SAFE_INTEGER
     const dayB = b.dayNumber ?? Number.MAX_SAFE_INTEGER
-    const amountA = a.amount
-    const amountB = b.amount
+    const amountA = displayBudgetItemAmount(a)
+    const amountB = displayBudgetItemAmount(b)
 
     switch (budgetSortMode.value) {
       case 'amountAsc':
@@ -1296,14 +1591,85 @@ const filteredBudgetItems = computed<BudgetDetailItem[]>(() => {
   return sorted
 })
 
+const isAttractionEditorMode = computed(() =>
+  editingItineraryAttraction.value
+  || (!budgetEditor.value.id && budgetEditor.value.type === 'attraction'),
+)
+
+const budgetEditorTitle = computed(() => {
+  if (isAttractionEditorMode.value) {
+    return t(attractionEditor.value.itemId
+      ? 'result.budget.editAttraction'
+      : 'result.budget.addAttraction')
+  }
+  return t(budgetEditor.value.id ? 'result.budget.editItem' : 'result.budget.addItem')
+})
+
+const findPlanAttraction = (attractionId: string): { attraction: Attraction; dayIndex: number } | null => {
+  for (const day of tripPlan.value?.days ?? []) {
+    const attraction = day.attractions.find((candidate) => candidate.id === attractionId)
+    if (attraction) return { attraction, dayIndex: day.day_index }
+  }
+  return null
+}
+
+const resetAttractionEditor = () => {
+  attractionPoiResults.value = []
+  attractionEditor.value = {
+    itemId: '',
+    dayIndex: tripPlan.value?.days[0]?.day_index ?? 0,
+    query: '',
+    poi: null,
+    startTime: '09:00',
+    visitDuration: 90,
+    ticketPrice: 0,
+    description: '',
+    reservationRequired: false,
+    reservationTips: '',
+  }
+}
+
+const selectedAttractionDay = () =>
+  tripPlan.value?.days.find((day) => day.day_index === attractionEditor.value.dayIndex)
+
+const searchAttractionPoiOptions = async (rawQuery?: string) => {
+  const query = String(rawQuery ?? attractionEditor.value.query).trim()
+  const day = selectedAttractionDay()
+  const city = day?.city || tripPlan.value?.city || ''
+  if (!query || !city) {
+    message.warning(t('result.messages.attractionSearchRequired'))
+    return
+  }
+  attractionSearchLoading.value = true
+  try {
+    attractionPoiResults.value = await searchAttractionPois(query, city)
+    if (!attractionPoiResults.value.length) {
+      message.info(t('result.messages.attractionSearchEmpty'))
+    }
+  } catch {
+    attractionPoiResults.value = []
+    message.error(t('result.messages.attractionSearchFailed'))
+  } finally {
+    attractionSearchLoading.value = false
+  }
+}
+
+const selectAttractionPoi = (poi: PoiSearchItem) => {
+  attractionEditor.value.poi = poi
+  attractionEditor.value.query = poi.name
+}
+
 const openBudgetEditor = (item?: BudgetDetailItem) => {
+  editingItineraryAttraction.value = false
+  resetAttractionEditor()
   budgetEditor.value = item
     ? {
         id: item.id,
         type: item.type,
         dayIndex: item.day_index ?? -1,
         name: item.name,
-        amount: item.amount,
+        amount: item.amount_basis === 'per_person' ? item.per_person_amount : item.amount,
+        amountBasis: item.amount_basis,
         note: item.note || '',
       }
     : {
@@ -1312,12 +1678,108 @@ const openBudgetEditor = (item?: BudgetDetailItem) => {
         dayIndex: -1,
         name: '',
         amount: null,
+        amountBasis: budgetDisplayBasis.value,
         note: '',
       }
+
+  if (item?.type === 'attraction' && item.linked_item_id) {
+    const linked = findPlanAttraction(item.linked_item_id)
+    if (linked) {
+      const attraction = linked.attraction
+      const day = tripPlan.value?.days.find((candidate) => candidate.day_index === linked.dayIndex)
+      const weather = day
+        ? tripPlan.value?.weather_info?.find((item) => item.date === day.date) || null
+        : null
+      const timelineStart = day
+        ? buildDayTimeline(day, weather).find((entry) =>
+            entry.kind === 'attraction' && entry.item.id === item.linked_item_id)?.time
+        : null
+      editingItineraryAttraction.value = true
+      attractionEditor.value = {
+        itemId: item.linked_item_id,
+        dayIndex: linked.dayIndex,
+        query: attraction.name,
+        poi: attraction.poi_id && attraction.location
+          ? {
+              id: attraction.poi_id,
+              name: attraction.name,
+              type: attraction.category || '',
+              address: attraction.address,
+              location: attraction.location,
+            }
+          : null,
+        startTime: normalizeReferenceTime(attraction.start_time) || timelineStart || '09:00',
+        visitDuration: Math.max(30, Number(attraction.visit_duration) || 90),
+        ticketPrice: Math.max(0, Number(attraction.ticket_price) || 0),
+        description: attraction.description || '',
+        reservationRequired: Boolean(attraction.reservation_required),
+        reservationTips: attraction.reservation_tips || '',
+      }
+    }
+  }
   budgetEditorOpen.value = true
 }
 
+const applyItineraryMutationResponse = async (response: ItineraryMutationResponse) => {
+  tripPlan.value = response.plan
+  applyBudgetLedgerResponse(response)
+  sessionStorage.setItem('tripPlan', JSON.stringify(response.plan))
+  await loadAttractionPhotos()
+}
+
+const saveItineraryAttraction = async () => {
+  const targetPlanId = planId.value
+  const editor = attractionEditor.value
+  const startTime = normalizeReferenceTime(editor.startTime)
+  if (!targetPlanId || !editor.poi || editor.dayIndex < 0 || !startTime) {
+    message.warning(t('result.messages.attractionFieldsRequired'))
+    return
+  }
+  if (!Number.isFinite(editor.visitDuration) || editor.visitDuration < 30) {
+    message.warning(t('result.messages.attractionDurationInvalid'))
+    return
+  }
+  if (!Number.isFinite(editor.ticketPrice) || editor.ticketPrice < 0) {
+    message.warning(t('result.messages.budgetInvalidAmount'))
+    return
+  }
+
+  const payload: ItineraryAttractionInput = {
+    day_index: editor.dayIndex,
+    poi_id: editor.poi.id,
+    name: editor.poi.name,
+    address: editor.poi.address,
+    location: editor.poi.location,
+    visit_duration: Math.round(editor.visitDuration),
+    description: editor.description.trim(),
+    ticket_price: Math.round(editor.ticketPrice),
+    start_time: startTime,
+    reservation_required: editor.reservationRequired,
+    reservation_tips: editor.reservationTips.trim(),
+  }
+
+  budgetSaving.value = true
+  try {
+    const response = editor.itemId
+      ? await updateItineraryAttraction(targetPlanId, editor.itemId, payload)
+      : await createItineraryAttraction(targetPlanId, payload)
+    await applyItineraryMutationResponse(response)
+    budgetEditorOpen.value = false
+    message.success(t(editor.itemId
+      ? 'result.messages.attractionUpdated'
+      : 'result.messages.attractionAdded'))
+  } catch {
+    message.error(t('result.messages.attractionSaveFailed'))
+  } finally {
+    budgetSaving.value = false
+  }
+}
+
 const saveBudgetEditor = async () => {
+  if (isAttractionEditorMode.value) {
+    await saveItineraryAttraction()
+    return
+  }
   const targetPlanId = planId.value
   const name = budgetEditor.value.name.trim()
   if (!targetPlanId || !name) {
@@ -1334,6 +1796,7 @@ const saveBudgetEditor = async () => {
     day_index: budgetEditor.value.dayIndex < 0 ? null : budgetEditor.value.dayIndex,
     name,
     amount: amount === null ? null : roundBudgetAmount(amount),
+    amount_basis: budgetEditor.value.amountBasis,
     note: budgetEditor.value.note.trim(),
   }
 
@@ -1356,7 +1819,7 @@ const saveBudgetEditor = async () => {
   }
 }
 
-const removeBudgetItem = async (item: BudgetDetailItem) => {
+const removeBudgetOnlyItem = async (item: BudgetDetailItem) => {
   if (!planId.value || budgetSaving.value) return
   budgetSaving.value = true
   try {
@@ -1367,6 +1830,35 @@ const removeBudgetItem = async (item: BudgetDetailItem) => {
   } finally {
     budgetSaving.value = false
   }
+}
+
+const removeItineraryAttraction = async (item: BudgetDetailItem) => {
+  if (!planId.value || !item.linked_item_id || budgetSaving.value) return
+  budgetSaving.value = true
+  try {
+    const response = await deleteItineraryAttraction(planId.value, item.linked_item_id)
+    await applyItineraryMutationResponse(response)
+    message.success(t('result.messages.attractionDeletedEverywhere'))
+  } catch {
+    message.error(t('result.messages.attractionSaveFailed'))
+  } finally {
+    budgetSaving.value = false
+  }
+}
+
+const removeBudgetItem = (item: BudgetDetailItem) => {
+  if (item.type === 'attraction' && item.linked_item_id) {
+    Modal.confirm({
+      title: t('result.budget.deleteAttractionTitle'),
+      content: t('result.budget.deleteAttractionContent', { name: item.name }),
+      okText: t('common.delete'),
+      cancelText: t('common.cancel'),
+      okType: 'danger',
+      onOk: () => removeItineraryAttraction(item),
+    })
+    return
+  }
+  void removeBudgetOnlyItem(item)
 }
 
 const restoreBudgetItem = async (item: BudgetLedgerItem) => {
@@ -2498,7 +2990,7 @@ const escapeHtml = (value: unknown): string => {
 
 .budget-detail-row {
   display: grid;
-  grid-template-columns: 112px 96px minmax(0, 1fr) 120px 86px;
+  grid-template-columns: 92px 82px minmax(160px, 1fr) minmax(180px, 0.9fr) 118px 64px;
   align-items: center;
   gap: 10px;
   padding: 11px 12px;
@@ -2511,7 +3003,7 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-detail-row--readonly {
-  grid-template-columns: 112px 96px minmax(0, 1fr) 120px;
+  grid-template-columns: 92px 82px minmax(160px, 1fr) minmax(180px, 0.9fr) 118px;
 }
 
 .budget-detail-header {
@@ -2525,6 +3017,7 @@ const escapeHtml = (value: unknown): string => {
 .budget-detail-type,
 .budget-detail-day,
 .budget-detail-name,
+.budget-detail-calculation,
 .budget-detail-amount {
   color: #3D3229;
   font-size: 13px;
@@ -2532,17 +3025,42 @@ const escapeHtml = (value: unknown): string => {
 
 .budget-detail-name {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  white-space: nowrap;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.budget-detail-name > span:first-child {
+.budget-detail-name-main {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.budget-detail-name-main > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budget-detail-source {
+  max-width: 100%;
+  overflow: hidden;
+  color: rgba(61, 50, 41, 0.56);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budget-detail-calculation {
+  color: rgba(61, 50, 41, 0.66);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .budget-origin-tag {
@@ -2628,7 +3146,7 @@ const escapeHtml = (value: unknown): string => {
   }
 
   .budget-detail-row {
-    min-width: 620px;
+    min-width: 860px;
   }
 }
 
@@ -2651,10 +3169,24 @@ const escapeHtml = (value: unknown): string => {
   line-height: 1;
 }
 
+.budget-summary-basis {
+  margin-top: -10px;
+  color: rgba(61, 50, 41, 0.6);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .budget-summary-total-wrap {
   display: flex;
   align-items: flex-start;
   gap: 4px;
+}
+
+.budget-summary-unit {
+  align-self: flex-end;
+  padding-bottom: 5px;
+  color: rgba(61, 50, 41, 0.62);
+  font-size: 14px;
 }
 
 .budget-summary-currency {
@@ -2713,7 +3245,80 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-editor-form {
+  max-height: clamp(240px, calc(100vh - 260px), 620px);
   padding-top: 8px;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.attraction-poi-results {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.attraction-poi-option,
+.attraction-poi-selected {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.attraction-poi-option {
+  cursor: pointer;
+}
+
+.attraction-poi-option:hover,
+.attraction-poi-option.is-selected {
+  border-color: var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+.attraction-poi-option > span,
+.attraction-poi-selected > span {
+  display: grid;
+  min-width: 0;
+}
+
+.attraction-poi-option strong,
+.attraction-poi-selected strong {
+  overflow-wrap: anywhere;
+}
+
+.attraction-poi-option small,
+.attraction-poi-selected small {
+  color: var(--text-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.attraction-poi-selected {
+  margin-top: 8px;
+  border-color: var(--status-success);
+}
+
+.attraction-poi-selected > span:last-child {
+  color: var(--status-success);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.attraction-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .budget-amount-input {
@@ -3251,6 +3856,7 @@ const escapeHtml = (value: unknown): string => {
     grid-template-columns: auto auto 1fr auto;
     grid-template-areas:
       'name name name amount'
+      'calculation calculation calculation calculation'
       'type day gap actions';
     row-gap: 7px;
     padding: 13px 14px;
@@ -3268,6 +3874,15 @@ const escapeHtml = (value: unknown): string => {
     grid-area: name;
     font-weight: 600;
     font-size: 14.5px;
+  }
+
+  .budget-detail-source {
+    font-weight: 400;
+  }
+
+  .budget-detail-calculation {
+    grid-area: calculation;
+    font-size: 12px;
   }
 
   .budget-detail-amount {
@@ -3296,6 +3911,21 @@ const escapeHtml = (value: unknown): string => {
 }
 
 @media (max-width: 480px) {
+  .attraction-schedule-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .attraction-poi-option,
+  .attraction-poi-selected {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .attraction-poi-selected > span:last-child {
+    grid-column: 2;
+    white-space: normal;
+  }
+
   :deep(.ant-collapse-header) {
     align-items: flex-start !important;
     padding: 12px !important;

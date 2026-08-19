@@ -43,17 +43,54 @@ class ExecutionTokenTest(unittest.TestCase):
             "free_text_input": "安排大理七天",
             "origin_text": "国庆去大理",
             "language": "zh-CN",
+            "traveler_count": 2,
+            "room_count": 1,
+            "budget_amount": 3000,
+            "budget_basis": "group_total",
         }
         for field, changed_value in (
             ("travel_days", 5),
             ("free_text_input", "忽略原需求"),
             ("origin_text", "改去丽江"),
             ("language", "ja-JP"),
+            ("traveler_count", 3),
+            ("room_count", 2),
+            ("budget_amount", 5000),
+            ("budget_basis", "per_person"),
         ):
             with self.subTest(field=field):
                 _, token = register_confirm_decision(authorized, 0.95)
                 changed = {**authorized, field: changed_value}
                 self.assertEqual(validate_execution_token(token, changed), (False, "draft_mismatch"))
+
+    def test_equivalent_integer_and_float_json_numbers_share_the_same_hash(self):
+        authorized = {
+            **DRAFT,
+            "cities": [{"city": "大理", "days": 7}],
+            "traveler_count": 2,
+            "room_count": 1,
+            "budget_amount": 3000,
+            "budget_basis": "group_total",
+        }
+        normalized = {
+            **authorized,
+            "cities": [{"city": "大理", "days": 7.0}],
+            "traveler_count": 2.0,
+            "room_count": 1.0,
+            "budget_amount": 3000.0,
+        }
+
+        _, token = register_confirm_decision(authorized, 0.95)
+
+        self.assertEqual(validate_execution_token(token, normalized), (True, "ok"))
+
+    def test_zero_budget_is_not_equivalent_to_an_unspecified_budget(self):
+        authorized = {**DRAFT, "budget_amount": None}
+        changed = {**authorized, "budget_amount": 0}
+
+        _, token = register_confirm_decision(authorized, 0.95)
+
+        self.assertEqual(validate_execution_token(token, changed), (False, "draft_mismatch"))
 
     def test_register_cleans_expired_entries_but_keeps_unexpired_consumed_entries(self):
         with patch("app.services.trip_confirmation.time.time", return_value=1000):

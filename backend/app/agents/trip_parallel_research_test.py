@@ -10,6 +10,7 @@ from app.agents.trip_research_agents import (
     ResearchCallbacks,
     ResearchContext,
     ResearchSources,
+    _hotel_dates,
     run_parallel_research,
 )
 from app.models.schemas import TripRequest
@@ -37,6 +38,19 @@ async def _noop_progress(_stage, _message, _value, _details):
 
 
 class ParallelTripResearchTest(unittest.TestCase):
+    def test_hotel_search_uses_each_city_overnight_date_range(self):
+        request = TripRequest(
+            city="北京",
+            cities=[{"city": "北京", "days": 2}, {"city": "广州", "days": 3}],
+            start_date="2026-09-01",
+            end_date="2026-09-05",
+            travel_days=5,
+            transportation="公共交通",
+            accommodation="舒适型酒店",
+        )
+        self.assertEqual(_hotel_dates(request, "北京"), ("2026-09-01", "2026-09-03"))
+        self.assertEqual(_hotel_dates(request, "广州"), ("2026-09-03", "2026-09-05"))
+
     def test_first_multi_city_wave_contains_every_research_category(self):
         request = _cities_request(["北京", "上海", "广州"])
         first_wave = []

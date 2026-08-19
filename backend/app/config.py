@@ -36,7 +36,13 @@ class Settings(BaseSettings):
     # 高德地图API配置
     vite_amap_web_key: str = ""
     vite_amap_web_js_key: str = ""
-    allow_llm_hotel_fallback: bool = False
+
+    # FlyAI 酒店搜索（服务端受控 CLI；未安装或失败时自动回退高德）
+    flyai_enabled: bool = True
+    flyai_cli_path: str = ""
+    flyai_api_key: str = ""
+    flyai_timeout_seconds: int = 8
+    flyai_cache_ttl_seconds: int = 3600
 
     # Google Maps API配置
     google_maps_api_key: str = ""

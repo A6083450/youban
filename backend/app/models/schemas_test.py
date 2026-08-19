@@ -1,6 +1,6 @@
 import unittest
 
-from app.models.schemas import TripPlan
+from app.models.schemas import TripPlan, TripRequest
 
 
 def plan_payload() -> dict:
@@ -82,6 +82,18 @@ def plan_payload() -> dict:
 
 
 class TripPlanBlueprintTest(unittest.TestCase):
+    def test_trip_request_defaults_rooms_to_two_travelers_per_room(self):
+        request = TripRequest(
+            city="广州",
+            start_date="2026-09-01",
+            end_date="2026-09-03",
+            travel_days=3,
+            transportation="公共交通",
+            accommodation="舒适型酒店",
+            traveler_count=3,
+        )
+        self.assertEqual(request.room_count, 2)
+
     def test_accepts_blueprint_and_reference_times(self):
         plan = TripPlan(**plan_payload())
         self.assertEqual(plan.blueprint.stages[1].day_indices, [1])

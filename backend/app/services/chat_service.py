@@ -225,7 +225,7 @@ def _validate_updated_plan(plan: Any, original: Dict[str, Any]) -> Optional[Dict
         if any(not isinstance(item, dict) for item in attractions):
             return None
         original_day = original_days[i] if isinstance(original_days[i], dict) else {}
-        # 酒店来自高德验证结果，不能让行程修改 Agent 改写或补造。
+        # 酒店来自受控数据源，不能让行程修改 Agent 改写或补造。
         day['hotel'] = original_day.get('hotel')
         # meals 为 List[Meal] 必填结构,缺失或非法时还原原计划,防止前端计算崩溃
         if not isinstance(day.get('meals'), list):

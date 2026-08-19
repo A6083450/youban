@@ -47,6 +47,23 @@ class TripRequest(BaseModel):
     travel_days: int = Field(..., description="旅行天数", ge=1, le=30, example=3)
     transportation: str = Field(..., description="交通方式", example="公共交通")
     accommodation: str = Field(..., description="住宿偏好", example="经济型酒店")
+    traveler_count: int = Field(default=1, ge=1, le=50, description="出行人数")
+    room_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="房间数；未填写时默认按每两人一间计算",
+    )
+    budget_amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=100_000_000,
+        description="用户输入的预算金额",
+    )
+    budget_basis: Literal["group_total", "per_person"] = Field(
+        default="group_total",
+        description="用户预算口径：合计或人均",
+    )
     preferences: List[str] = Field(default=[], description="旅行偏好标签", example=["历史文化", "美食"])
     free_text_input: Optional[str] = Field(default="", description="额外要求", example="希望多安排一些博物馆")
     origin_text: Optional[str] = Field(default="", description="用户自然语言原始输入")
@@ -61,6 +78,8 @@ class TripRequest(BaseModel):
             self.cities = [CityStay(city=self.city, days=self.travel_days)]
         if self.cities and not self.city:
             self.city = self.cities[0].city
+        if self.room_count is None:
+            self.room_count = (self.traveler_count + 1) // 2
         return self
 
     class Config:
@@ -73,6 +92,10 @@ class TripRequest(BaseModel):
                 "travel_days": 5,
                 "transportation": "公共交通",
                 "accommodation": "经济型酒店",
+                "traveler_count": 2,
+                "room_count": 1,
+                "budget_amount": 3000,
+                "budget_basis": "group_total",
                 "preferences": ["历史文化", "美食"],
                 "free_text_input": "希望多安排一些博物馆"
             }
@@ -121,6 +144,14 @@ class Attraction(BaseModel):
     reservation_tips: Optional[str] = Field(default="", description="预约提示信息")
     start_time: Optional[str] = Field(default=None, description="参考开始时间 HH:MM")
     end_time: Optional[str] = Field(default=None, description="参考结束时间 HH:MM")
+    time_recommendation_basis: Optional[Literal["weather", "seasonal"]] = Field(
+        default=None,
+        description="系统建议到访时间依据: weather/seasonal；为空表示未由系统补全",
+    )
+    crowd_recommendation_basis: Optional[Literal["heuristic"]] = Field(
+        default=None,
+        description="错峰建议依据；heuristic 表示经验规则而非实时客流",
+    )
 
     @field_validator("start_time", "end_time", mode="before")
     @classmethod
@@ -138,6 +169,10 @@ class Meal(BaseModel):
     description: Optional[str] = Field(default=None, description="描述")
     estimated_cost: int = Field(default=0, description="预估费用(元)")
     time: Optional[str] = Field(default=None, description="参考用餐时间 HH:MM")
+    time_recommendation_basis: Optional[Literal["schedule"]] = Field(
+        default=None,
+        description="系统建议用餐时间依据；schedule 表示按当日日程补全",
+    )
 
     @field_validator("time", mode="before")
     @classmethod
@@ -154,11 +189,15 @@ class Hotel(BaseModel):
     rating: str = Field(default="", description="评分")
     distance: str = Field(default="", description="距离景点距离")
     type: str = Field(default="", description="酒店类型")
-    estimated_cost: int = Field(default=0, description="预估费用(元/晚)")
+    estimated_cost: float = Field(default=0, description="每间房每晚参考起价(元/间夜)")
     source: str = Field(default="", description="酒店数据来源")
     source_hotel_id: str = Field(default="", description="来源平台酒店ID")
+    source_url: str = Field(default="", description="来源或预订页面")
+    image_url: str = Field(default="", description="酒店图片")
+    price_checked_at: str = Field(default="", description="价格查询时间")
+    price_method: str = Field(default="", description="价格计算方法")
     price_status: Literal["unavailable", "estimated", "live"] = Field(
-        default="estimated",
+        default="unavailable",
         description="价格状态: unavailable/estimated/live",
     )
 
@@ -226,16 +265,34 @@ BudgetItemType = Literal["attraction", "hotel", "meal", "transport", "other"]
 
 
 class BudgetLedgerItem(BaseModel):
-    """独立预算台账条目；用户修改后不再被行程同步覆盖。"""
+    """独立预算台账条目；amount 始终是全体出行人的合计金额。"""
     id: str
     type: BudgetItemType
     day_index: Optional[int] = Field(default=None, ge=0)
+    day_end_index: Optional[int] = Field(default=None, ge=0)
     name: str = Field(min_length=1, max_length=120)
-    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=100_000_000,
+        description="全体出行人的合计金额；预算汇总和持久化的唯一标准口径",
+    )
+    amount_basis: Literal["group_total", "per_person"] = Field(
+        default="group_total",
+        description="来源或用户录入口径；仅用于解释计算过程，不改变 amount 的合计金额语义",
+    )
+    traveler_count: int = Field(default=1, ge=1, le=50)
+    per_person_amount: Optional[float] = Field(default=None, ge=0)
+    calculation_summary: str = Field(default="", max_length=200)
+    unit_amount: Optional[float] = Field(default=None, ge=0)
+    room_count: Optional[int] = Field(default=None, ge=1, le=50)
+    nights: Optional[int] = Field(default=None, ge=1, le=30)
     origin: Literal["itinerary", "user"] = "itinerary"
     price_source: Literal["unavailable", "estimated", "live", "user"] = "unavailable"
     linked_item_id: str = ""
     entity_source: str = ""
+    source_url: str = ""
+    price_checked_at: str = ""
     note: str = Field(default="", max_length=300)
     user_locked: bool = False
     deleted: bool = False
@@ -245,7 +302,13 @@ class BudgetItemCreateRequest(BaseModel):
     type: BudgetItemType
     day_index: Optional[int] = Field(default=None, ge=0)
     name: str = Field(min_length=1, max_length=120)
-    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=100_000_000,
+        description="用户输入金额；按 amount_basis 解释，保存前统一换算为合计金额",
+    )
+    amount_basis: Literal["group_total", "per_person"] = "group_total"
     note: str = Field(default="", max_length=300)
 
 
@@ -253,9 +316,39 @@ class BudgetItemUpdateRequest(BaseModel):
     type: Optional[BudgetItemType] = None
     day_index: Optional[int] = Field(default=None, ge=0)
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    amount: Optional[float] = Field(default=None, ge=0, le=100_000_000)
+    amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=100_000_000,
+        description="用户输入金额；按 amount_basis 解释，保存前统一换算为合计金额",
+    )
+    amount_basis: Optional[Literal["group_total", "per_person"]] = None
     note: Optional[str] = Field(default=None, max_length=300)
     deleted: Optional[bool] = None
+
+
+class ItineraryAttractionUpsertRequest(BaseModel):
+    """从高德真实 POI 新增或替换行程景点。"""
+
+    day_index: int = Field(..., ge=0)
+    poi_id: str = Field(..., min_length=1, max_length=80)
+    name: str = Field(..., min_length=1, max_length=120)
+    address: str = Field(default="", max_length=300)
+    location: Location
+    visit_duration: int = Field(default=90, ge=30, le=720)
+    description: str = Field(default="", max_length=1000)
+    ticket_price: int = Field(default=0, ge=0, le=1_000_000)
+    start_time: str = Field(..., description="用户选择的参考开始时间 HH:MM")
+    reservation_required: bool = False
+    reservation_tips: str = Field(default="", max_length=500)
+
+    @field_validator("start_time", mode="before")
+    @classmethod
+    def validate_start_time(cls, value):
+        normalized = normalize_reference_time(value)
+        if normalized is None:
+            raise ValueError("开始时间必须是 HH:MM")
+        return normalized
 
 
 class TripBlueprintStage(BaseModel):
@@ -287,6 +380,10 @@ class TripPlan(BaseModel):
     cities: List[str] = Field(default=[], description="所有途经城市列表")
     start_date: str = Field(..., description="开始日期")
     end_date: str = Field(..., description="结束日期")
+    traveler_count: int = Field(default=1, ge=1, le=50, description="出行人数")
+    room_count: int = Field(default=1, ge=1, le=50, description="住宿房间数")
+    budget_amount: Optional[float] = Field(default=None, ge=0, description="用户预算金额")
+    budget_basis: Literal["group_total", "per_person"] = "group_total"
     days: List[DayPlan] = Field(..., description="每日行程")
     weather_info: List[WeatherInfo] = Field(default=[], description="天气信息")
     overall_suggestions: str = Field(..., description="总体建议")
@@ -324,6 +421,26 @@ class POIInfo(BaseModel):
     address: str = Field(..., description="地址")
     location: Location = Field(..., description="经纬度坐标")
     tel: Optional[str] = Field(default=None, description="电话")
+
+
+class HotelCandidateInfo(BaseModel):
+    """Provider-neutral hotel candidate used by the planner and validators."""
+
+    id: str = Field(..., description="来源平台酒店ID")
+    name: str
+    type: str = ""
+    address: str = ""
+    location: Optional[Location] = None
+    tel: Optional[str] = None
+    source: str = "amap"
+    starting_price: Optional[float] = Field(default=None, ge=0)
+    price_raw: str = ""
+    price_status: Literal["unavailable", "estimated"] = "unavailable"
+    price_checked_at: str = ""
+    source_url: str = ""
+    image_url: str = ""
+    rating: str = ""
+    star: str = ""
 
 
 class POISearchResponse(BaseModel):

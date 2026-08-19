@@ -72,8 +72,45 @@ test('sorts transfer, attractions, and meals by valid time then source order', (
     ],
     meals: [{ type: 'lunch', name: '杭帮菜', time: '12:00' }],
   })
-  assert.deepEqual(timeline.map((item) => item.time), ['08:30', '12:00', '14:00', null])
+  assert.deepEqual(timeline.map((item) => item.time), ['08:30', '12:00', '14:00', '16:00'])
   assert.deepEqual(timeline.map((item) => item.kind), ['transfer', 'meal', 'attraction', 'attraction'])
+  assert.equal(timeline.at(-1).timeRecommendationBasis, 'seasonal')
+})
+
+test('recommends non-live visit times for untimed legacy attractions', () => {
+  const timeline = buildDayTimeline({
+    date: '2026-09-10',
+    description: '抵达广州，下午游览越秀公园，傍晚前往沙面岛',
+    attractions: [
+      { name: '越秀公园', description: '户外公园', visit_duration: 120 },
+      { name: '沙面岛', description: '户外漫步', visit_duration: 150 },
+    ],
+    meals: [],
+  })
+  assert.deepEqual(timeline.map((item) => [item.time, item.endTime]), [
+    ['15:30', '17:30'],
+    ['18:00', '20:30'],
+  ])
+  assert.equal(timeline[0].timeRecommendationBasis, 'seasonal')
+  assert.equal(timeline[0].crowdRecommendationBasis, 'heuristic')
+})
+
+test('schedules missing meal times around attraction visits', () => {
+  const timeline = buildDayTimeline({
+    date: '2026-09-10',
+    description: '抵达广州，下午游览越秀公园，傍晚前往沙面岛',
+    attractions: [
+      { name: '越秀公园', description: '户外公园', visit_duration: 120 },
+      { name: '沙面岛', description: '户外漫步', visit_duration: 150 },
+    ],
+    meals: [
+      { type: 'lunch', name: '午餐' },
+      { type: 'dinner', name: '晚餐' },
+    ],
+  })
+  const meals = timeline.filter((item) => item.kind === 'meal')
+  assert.deepEqual(meals.map((item) => item.time), ['12:30', '21:00'])
+  assert.equal(meals[1].timeRecommendationBasis, 'schedule')
 })
 
 test('chooses a display mode from trip length boundaries', () => {

@@ -178,6 +178,25 @@ class PlanExecutionTokenEndpointTest(unittest.TestCase):
         self.assertEqual(persist.call_count, 2)
         create_task.assert_called_once()
 
+    def test_plan_accepts_integer_budget_token_after_float_model_normalization(self):
+        browser_draft = {
+            **self.request_data,
+            "traveler_count": 2,
+            "room_count": 1,
+            "budget_amount": 3000,
+            "budget_basis": "group_total",
+        }
+        _, token = register_confirm_decision(browser_draft, 0.95)
+        request = TripRequest(**browser_draft, execution_token=token)
+
+        with self.isolated_plan_dependencies() as (persist, create_task):
+            result = asyncio.run(trip.plan_trip(request))
+
+        self.assertEqual(result["status"], "processing")
+        self.assertEqual(request.budget_amount, 3000.0)
+        persist.assert_called()
+        create_task.assert_called_once()
+
     def test_plan_accepts_valid_token_once(self):
         request = self.request()
         _, token = register_confirm_decision(request, 0.95)

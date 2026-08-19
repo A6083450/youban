@@ -6,9 +6,11 @@ from app.agents.trip_plan_orchestrator import (
     build_budget,
     build_segments,
     build_weather_info,
+    duplicate_attraction_issues,
     empty_checkpoint,
     merge_segment_days,
     normalize_checkpoint,
+    parse_attraction_candidates,
     parse_segment_output,
 )
 from app.models.schemas import CityStay, DayPlan, TripRequest
@@ -73,6 +75,17 @@ HOTEL_CANDIDATES = {
         "address": "北京市测试路1号",
         "location": {"longitude": 116.41, "latitude": 39.91},
         "tel": None,
+    },
+}
+
+ATTRACTION_CANDIDATES = {
+    "amap-attraction-1": {
+        "poi_id": "amap-attraction-1",
+        "name": "高德测试景点",
+        "address": "北京市景点路1号",
+        "location": {"longitude": 116.42, "latitude": 39.92},
+        "reservation_required": True,
+        "reservation_tips": "提前预约",
     },
 }
 
@@ -204,6 +217,47 @@ class CheckpointTest(unittest.TestCase):
 
 
 class SegmentOutputTest(unittest.TestCase):
+    def test_parse_attraction_candidates_reads_structured_lines(self):
+        value = "说明行\n" + json.dumps(
+            ATTRACTION_CANDIDATES["amap-attraction-1"], ensure_ascii=False
+        )
+        self.assertEqual(parse_attraction_candidates(value), ATTRACTION_CANDIDATES)
+
+    def test_verified_attraction_overwrites_agent_identity_fields(self):
+        day = _agent_day(0)
+        day["attractions"][0].update({
+            "poi_id": "amap-attraction-1",
+            "name": "模型改写名称",
+            "address": "模型地址",
+            "location": {"longitude": 0, "latitude": 0},
+        })
+        result = parse_segment_output(
+            json.dumps({"segment_id": "seg-01", "days": [day]}),
+            _segment([0]),
+            attraction_candidates=ATTRACTION_CANDIDATES,
+            hotel_candidates=HOTEL_CANDIDATES,
+        )
+        attraction = result[0]["attractions"][0]
+        self.assertEqual(attraction["poi_id"], "amap-attraction-1")
+        self.assertEqual(attraction["name"], "高德测试景点")
+        self.assertEqual(attraction["address"], "北京市景点路1号")
+        self.assertEqual(attraction["location"], {
+            "longitude": 116.42,
+            "latitude": 39.92,
+        })
+        self.assertTrue(attraction["reservation_required"])
+
+    def test_rejects_unknown_attraction_id_when_candidates_exist(self):
+        day = _agent_day(0)
+        day["attractions"][0]["poi_id"] = "made-up-attraction"
+        with self.assertRaisesRegex(ValueError, "poi_id 不在高德候选"):
+            parse_segment_output(
+                json.dumps({"segment_id": "seg-01", "days": [day]}),
+                _segment([0]),
+                attraction_candidates=ATTRACTION_CANDIDATES,
+                hotel_candidates=HOTEL_CANDIDATES,
+            )
+
     def test_parse_valid_segment(self):
         days = parse_segment_output(
             json.dumps({"segment_id": "seg-01", "days": [_agent_day(0)]}),
@@ -368,6 +422,37 @@ class MergeAndBudgetTest(unittest.TestCase):
         ])
         with self.assertRaisesRegex(ValueError, "day_indices"):
             merge_segment_days(request, segments, checkpoint)
+
+    def test_duplicate_poi_marks_only_later_segment_for_repair(self):
+        request = _request(4)
+        segments = build_segments(request)
+        days = [DayPlan(**_day(index)) for index in range(4)]
+        days[0].attractions[0].name = "莫高窟"
+        days[0].attractions[0].poi_id = "amap-mogao"
+        days[2].attractions[0].name = "莫高窟景区"
+        days[2].attractions[0].poi_id = "amap-mogao"
+
+        issues = duplicate_attraction_issues(days, segments)
+
+        self.assertEqual(list(issues), ["seg-02"])
+        self.assertIn("D3", issues["seg-02"][0])
+        self.assertIn("D1", issues["seg-02"][0])
+        self.assertIn("amap-mogao", issues["seg-02"][0])
+
+    def test_same_name_with_different_poi_ids_is_not_a_duplicate(self):
+        request = _request(2)
+        days = [DayPlan(**_day(index)) for index in range(2)]
+        for index, day in enumerate(days):
+            day.attractions[0].name = "人民公园"
+            day.attractions[0].poi_id = f"park-{index}"
+        self.assertEqual(duplicate_attraction_issues(days, build_segments(request)), {})
+
+    def test_legacy_attractions_without_poi_ids_fall_back_to_name(self):
+        request = _request(2)
+        days = [DayPlan(**_day(index)) for index in range(2)]
+        days[0].attractions[0].name = " 莫高窟 "
+        days[1].attractions[0].name = "莫高窟"
+        self.assertIn("seg-01", duplicate_attraction_issues(days, build_segments(request)))
 
     def test_budget_sums_only_modeled_cost_fields(self):
         days = [DayPlan(**_day(0, attraction_cost=20, hotel_cost=300, meal_cost=80))]

@@ -2,6 +2,7 @@ import copy
 import unittest
 
 from app.models.schemas_test import plan_payload
+from app.models.schemas import Hotel
 from app.services.chat_service import EDIT_SYSTEM_PROMPT, _extract_output_text, _validate_updated_plan
 
 
@@ -71,7 +72,8 @@ class ChatServiceBlueprintTest(unittest.TestCase):
 
         result = _validate_updated_plan(updated, original)
 
-        self.assertEqual(original["days"][0]["hotel"], result["days"][0]["hotel"])
+        expected = Hotel.model_validate(original["days"][0]["hotel"]).model_dump(mode="json")
+        self.assertEqual(expected, result["days"][0]["hotel"])
         self.assertIn("绝对不能修改酒店", EDIT_SYSTEM_PROMPT)
 
 

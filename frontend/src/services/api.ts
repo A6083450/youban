@@ -8,7 +8,10 @@ import type {
   CreateTripShareResponse,
   ExecutionEntry,
   ItemExecutionStatus,
+  ItineraryAttractionInput,
+  ItineraryMutationResponse,
   ParsedTripDraft,
+  PoiSearchItem,
   RuntimeSettings,
   SharedTripPlanResponse,
   ShareLoadErrorKind,
@@ -683,6 +686,49 @@ export async function deleteBudgetItem(
     `/api/trip/plan/${encodeURIComponent(planId)}/budget-items/${encodeURIComponent(itemId)}`,
   )
   return response.data as BudgetLedgerResponse
+}
+
+export async function searchAttractionPois(
+  keywords: string,
+  city: string,
+): Promise<PoiSearchItem[]> {
+  const response = await apiClient.get('/api/poi/search', {
+    params: { keywords, city, types: '110000' },
+  })
+  return Array.isArray(response.data?.data) ? response.data.data as PoiSearchItem[] : []
+}
+
+export async function createItineraryAttraction(
+  planId: string,
+  payload: ItineraryAttractionInput,
+): Promise<ItineraryMutationResponse> {
+  const response = await apiClient.post(
+    `/api/trip/plan/${encodeURIComponent(planId)}/attractions`,
+    payload,
+  )
+  return response.data as ItineraryMutationResponse
+}
+
+export async function updateItineraryAttraction(
+  planId: string,
+  attractionId: string,
+  payload: ItineraryAttractionInput,
+): Promise<ItineraryMutationResponse> {
+  const response = await apiClient.put(
+    `/api/trip/plan/${encodeURIComponent(planId)}/attractions/${encodeURIComponent(attractionId)}`,
+    payload,
+  )
+  return response.data as ItineraryMutationResponse
+}
+
+export async function deleteItineraryAttraction(
+  planId: string,
+  attractionId: string,
+): Promise<ItineraryMutationResponse> {
+  const response = await apiClient.delete(
+    `/api/trip/plan/${encodeURIComponent(planId)}/attractions/${encodeURIComponent(attractionId)}`,
+  )
+  return response.data as ItineraryMutationResponse
 }
 
 /**

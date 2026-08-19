@@ -24,19 +24,25 @@ from ...agents.stream_json import stream_extract_string_field
 from ...agents.trip_planner_agent import get_trip_planner_agent
 from ...config import get_data_dir
 from ...models.schemas import (
+    Attraction,
     BudgetItemCreateRequest,
     BudgetItemUpdateRequest,
     BudgetLedgerItem,
     ItemStatusUpdateRequest,
+    ItineraryAttractionUpsertRequest,
+    POIInfo,
     TripPlanResponse,
     TripRequest,
 )
 from ...services.budget_ledger import (
     apply_budget_totals,
     calculate_budget_totals,
+    calculate_per_person_totals,
     sync_budget_items,
+    to_group_total,
 )
 from ...services import memory_service
+from ...services.amap_service import get_amap_service
 from ...services.llm_service import iter_llm_stream, llm_complete
 from ...services.trip_confirmation import consume_execution_token, register_confirm_decision
 
@@ -148,6 +154,169 @@ def _find_plan_item(result: Any, item_id: str) -> Any | None:
         if current == item_id:
             return item
     return None
+
+
+def _read_value(source: Any, key: str, default: Any = None) -> Any:
+    return source.get(key, default) if isinstance(source, dict) else getattr(source, key, default)
+
+
+def _write_value(target: Any, key: str, value: Any) -> None:
+    if isinstance(target, dict):
+        target[key] = value
+    else:
+        setattr(target, key, value)
+
+
+def _plan_data(result: Any) -> Any | None:
+    return _read_value(result, "data") if result is not None else None
+
+
+def _plan_days(result: Any) -> list[Any]:
+    plan = _plan_data(result)
+    return list(_read_value(plan, "days", []) or []) if plan is not None else []
+
+
+def _find_plan_day(result: Any, day_index: int) -> Any | None:
+    return next(
+        (day for day in _plan_days(result) if _read_value(day, "day_index") == day_index),
+        None,
+    )
+
+
+def _day_attractions(day: Any) -> list[Any]:
+    if isinstance(day, dict):
+        return day.setdefault("attractions", [])
+    return day.attractions
+
+
+def _find_attraction_entry(result: Any, attraction_id: str) -> tuple[Any, int, Any] | None:
+    for day in _plan_days(result):
+        for position, attraction in enumerate(_day_attractions(day)):
+            if _read_value(attraction, "id", "") == attraction_id:
+                return day, position, attraction
+    return None
+
+
+def _attraction_end_time(start_time: str, duration: int) -> str:
+    hours, minutes = (int(part) for part in start_time.split(":"))
+    end_minutes = hours * 60 + minutes + duration
+    if end_minutes >= 24 * 60:
+        raise HTTPException(status_code=422, detail="景点游览时间不能跨越午夜")
+    return f"{end_minutes // 60:02d}:{end_minutes % 60:02d}"
+
+
+def _ensure_unique_attraction_poi_for_day(
+    day: Any,
+    poi_id: str,
+    ignored_attraction_id: str = "",
+) -> None:
+    for item in _day_attractions(day):
+        current_id = str(_read_value(item, "id", "") or "")
+        current_poi_id = str(_read_value(item, "poi_id", "") or "")
+        if current_id != ignored_attraction_id and current_poi_id and current_poi_id == poi_id:
+            raise HTTPException(status_code=409, detail="该景点已经在所选日期中")
+
+
+def _drop_attraction_budget_override(task: Dict[str, Any], attraction_id: str) -> None:
+    budget_item_id = f"itinerary:attraction:{attraction_id}"
+    task["budget_items"] = [
+        raw for raw in (task.get("budget_items") or [])
+        if _read_value(raw, "id", "") != budget_item_id
+    ]
+
+
+def _sort_day_attractions(day: Any) -> None:
+    _day_attractions(day).sort(key=lambda item: (
+        str(_read_value(item, "start_time", "") or "99:99"),
+        str(_read_value(item, "name", "") or ""),
+    ))
+
+
+def _sync_blueprint_highlights(result: Any) -> None:
+    plan = _plan_data(result)
+    blueprint = _read_value(plan, "blueprint") if plan is not None else None
+    if blueprint is None:
+        return
+    days_by_index = {
+        _read_value(day, "day_index"): day for day in _plan_days(result)
+    }
+    for stage in _read_value(blueprint, "stages", []) or []:
+        available: list[str] = []
+        for day_index in _read_value(stage, "day_indices", []) or []:
+            day = days_by_index.get(day_index)
+            if day is None:
+                continue
+            for attraction in _day_attractions(day):
+                name = str(_read_value(attraction, "name", "") or "").strip()
+                if name and name not in available:
+                    available.append(name)
+        previous = [
+            str(name).strip()
+            for name in (_read_value(stage, "highlights", []) or [])
+            if str(name).strip() in available
+        ]
+        selected = list(dict.fromkeys(previous))
+        selected.extend(name for name in available if name not in selected)
+        _write_value(stage, "highlights", selected[:3])
+
+
+def _build_attraction(
+    payload: ItineraryAttractionUpsertRequest,
+    verified_poi: POIInfo,
+    attraction_id: str,
+    existing: Any | None = None,
+) -> dict[str, Any]:
+    base = _serialize_result(existing) if existing is not None else {}
+    if not isinstance(base, dict):
+        base = {}
+    base.update({
+        "id": attraction_id,
+        "poi_id": verified_poi.id,
+        "name": verified_poi.name,
+        "address": verified_poi.address or payload.address,
+        "location": verified_poi.location.model_dump(mode="json"),
+        "visit_duration": payload.visit_duration,
+        "description": payload.description,
+        "category": verified_poi.type or base.get("category") or "景点",
+        "ticket_price": payload.ticket_price,
+        "reservation_required": payload.reservation_required,
+        "reservation_tips": payload.reservation_tips,
+        "start_time": payload.start_time,
+        "end_time": _attraction_end_time(payload.start_time, payload.visit_duration),
+        "time_recommendation_basis": None,
+        "crowd_recommendation_basis": None,
+    })
+    return base
+
+
+async def _verify_attraction_poi(
+    payload: ItineraryAttractionUpsertRequest,
+    city: str,
+    existing: Any | None = None,
+) -> POIInfo:
+    if existing is not None and _read_value(existing, "poi_id", "") == payload.poi_id:
+        try:
+            return POIInfo(
+                id=payload.poi_id,
+                name=str(_read_value(existing, "name", payload.name) or payload.name),
+                type=str(_read_value(existing, "category", "") or ""),
+                address=str(_read_value(existing, "address", payload.address) or payload.address),
+                location=_read_value(existing, "location", payload.location),
+            )
+        except (TypeError, ValueError):
+            pass
+
+    candidates = await asyncio.to_thread(
+        get_amap_service().search_poi,
+        payload.name,
+        city,
+        True,
+        "110000",
+    )
+    verified = next((candidate for candidate in candidates if candidate.id == payload.poi_id), None)
+    if verified is None:
+        raise HTTPException(status_code=422, detail="无法从高德确认该景点，请重新搜索并选择")
+    return verified
 
 
 def _task_file_path(task_id: str) -> Path:
@@ -648,6 +817,10 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
   "end_date": "YYYY-MM-DD",
   "transportation": "公共交通|自驾|步行|混合",
   "accommodation": "经济型酒店|舒适型酒店|豪华酒店|民宿",
+  "traveler_count": 2,
+  "room_count": 1,
+  "budget_amount": 3000,
+  "budget_basis": "group_total|per_person",
   "preferences": ["历史文化|自然风光|美食|购物|艺术|休闲 中匹配的标签"],
   "need_clarify": false,
   "clarify_question": "",
@@ -678,9 +851,11 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
 4. 如果当前消息和历史中都没有任何可辨认的城市或目的地，且用户并非在要推荐 → action=clarify，reply 用友好语气追问
 5. preferences 只能从给定标签中选取，没有匹配则空数组
 6. clarify_question 与 reply 含义一致时可只填 reply；summary 在 action=plan 时填写
-7. inferred_fields 列出用户【没有明确提到、由你按默认值填充】的字段，只能从这些值中选取："dates"（日期）、"transportation"（交通）、"accommodation"（住宿）、"preferences"（偏好）；用户明确说过的不要列入，全部提到则为空数组
+7. inferred_fields 列出用户【没有明确提到、由你按默认值填充】的字段，只能从这些值中选取："dates"（日期）、"transportation"（交通）、"accommodation"（住宿）、"preferences"（偏好）、"traveler_count"（人数）；用户明确说过的不要列入，全部提到则为空数组
 8. ready_to_generate：仅表示需求字段完整度——同时满足 (a) 目的地明确 (b) 出行日期或天数明确 (c) 偏好、交通、住宿等个性化需求中至少两项被明确提到 → true；否则 false。它绝不表示用户已确认生成，任何情况下都不能声称已开始生成
 9. suggestions：action=plan 且 ready_to_generate=false 时，站在旅行规划师角度针对没说清的部分给 2-4 条具体个性化建议，每条一句话；其余情况给空数组
+10. 未提人数时 traveler_count=1；room_count 默认 ceil(traveler_count/2)。用户可明确指定房间数。
+11. “2 人预算 3000”表示 budget_amount=3000、budget_basis=group_total；只有明确说“人均预算”时才使用 per_person。未提预算时 budget_amount=null。
 用户最新消息：{payload.text}"""
 
     is_en = str(payload.language or "").lower().startswith("en")
@@ -792,7 +967,10 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
             end_date = expected_end_date
 
         need_clarify = bool(data.get("need_clarify")) and not cities
-        known_inferred = {"dates", "transportation", "accommodation", "preferences"}
+        known_inferred = {
+            "dates", "transportation", "accommodation", "preferences",
+            "traveler_count",
+        }
         inferred_fields = [
             str(f) for f in (data.get("inferred_fields") or [])
             if str(f) in known_inferred
@@ -807,6 +985,31 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
             # 字段已完整时不需要补充建议,但仍须等待用户确认
             suggestions = []
             inferred_fields = []
+        def _safe_count(value, default, maximum=50):
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return default
+            return max(1, min(parsed, maximum))
+
+        traveler_count = _safe_count(data.get("traveler_count"), 1)
+        room_count = _safe_count(
+            data.get("room_count"),
+            (traveler_count + 1) // 2,
+        )
+        raw_budget = data.get("budget_amount")
+        try:
+            budget_amount = float(raw_budget) if raw_budget is not None else None
+            if budget_amount is not None and (
+                not math.isfinite(budget_amount) or budget_amount < 0
+            ):
+                budget_amount = None
+        except (TypeError, ValueError):
+            budget_amount = None
+        budget_basis = str(data.get("budget_basis") or "group_total")
+        if budget_basis not in {"group_total", "per_person"}:
+            budget_basis = "group_total"
+
         trip_data = {
             "city": cities[0]["city"],
             "cities": cities,
@@ -815,6 +1018,10 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
             "travel_days": total_days,
             "transportation": str(data.get("transportation") or "公共交通"),
             "accommodation": str(data.get("accommodation") or "经济型酒店"),
+            "traveler_count": traveler_count,
+            "room_count": room_count,
+            "budget_amount": budget_amount,
+            "budget_basis": budget_basis,
             "preferences": [str(p) for p in (data.get("preferences") or [])],
             "free_text_input": payload.text,
             "origin_text": payload.text,
@@ -890,6 +1097,10 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
         "end_date": draft.get("end_date") or "",
         "transportation": draft.get("transportation") or "",
         "accommodation": draft.get("accommodation") or "",
+        "traveler_count": draft.get("traveler_count") or 1,
+        "room_count": draft.get("room_count") or 1,
+        "budget_amount": draft.get("budget_amount"),
+        "budget_basis": draft.get("budget_basis") or "group_total",
         "preferences": draft.get("preferences") or [],
     }, ensure_ascii=False)
 
@@ -919,6 +1130,10 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
   "end_date": "YYYY-MM-DD",
   "transportation": "公共交通",
   "accommodation": "经济型酒店",
+  "traveler_count": 2,
+  "room_count": 1,
+  "budget_amount": 3000,
+  "budget_basis": "group_total|per_person",
   "preferences": [],
   "inferred_fields": [],
   "suggestions": []
@@ -931,7 +1146,8 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
 5. 只有能从上下文判断用户明确授权执行当前草稿时才使用 confirm；不够确定时 action=ask_confirmation，并自然追问一句。
 6. cancel 表示用户不准备继续执行当前草稿；message 使用与用户回复相同的语言。
 7. preferences 只能从给定标签中选取。
-8. inferred_fields 只能使用 "dates"、"transportation"、"accommodation"、"preferences"；suggestions 仅在 update 时提供。
+8. inferred_fields 只能使用 "dates"、"transportation"、"accommodation"、"preferences"、"traveler_count"；suggestions 仅在 update 时提供。
+9. 修改人数时同步计算默认房间数 ceil(traveler_count/2)，除非用户明确指定房间数。普通“预算 3000”按合计预算处理，只有明确说人均时使用 per_person。
 用户最新回复：{payload.text}"""
 
     try:
@@ -1012,7 +1228,10 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
                     value = draft.get(field)
             return value if isinstance(value, list) else []
 
-        known_inferred = {"dates", "transportation", "accommodation", "preferences"}
+        known_inferred = {
+            "dates", "transportation", "accommodation", "preferences",
+            "traveler_count",
+        }
         inferred_fields = [
             str(f) for f in _list_value("inferred_fields")
             if str(f) in known_inferred
@@ -1021,6 +1240,35 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
             str(s).strip() for s in _list_value("suggestions")
             if str(s).strip()
         ][:4]
+        def _safe_count(value, default):
+            try:
+                return max(1, min(int(value), 50))
+            except (TypeError, ValueError):
+                return default
+
+        traveler_count = _safe_count(
+            data.get("traveler_count", draft.get("traveler_count")),
+            _safe_count(draft.get("traveler_count"), 1),
+        )
+        room_count = _safe_count(
+            data.get("room_count", draft.get("room_count")),
+            (traveler_count + 1) // 2,
+        )
+        raw_budget = data.get("budget_amount", draft.get("budget_amount"))
+        try:
+            budget_amount = float(raw_budget) if raw_budget is not None else None
+            if budget_amount is not None and (
+                not math.isfinite(budget_amount) or budget_amount < 0
+            ):
+                budget_amount = None
+        except (TypeError, ValueError):
+            budget_amount = None
+        budget_basis = str(
+            data.get("budget_basis") or draft.get("budget_basis") or "group_total"
+        )
+        if budget_basis not in {"group_total", "per_person"}:
+            budget_basis = "group_total"
+
         trip_data = {
             "city": cities[0]["city"],
             "cities": cities,
@@ -1029,6 +1277,10 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
             "travel_days": total_days,
             "transportation": str(data.get("transportation") or draft.get("transportation") or "公共交通"),
             "accommodation": str(data.get("accommodation") or draft.get("accommodation") or "经济型酒店"),
+            "traveler_count": traveler_count,
+            "room_count": room_count,
+            "budget_amount": budget_amount,
+            "budget_basis": budget_basis,
             "preferences": [str(p) for p in _list_value("preferences")],
             "free_text_input": str(draft.get("free_text_input") or ""),
             "origin_text": str(draft.get("origin_text") or ""),
@@ -1611,8 +1863,35 @@ def _editable_budget_task(
     return task
 
 
+def _budget_context(task: Dict[str, Any]) -> tuple[int, int]:
+    request = task.get("request_payload") or {}
+    result = task.get("result") or {}
+    plan = result.get("data") if isinstance(result, dict) else getattr(result, "data", None)
+
+    def read(source: Any, key: str, default: Any) -> Any:
+        if isinstance(source, dict):
+            return source.get(key, default)
+        return getattr(source, key, default)
+
+    try:
+        travelers = max(1, int(read(request, "traveler_count", read(plan, "traveler_count", 1))))
+    except (TypeError, ValueError):
+        travelers = 1
+    try:
+        rooms = max(1, int(read(request, "room_count", read(plan, "room_count", (travelers + 1) // 2))))
+    except (TypeError, ValueError):
+        rooms = (travelers + 1) // 2
+    return travelers, rooms
+
+
 def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
-    items = sync_budget_items(task.get("result"), task.get("budget_items"))
+    traveler_count, room_count = _budget_context(task)
+    items = sync_budget_items(
+        task.get("result"),
+        task.get("budget_items"),
+        traveler_count,
+        room_count,
+    )
     task["budget_items"] = [item.model_dump(mode="json") for item in items]
     totals = calculate_budget_totals(items)
     apply_budget_totals(task.get("result"), totals)
@@ -1621,10 +1900,140 @@ def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any
         "plan_id": plan_id,
         "items": task["budget_items"],
         "totals": totals,
+        "per_person_totals": calculate_per_person_totals(totals, traveler_count),
+        "traveler_count": traveler_count,
+        "room_count": room_count,
         "pending_count": sum(
             1 for item in items if not item.deleted and item.amount is None
         ),
     }
+
+
+def _itinerary_mutation_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+    response = _budget_ledger_response(plan_id, task)
+    response["plan"] = _serialize_result(_plan_data(task.get("result")))
+    return response
+
+
+@router.post(
+    "/plan/{plan_id}/attractions",
+    summary="新增真实行程景点",
+    description="新增高德真实 POI，并同步行程视图、地图和预算台账",
+)
+async def create_itinerary_attraction(
+    plan_id: str,
+    payload: ItineraryAttractionUpsertRequest,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    _validate_budget_day(task, payload.day_index)
+    target_day = _find_plan_day(task.get("result"), payload.day_index)
+    if target_day is None:
+        raise HTTPException(status_code=422, detail="所选日期不在当前行程中")
+    plan = _plan_data(task.get("result"))
+    city = str(_read_value(target_day, "city", "") or _read_value(plan, "city", ""))
+    verified_poi = await _verify_attraction_poi(payload, city)
+
+    with _TASK_STATE_LOCK:
+        target_day = _find_plan_day(task.get("result"), payload.day_index)
+        if target_day is None:
+            raise HTTPException(status_code=422, detail="所选日期不在当前行程中")
+        _ensure_unique_attraction_poi_for_day(target_day, verified_poi.id)
+        attraction_id = _new_item_id()
+        attraction_data = _build_attraction(payload, verified_poi, attraction_id)
+        if isinstance(target_day, dict):
+            _day_attractions(target_day).append(attraction_data)
+        else:
+            _day_attractions(target_day).append(Attraction.model_validate(attraction_data))
+        _sort_day_attractions(target_day)
+        _sync_blueprint_highlights(task.get("result"))
+        _drop_attraction_budget_override(task, attraction_id)
+        return _itinerary_mutation_response(plan_id, task)
+
+
+@router.put(
+    "/plan/{plan_id}/attractions/{attraction_id}",
+    summary="修改行程景点",
+    description="修改真实景点、日期、时间、时长或门票，并同步所有行程视图与预算",
+)
+async def update_itinerary_attraction(
+    plan_id: str,
+    attraction_id: str,
+    payload: ItineraryAttractionUpsertRequest,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    _validate_budget_day(task, payload.day_index)
+    found = _find_attraction_entry(task.get("result"), attraction_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="行程景点不存在")
+    _, _, existing = found
+    source_day = found[0]
+    target_day = _find_plan_day(task.get("result"), payload.day_index)
+    if target_day is None:
+        raise HTTPException(status_code=422, detail="所选日期不在当前行程中")
+    plan = _plan_data(task.get("result"))
+    city = str(_read_value(target_day, "city", "") or _read_value(plan, "city", ""))
+    source_city = str(_read_value(source_day, "city", "") or _read_value(plan, "city", ""))
+    verified_poi = await _verify_attraction_poi(
+        payload,
+        city,
+        existing if source_city == city else None,
+    )
+
+    with _TASK_STATE_LOCK:
+        found = _find_attraction_entry(task.get("result"), attraction_id)
+        target_day = _find_plan_day(task.get("result"), payload.day_index)
+        if found is None:
+            raise HTTPException(status_code=404, detail="行程景点不存在")
+        if target_day is None:
+            raise HTTPException(status_code=422, detail="所选日期不在当前行程中")
+        source_day, position, current = found
+        _ensure_unique_attraction_poi_for_day(target_day, verified_poi.id, attraction_id)
+        attraction_data = _build_attraction(
+            payload,
+            verified_poi,
+            attraction_id,
+            current,
+        )
+        _day_attractions(source_day).pop(position)
+        if isinstance(target_day, dict):
+            _day_attractions(target_day).append(attraction_data)
+        else:
+            _day_attractions(target_day).append(Attraction.model_validate(attraction_data))
+        _sort_day_attractions(source_day)
+        if target_day is not source_day:
+            _sort_day_attractions(target_day)
+        _sync_blueprint_highlights(task.get("result"))
+        _drop_attraction_budget_override(task, attraction_id)
+        return _itinerary_mutation_response(plan_id, task)
+
+
+@router.delete(
+    "/plan/{plan_id}/attractions/{attraction_id}",
+    summary="删除行程景点",
+    description="从行程、地图和预算中同时删除景点",
+)
+async def delete_itinerary_attraction(
+    plan_id: str,
+    attraction_id: str,
+    x_user_id: str = Header(default=""),
+    x_admin_token: str = Header(default=""),
+):
+    task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    with _TASK_STATE_LOCK:
+        found = _find_attraction_entry(task.get("result"), attraction_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="行程景点不存在")
+        source_day, position, _ = found
+        _day_attractions(source_day).pop(position)
+        _sync_blueprint_highlights(task.get("result"))
+        _drop_attraction_budget_override(task, attraction_id)
+        execution = task.setdefault("execution", {})
+        execution.pop(attraction_id, None)
+        return _itinerary_mutation_response(plan_id, task)
 
 
 @router.get(
@@ -1653,20 +2062,39 @@ async def create_budget_item(
     x_admin_token: str = Header(default=""),
 ):
     task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
+    if payload.type == "attraction":
+        raise HTTPException(
+            status_code=409,
+            detail="新增景点必须先搜索并选择高德真实 POI",
+        )
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="项目名称不能为空")
     _validate_budget_day(task, payload.day_index)
     with _TASK_STATE_LOCK:
-        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        traveler_count, room_count = _budget_context(task)
+        items = sync_budget_items(
+            task.get("result"), task.get("budget_items"), traveler_count, room_count
+        )
+        group_amount = to_group_total(
+            payload.amount,
+            payload.amount_basis,
+            traveler_count,
+        )
         items.append(BudgetLedgerItem(
             id=f"budget:{secrets.token_hex(6)}",
             type=payload.type,
             day_index=payload.day_index,
             name=name,
-            amount=payload.amount,
+            amount=group_amount,
+            amount_basis=payload.amount_basis,
+            traveler_count=traveler_count,
+            per_person_amount=(
+                None if group_amount is None
+                else round(group_amount / traveler_count, 2)
+            ),
             origin="user",
-            price_source="user" if payload.amount is not None else "unavailable",
+            price_source="user" if group_amount is not None else "unavailable",
             note=payload.note.strip(),
             user_locked=True,
         ))
@@ -1691,6 +2119,8 @@ async def update_budget_item(
         raise HTTPException(status_code=422, detail="预算类型不能为空")
     if "deleted" in changes and changes["deleted"] is None:
         raise HTTPException(status_code=422, detail="删除状态不能为空")
+    if "amount_basis" in changes and changes["amount_basis"] is None:
+        raise HTTPException(status_code=422, detail="金额口径不能为空")
     if "name" in changes:
         changes["name"] = str(changes["name"] or "").strip()
         if not changes["name"]:
@@ -1701,14 +2131,31 @@ async def update_budget_item(
         _validate_budget_day(task, changes["day_index"])
 
     with _TASK_STATE_LOCK:
-        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        traveler_count, room_count = _budget_context(task)
+        items = sync_budget_items(
+            task.get("result"), task.get("budget_items"), traveler_count, room_count
+        )
         target = next((item for item in items if item.id == budget_item_id), None)
         if target is None:
             raise HTTPException(status_code=404, detail="预算条目不存在")
+        if target.type == "attraction" and target.linked_item_id:
+            raise HTTPException(
+                status_code=409,
+                detail="行程景点必须通过景点编辑接口修改",
+            )
+        raw_amount_was_set = "amount" in changes
+        raw_amount = changes.pop("amount", None)
         for key, value in changes.items():
             setattr(target, key, value)
-        if "amount" in changes:
+        if raw_amount_was_set:
+            target.amount = to_group_total(
+                raw_amount,
+                target.amount_basis,
+                traveler_count,
+            )
             target.price_source = "user" if target.amount is not None else "unavailable"
+            target.unit_amount = None
+            target.calculation_summary = ""
         target.user_locked = True
         task["budget_items"] = [item.model_dump(mode="json") for item in items]
         return _budget_ledger_response(plan_id, task)
@@ -1726,10 +2173,18 @@ async def delete_budget_item(
 ):
     task = _editable_budget_task(plan_id, x_user_id, x_admin_token)
     with _TASK_STATE_LOCK:
-        items = sync_budget_items(task.get("result"), task.get("budget_items"))
+        traveler_count, room_count = _budget_context(task)
+        items = sync_budget_items(
+            task.get("result"), task.get("budget_items"), traveler_count, room_count
+        )
         target = next((item for item in items if item.id == budget_item_id), None)
         if target is None:
             raise HTTPException(status_code=404, detail="预算条目不存在")
+        if target.type == "attraction" and target.linked_item_id:
+            raise HTTPException(
+                status_code=409,
+                detail="行程景点必须通过景点删除接口移除",
+            )
         target.deleted = True
         target.user_locked = True
         task["budget_items"] = [item.model_dump(mode="json") for item in items]

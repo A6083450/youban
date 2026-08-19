@@ -14,6 +14,10 @@ const draft = {
   travel_days: 3,
   transportation: '公共交通',
   accommodation: '经济型酒店',
+  traveler_count: 2,
+  room_count: 1,
+  budget_amount: 3000,
+  budget_basis: 'group_total',
   preferences: ['美食'],
   free_text_input: '去成都玩三天',
   origin_text: '去成都玩三天',
@@ -296,6 +300,25 @@ test('plan request uses authorized draft travel_days instead of deriving it from
 
   assert.equal(request.travel_days, 3)
   assert.equal(request.end_date, '2026-08-05')
+  assert.equal(request.traveler_count, 2)
+  assert.equal(request.room_count, 1)
+  assert.equal(request.budget_amount, 3000)
+  assert.equal(request.budget_basis, 'group_total')
+})
+
+test('plan request safely defaults legacy traveler and budget fields', () => {
+  const legacyDraft = { ...draft }
+  delete legacyDraft.traveler_count
+  delete legacyDraft.room_count
+  delete legacyDraft.budget_amount
+  delete legacyDraft.budget_basis
+
+  const request = buildTripPlanRequest(legacyDraft, 'token', 'zh-CN')
+
+  assert.equal(request.traveler_count, 1)
+  assert.equal(request.room_count, 1)
+  assert.equal(request.budget_amount, null)
+  assert.equal(request.budget_basis, 'group_total')
 })
 
 test('plan request rejects non-integer or out-of-range draft travel_days', () => {

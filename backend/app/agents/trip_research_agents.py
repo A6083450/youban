@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import date, timedelta
 from functools import partial
 from typing import Awaitable, Callable, Literal, Optional, TypedDict
 
@@ -30,7 +31,7 @@ class ResearchMaps(TypedDict):
 class ResearchSources:
     attractions: Callable[[str, str, str], str]
     weather: Callable[[str], str]
-    hotels: Callable[[str, str], str]
+    hotels: Callable[[str, str, str, str], str]
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,32 @@ def _job_fetch(context: ResearchContext, category: ResearchCategory,
         return partial(context.sources.attractions, city, keywords, language)
     if category == "weather":
         return partial(context.sources.weather, city)
-    return partial(context.sources.hotels, city, request.accommodation)
+    check_in, check_out = _hotel_dates(request, city)
+    if check_out <= check_in:
+        return lambda: "[]"
+    return partial(
+        context.sources.hotels,
+        city,
+        request.accommodation,
+        check_in,
+        check_out,
+    )
+
+
+def _hotel_dates(request: TripRequest, city: str) -> tuple[str, str]:
+    """Return the dates covered by a city's overnight stay."""
+    start = date.fromisoformat(request.start_date)
+    offset = 0
+    for index, stay in enumerate(request.cities):
+        city_start = start + timedelta(days=offset)
+        if stay.city == city:
+            if index < len(request.cities) - 1:
+                city_end = city_start + timedelta(days=stay.days)
+            else:
+                city_end = date.fromisoformat(request.end_date)
+            return city_start.isoformat(), city_end.isoformat()
+        offset += stay.days
+    return request.start_date, request.end_date
 
 
 def _unique_cities(request: TripRequest) -> list[str]:

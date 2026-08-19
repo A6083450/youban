@@ -138,6 +138,12 @@
 - **POI 搜索** - 景点、餐厅、酒店搜索
 - **距离计算** - 自动计算景点间距离和交通时间
 
+### 💰 可审计预算
+- **人均与合计切换** - 预算台账统一保存合计金额，页面可随时切换人均口径
+- **酒店间夜估算** - FlyAI 每间房每晚搜索起价 × 房间数 × 晚数 ÷ 人数
+- **真实来源降级** - FlyAI 无报价时保留高德真实酒店，金额显示待填写，不由 LLM 补造
+- **用户 DIY** - 用户可新增、修改、删除和恢复预算条目，手动价格优先于自动同步
+
 ### 🔖 行程管理
 - **历史记录** - 保存所有行程规划
 - **行程编辑** - 随时修改已规划行程
@@ -192,6 +198,9 @@
 | [Gunicorn](https://gunicorn.org/) | 23.0+ | WSGI HTTP 服务器（生产） |
 | [httpx](https://www.python-httpx.org/) | 0.27+ | 异步 HTTP 客户端 |
 | [Loguru](https://github.com/Delgan/loguru) | 0.7+ | 日志库 |
+| [FlyAI Skill](https://github.com/alibaba-flyai/flyai-skill) | 1.0.15 | 酒店真实库存、搜索起价与预订来源 |
+
+酒店链路采用“研究 Agent → 受控 FlyAI Skill/CLI → 确定性报价后端”。Agent 只能选择受控候选 ID；酒店身份、坐标和价格不能由 LLM 生成。每次工具调用会写入 `data/tool_audit/`，高德只负责位置补全和无报价降级。
 
 ### 系统架构图
 
@@ -276,6 +285,10 @@ LLM_MODEL_ID=gpt-4
 # 高德地图 API（必填，用于国内地图服务）
 VITE_AMAP_WEB_JS_KEY=your_amap_web_js_key
 VITE_AMAP_WEB_KEY=your_amap_web_key
+
+# FlyAI（Key 可选，不配置也可使用基础查询）
+FLYAI_ENABLED=true
+FLYAI_API_KEY=
 ```
 
 ### 3. 启动后端
@@ -288,6 +301,9 @@ pip install uv
 
 # 安装依赖
 uv sync
+
+# 安装固定版本的 FlyAI CLI
+npm install
 
 # 启动开发服务器
 uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
@@ -448,6 +464,16 @@ youban/
 | `VITE_AMAP_WEB_JS_KEY` | 高德地图 Web JS API Key |
 | `VITE_AMAP_WEB_KEY` | 高德地图 Web 服务 Key |
 | `GOOGLE_MAPS_API_KEY` | Google Maps API Key（可选） |
+
+### FlyAI 酒店搜索
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `FLYAI_ENABLED` | 是否启用 FlyAI 酒店搜索 | `true` |
+| `FLYAI_API_KEY` | FlyAI 增强结果 Key（可选） | - |
+| `FLYAI_CLI_PATH` | 自定义 `flyai` 可执行文件路径 | 项目本地 CLI |
+| `FLYAI_TIMEOUT_SECONDS` | 单次查询超时 | `8` |
+| `FLYAI_CACHE_TTL_SECONDS` | 酒店查询缓存秒数 | `3600` |
 
 ### 服务配置
 

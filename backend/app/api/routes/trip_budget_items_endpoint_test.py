@@ -105,6 +105,45 @@ class BudgetItemsEndpointTest(unittest.TestCase):
         self.assertEqual(body["totals"]["total"], 70)
         self.assertEqual(body["pending_count"], 3)
 
+    def test_group_and_per_person_totals_use_rooms_nights_and_travelers(self):
+        task = trip._tasks["t1"]
+        task["request_payload"] = {"traveler_count": 2, "room_count": 1}
+        plan = task["result"]["data"]
+        plan["traveler_count"] = 2
+        plan["room_count"] = 1
+        plan["days"][0]["hotel"].update({
+            "name": "FlyAI 酒店",
+            "estimated_cost": 450,
+            "source": "flyai",
+            "source_hotel_id": "flyai-1",
+            "price_status": "estimated",
+        })
+
+        body = self._get().json()
+
+        hotel = next(item for item in body["items"] if item["type"] == "hotel")
+        self.assertEqual(body["traveler_count"], 2)
+        self.assertEqual(body["room_count"], 1)
+        self.assertEqual(hotel["amount"], 450)
+        self.assertEqual(hotel["per_person_amount"], 225)
+        self.assertEqual(body["totals"]["total"], 590)
+        self.assertEqual(body["per_person_totals"]["total"], 295)
+
+        created = self.client.post(
+            "/api/trip/plan/t1/budget-items",
+            json={
+                "type": "other",
+                "day_index": None,
+                "name": "人均 DIY",
+                "amount": 125,
+                "amount_basis": "per_person",
+            },
+            headers=self.headers,
+        ).json()
+        diy = next(item for item in created["items"] if item["name"] == "人均 DIY")
+        self.assertEqual(diy["amount"], 250)
+        self.assertEqual(diy["per_person_amount"], 125)
+
     def test_edit_hotel_price_updates_totals_and_survives_reload(self):
         hotel = next(item for item in self._get().json()["items"] if item["type"] == "hotel")
         response = self.client.patch(
@@ -155,17 +194,18 @@ class BudgetItemsEndpointTest(unittest.TestCase):
         )
         self.assertFalse(next(entry for entry in restored.json()["items"] if entry["id"] == item["id"])["deleted"])
 
-    def test_user_override_is_not_replaced_by_later_itinerary_sync(self):
+    def test_itinerary_attraction_rejects_budget_only_override(self):
         attraction = next(item for item in self._get().json()["items"] if item["type"] == "attraction")
-        self.client.patch(
+        changed = self.client.patch(
             f"/api/trip/plan/t1/budget-items/{attraction['id']}",
             json={"name": "我的陈家祠安排", "amount": 35},
             headers=self.headers,
         )
+        self.assertEqual(changed.status_code, 409)
         trip._tasks["t1"]["result"]["data"]["days"][0]["attractions"][0]["name"] = "Agent 新名称"
         current = next(item for item in self._get().json()["items"] if item["id"] == attraction["id"])
-        self.assertEqual(current["name"], "我的陈家祠安排")
-        self.assertEqual(current["amount"], 35)
+        self.assertEqual(current["name"], "Agent 新名称")
+        self.assertEqual(current["amount"], 60)
 
     def test_rejects_invalid_day_and_non_owner(self):
         bad_day = self.client.post(

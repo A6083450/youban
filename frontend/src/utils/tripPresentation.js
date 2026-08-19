@@ -2,6 +2,19 @@ const REFERENCE_TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/
 
 const DATE_PARTS_PATTERN = /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{1,2})-(\d{1,2})$/
+const OUTDOOR_KEYWORDS = [
+  '公园', '山', '湖', '岛', '海滩', '沙滩', '湿地', '森林', '草原',
+  '古镇', '古村', '步道', '广场', '街', '园林', '动物园', '植物园',
+  'park', 'mountain', 'lake', 'island', 'beach', 'forest', 'garden',
+]
+const ARRIVAL_KEYWORDS = ['抵达', '到达', 'arrive', 'arrival', '到着']
+const AFTERNOON_KEYWORDS = ['下午', '傍晚', 'afternoon', 'evening', '午後', '夕方']
+const MEAL_ANCHORS = {
+  breakfast: 8 * 60,
+  lunch: (12 * 60) + 30,
+  dinner: (18 * 60) + 30,
+  snack: (15 * 60) + 30,
+}
 
 function createLocalDate(year, month, day) {
   const date = new Date(year, month - 1, day)
@@ -44,6 +57,81 @@ export function parseTripDate(value) {
   if (!matched) return null
   const [, year, month, day] = matched
   return createLocalDate(Number(year), Number(month), Number(day))
+}
+
+function referenceTimeToMinutes(value) {
+  const time = normalizeReferenceTime(value)
+  if (!time) return null
+  const [hours, minutes] = time.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+function minutesToReferenceTime(value) {
+  const safeValue = Math.max(0, Math.min(value, (23 * 60) + 59))
+  return `${String(Math.floor(safeValue / 60)).padStart(2, '0')}:${String(safeValue % 60).padStart(2, '0')}`
+}
+
+function isOutdoorAttraction(attraction) {
+  const searchable = `${attraction?.name || ''} ${attraction?.category || ''} ${attraction?.description || ''}`.toLowerCase()
+  return OUTDOOR_KEYWORDS.some((keyword) => searchable.includes(keyword))
+}
+
+function isAfternoonArrival(day) {
+  const description = String(day?.description || '').toLowerCase()
+  return ARRIVAL_KEYWORDS.some((keyword) => description.includes(keyword))
+    && AFTERNOON_KEYWORDS.some((keyword) => description.includes(keyword))
+}
+
+function hasWeatherForecast(weather) {
+  return Boolean(
+    weather
+    && (weather.day_weather || weather.night_weather || weather.day_temp || weather.night_temp)
+  )
+}
+
+function isHotForecast(weather) {
+  return hasWeatherForecast(weather) && Number(weather.day_temp) >= 29
+}
+
+function isWeekend(rawDate) {
+  const parsed = parseTripDate(rawDate)
+  return parsed ? parsed.getDay() === 0 || parsed.getDay() === 6 : false
+}
+
+function recommendedAttractionStart(day, attractionIndex, outdoor, weather, previousEnd) {
+  let anchor
+  if (isAfternoonArrival(day)) {
+    anchor = attractionIndex === 0 ? (15 * 60) + 30 : 18 * 60
+  } else if (attractionIndex === 0) {
+    anchor = outdoor && (isHotForecast(weather) || isWeekend(day.date)) ? 8 * 60 : 9 * 60
+  } else if (outdoor && isHotForecast(weather)) {
+    anchor = 16 * 60
+  } else {
+    anchor = (14 * 60) + ((attractionIndex - 1) * 150)
+  }
+  return previousEnd === null ? anchor : Math.max(anchor, previousEnd + 30)
+}
+
+function recommendedMealTime(mealType, attractionEntries) {
+  const normalizedType = String(mealType || '').toLowerCase()
+  let anchor = MEAL_ANCHORS[normalizedType] ?? MEAL_ANCHORS.lunch
+  const timedAttractions = attractionEntries.map((entry) => ({
+    start: referenceTimeToMinutes(entry.time),
+    end: referenceTimeToMinutes(entry.endTime),
+  }))
+  if (normalizedType === 'lunch') {
+    const morningEnds = timedAttractions
+      .filter(({ start, end }) => start !== null && start < 13 * 60 && end !== null)
+      .map(({ end }) => end)
+    if (morningEnds.length) anchor = Math.max(anchor, Math.max(...morningEnds) + 30)
+  }
+  if (normalizedType === 'dinner') {
+    const afternoonEnds = timedAttractions
+      .filter(({ start, end }) => start !== null && start >= 14 * 60 && end !== null)
+      .map(({ end }) => end)
+    if (afternoonEnds.length) anchor = Math.max(anchor, Math.max(...afternoonEnds) + 30)
+  }
+  return minutesToReferenceTime(anchor)
 }
 
 export function resolveItineraryDisplayMode(dayCount) {
@@ -198,9 +286,10 @@ export function resolveTripBlueprint(plan) {
   }
 }
 
-export function buildDayTimeline(day) {
+export function buildDayTimeline(day, weather = null) {
   const entries = []
   let sourceOrder = 0
+  let previousAttractionEnd = null
 
   if (day.is_transfer_day && day.transfer_info) {
     entries.push({
@@ -213,23 +302,53 @@ export function buildDayTimeline(day) {
     })
   }
 
-  for (const attraction of day.attractions || []) {
+  for (const [attractionIndex, attraction] of (day.attractions || []).entries()) {
+    const outdoor = isOutdoorAttraction(attraction)
+    const duration = Math.max(30, Number(attraction.visit_duration) || 90)
+    let time = normalizeReferenceTime(attraction.start_time)
+    let endTime = normalizeReferenceTime(attraction.end_time)
+    let timeRecommendationBasis = attraction.time_recommendation_basis || null
+    let crowdRecommendationBasis = attraction.crowd_recommendation_basis || null
+
+    if (!time) {
+      const startMinutes = recommendedAttractionStart(
+        day,
+        attractionIndex,
+        outdoor,
+        weather,
+        previousAttractionEnd,
+      )
+      time = minutesToReferenceTime(startMinutes)
+      endTime = minutesToReferenceTime(startMinutes + duration)
+      timeRecommendationBasis = hasWeatherForecast(weather) ? 'weather' : 'seasonal'
+      crowdRecommendationBasis = 'heuristic'
+    } else if (!endTime) {
+      endTime = minutesToReferenceTime(referenceTimeToMinutes(time) + duration)
+    }
+
+    previousAttractionEnd = referenceTimeToMinutes(endTime)
     entries.push({
       key: `attraction-${sourceOrder}-${attraction.name}`,
       kind: 'attraction',
-      time: normalizeReferenceTime(attraction.start_time),
-      endTime: normalizeReferenceTime(attraction.end_time),
+      time,
+      endTime,
+      timeRecommendationBasis,
+      crowdRecommendationBasis,
+      outdoor,
       sourceOrder: sourceOrder++,
       item: attraction,
     })
   }
 
+  const attractionEntries = entries.filter((entry) => entry.kind === 'attraction')
   for (const meal of day.meals || []) {
+    const existingTime = normalizeReferenceTime(meal.time)
     entries.push({
       key: `meal-${sourceOrder}-${meal.type}-${meal.name}`,
       kind: 'meal',
-      time: normalizeReferenceTime(meal.time),
+      time: existingTime || recommendedMealTime(meal.type, attractionEntries),
       endTime: null,
+      timeRecommendationBasis: existingTime ? meal.time_recommendation_basis || null : 'schedule',
       sourceOrder: sourceOrder++,
       item: meal,
     })

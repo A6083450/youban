@@ -1,4 +1,4 @@
-import type { Attraction, DayPlan, Meal, TripBlueprint, TripPlan } from '@/types'
+import type { Attraction, DayPlan, Meal, TripBlueprint, TripPlan, WeatherInfo } from '@/types'
 
 export type ItineraryDisplayMode = 'day' | 'week' | 'month'
 
@@ -37,11 +37,15 @@ export interface TransferTimelineEntry extends TimelineBase {
 export interface AttractionTimelineEntry extends TimelineBase {
   kind: 'attraction'
   item: Attraction
+  timeRecommendationBasis: 'weather' | 'seasonal' | null
+  crowdRecommendationBasis: 'heuristic' | null
+  outdoor: boolean
 }
 
 export interface MealTimelineEntry extends TimelineBase {
   kind: 'meal'
   item: Meal
+  timeRecommendationBasis: 'schedule' | null
 }
 
 export type TimelineEntry =
@@ -54,4 +58,4 @@ export function parseTripDate(value: unknown): Date | null
 export function resolveItineraryDisplayMode(dayCount: number): ItineraryDisplayMode
 export function groupItineraryDays(days: DayPlan[], mode: ItineraryDisplayMode): ItineraryDayGroup[]
 export function resolveTripBlueprint(plan: TripPlan): DisplayBlueprint
-export function buildDayTimeline(day: DayPlan): TimelineEntry[]
+export function buildDayTimeline(day: DayPlan, weather?: WeatherInfo | null): TimelineEntry[]

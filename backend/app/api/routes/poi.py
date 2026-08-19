@@ -58,7 +58,11 @@ async def get_poi_detail(poi_id: str):
     summary="搜索POI",
     description="根据关键词搜索POI"
 )
-async def search_poi(keywords: str, city: str = "北京"):
+async def search_poi(
+    keywords: str,
+    city: str = "北京",
+    types: Optional[str] = None,
+):
     """
     搜索POI
 
@@ -71,7 +75,13 @@ async def search_poi(keywords: str, city: str = "北京"):
     """
     try:
         amap_service = get_amap_service()
-        result = amap_service.search_poi(keywords, city)
+        result = await asyncio.to_thread(
+            amap_service.search_poi,
+            keywords,
+            city,
+            True,
+            types,
+        )
 
         return {
             "success": True,
@@ -125,4 +135,3 @@ async def get_attraction_photo(name: str, city: Optional[str] = None):
             status_code=500,
             detail=f"获取景点图片失败: {str(e)}"
         )
-

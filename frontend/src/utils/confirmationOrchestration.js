@@ -8,6 +8,17 @@ export function buildTripPlanRequest(draft, executionToken, language) {
   if (!Number.isInteger(draft.travel_days) || draft.travel_days < 1 || draft.travel_days > 30) {
     return null
   }
+  const travelerCount = Number.isInteger(draft.traveler_count)
+    && draft.traveler_count >= 1 && draft.traveler_count <= 50
+    ? draft.traveler_count
+    : 1
+  const roomCount = Number.isInteger(draft.room_count)
+    && draft.room_count >= 1 && draft.room_count <= 50
+    ? draft.room_count
+    : Math.ceil(travelerCount / 2)
+  const budgetAmount = Number.isFinite(draft.budget_amount) && draft.budget_amount >= 0
+    ? draft.budget_amount
+    : null
   return {
     city: draft.city,
     cities: draft.cities,
@@ -16,6 +27,10 @@ export function buildTripPlanRequest(draft, executionToken, language) {
     travel_days: draft.travel_days,
     transportation: draft.transportation,
     accommodation: draft.accommodation,
+    traveler_count: travelerCount,
+    room_count: roomCount,
+    budget_amount: budgetAmount,
+    budget_basis: draft.budget_basis === 'per_person' ? 'per_person' : 'group_total',
     preferences: draft.preferences,
     free_text_input: draft.free_text_input,
     origin_text: draft.origin_text,

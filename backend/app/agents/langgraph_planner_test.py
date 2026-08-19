@@ -54,6 +54,7 @@ def _day(day_index, city="北京"):
         },
         "attractions": [{
             "name": f"景点{day_index + 1}",
+            "poi_id": f"poi-{day_index + 1}",
             "address": "测试地址",
             "location": {"longitude": 116.397, "latitude": 39.916},
             "visit_duration": 120,
@@ -73,7 +74,7 @@ class _FakeMessage:
 class _OrchestrationModel:
     def __init__(self, request, invalid_once=None, fail_summary=False,
                  fail_review=False, review_segment_ids=None, invalid_on_calls=None,
-                 wrong_city_once=None, wrong_date_once=None):
+                 wrong_city_once=None, wrong_date_once=None, duplicate_once=None):
         self._segments = {item["segment_id"]: item for item in build_segments(request)}
         self._invalid_once = set(invalid_once or [])
         self._fail_summary = fail_summary
@@ -82,6 +83,8 @@ class _OrchestrationModel:
         self._invalid_on_calls = set(invalid_on_calls or [])
         self._wrong_city_once = set(wrong_city_once or [])
         self._wrong_date_once = set(wrong_date_once or [])
+        self._duplicate_once = set(duplicate_once or [])
+        self._segment_attempts = Counter()
         self.segment_calls = []
         self.summary_calls = 0
         self.review_calls = 0
@@ -123,6 +126,7 @@ class _OrchestrationModel:
             raise AssertionError("segment prompt 缺少 segment_id")
         segment_id = match.group()
         self.segment_calls.append(segment_id)
+        self._segment_attempts[segment_id] += 1
         self.active += 1
         self.peak = max(self.peak, self.active)
         try:
@@ -137,6 +141,14 @@ class _OrchestrationModel:
             for day in days:
                 day.pop("hotel")
                 day["hotel_id"] = "amap-hotel-1"
+            if (
+                segment_id in self._duplicate_once
+                and self._segment_attempts[segment_id] == 1
+            ):
+                days[0]["attractions"][0].update({
+                    "name": "景点1",
+                    "poi_id": "poi-1",
+                })
             if segment_id in self._wrong_city_once:
                 self._wrong_city_once.remove(segment_id)
                 days[0]["city"] = "上海"
@@ -203,6 +215,33 @@ class LangGraphPlannerTest(unittest.TestCase):
         self.assertEqual(model.peak, 4)
         self.assertEqual(model.segment_calls, [f"seg-{index:02d}" for index in range(1, 6)])
         self.assertEqual([day.day_index for day in plan.days], list(range(15)))
+
+    def test_duplicate_attraction_repairs_only_later_segment(self):
+        request = _request(5)
+        model = _OrchestrationModel(request, duplicate_once={"seg-02"})
+
+        plan, _ = self._run(request, model)
+
+        self.assertEqual(Counter(model.segment_calls), Counter({"seg-02": 2, "seg-01": 1}))
+        poi_ids = [
+            attraction.poi_id
+            for day in plan.days
+            for attraction in day.attractions
+        ]
+        self.assertEqual(len(poi_ids), len(set(poi_ids)))
+        retry_prompts = [
+            messages[-1]["content"]
+            for messages in model.calls
+            if "只规划指定分段" in str(messages[0]["content"])
+        ]
+        self.assertTrue(any("全局景点去重校验失败" in prompt for prompt in retry_prompts))
+        retry_prompt = next(
+            prompt for prompt in retry_prompts
+            if "全局景点去重校验失败" in prompt
+        )
+        self.assertIn("已完成其他分段的景点（本段严禁选择）", retry_prompt)
+        self.assertIn('"poi_id": "poi-2"', retry_prompt)
+        self.assertIn('"poi_id": "poi-3"', retry_prompt)
 
     def test_segment_failure_saves_other_results_and_snapshots(self):
         request = _request(9)

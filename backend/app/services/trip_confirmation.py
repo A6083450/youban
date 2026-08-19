@@ -13,7 +13,8 @@ _SECRET = secrets.token_bytes(32)
 _DRAFT_FIELDS = (
     "city", "cities", "start_date", "end_date", "travel_days",
     "transportation", "accommodation", "preferences", "free_text_input",
-    "origin_text", "language",
+    "origin_text", "language", "traveler_count", "room_count",
+    "budget_amount", "budget_basis",
 )
 _CONFIRM_THRESHOLD = 0.85
 _LEDGER: dict[str, dict[str, Any]] = {}
@@ -22,10 +23,24 @@ _LEDGER_LOCK = threading.RLock()
 
 def _canonical_draft(draft: Any) -> dict[str, Any]:
     data = draft.model_dump(mode="json") if hasattr(draft, "model_dump") else dict(draft or {})
-    canonical = {
-        field: data.get(field) or ([] if field in {"cities", "preferences"} else None)
-        for field in _DRAFT_FIELDS
-    }
+
+    def normalize_json_number(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: normalize_json_number(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize_json_number(item) for item in value]
+        if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+            return int(value)
+        return value
+
+    canonical = {}
+    for field in _DRAFT_FIELDS:
+        value = data.get(field)
+        if field in {"cities", "preferences"}:
+            value = value or []
+        elif value in (None, ""):
+            value = None
+        canonical[field] = normalize_json_number(value)
     language = str(data.get("language") or "").strip().replace("_", "-").lower()
     canonical["language"] = language or None
     return canonical

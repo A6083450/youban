@@ -2,10 +2,11 @@
 
 import copy
 import json
+import unicodedata
 from datetime import date, timedelta
 from typing import Any, Optional
 
-from ..models.schemas import Budget, DayPlan, POIInfo, TripRequest, WeatherInfo
+from ..models.schemas import Budget, DayPlan, HotelCandidateInfo, TripRequest, WeatherInfo
 from .plan_parser import error_guided_json_fix, fix_unescaped_quotes, sanitize_json_str
 
 
@@ -147,7 +148,7 @@ def _decode_single_object(candidate: str) -> dict:
 
 
 def parse_hotel_candidates(value: Any) -> dict[str, dict]:
-    """Parse trusted hotel candidates collected from the AMap REST API."""
+    """Parse provider-neutral hotel candidates collected by controlled tools."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -159,33 +160,109 @@ def parse_hotel_candidates(value: Any) -> dict[str, dict]:
     candidates = {}
     for item in value:
         try:
-            poi = POIInfo.model_validate(item)
+            candidate = HotelCandidateInfo.model_validate(item)
         except (TypeError, ValueError):
             continue
-        candidates[poi.id] = poi.model_dump(mode="json")
+        candidates[candidate.id] = candidate.model_dump(mode="json")
     return candidates
 
 
+def parse_attraction_candidates(value: Any) -> dict[str, dict]:
+    """Parse trusted attraction candidates collected from the AMap REST API."""
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            values = decoded if isinstance(decoded, list) else []
+        except json.JSONDecodeError:
+            values = []
+            for line in value.splitlines():
+                try:
+                    item = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(item, dict):
+                    values.append(item)
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+
+    candidates: dict[str, dict] = {}
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        poi_id = str(item.get("poi_id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        location = item.get("location")
+        try:
+            normalized_location = {
+                "longitude": float(location["longitude"]),
+                "latitude": float(location["latitude"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not poi_id or not name:
+            continue
+        candidates[poi_id] = {
+            **item,
+            "poi_id": poi_id,
+            "name": name,
+            "address": str(item.get("address") or "").strip(),
+            "location": normalized_location,
+        }
+    return candidates
+
+
+def _resolve_day_attractions(day: dict, candidates: dict[str, dict]) -> None:
+    attractions = day.get("attractions")
+    if not isinstance(attractions, list):
+        raise ValueError("attractions 必须为列表")
+    if not candidates:
+        return
+
+    for attraction in attractions:
+        if not isinstance(attraction, dict):
+            raise ValueError("attraction 必须为 JSON object")
+        poi_id = str(attraction.get("poi_id") or "").strip()
+        if poi_id not in candidates:
+            raise ValueError("景点 poi_id 不在高德候选列表中")
+        candidate = candidates[poi_id]
+        attraction["poi_id"] = poi_id
+        attraction["name"] = candidate["name"]
+        attraction["address"] = candidate["address"] or str(
+            attraction.get("address") or ""
+        )
+        attraction["location"] = candidate["location"]
+        for key in ("reservation_required", "reservation_tips"):
+            if key in candidate:
+                attraction[key] = candidate[key]
+
+
 def _verified_hotel(candidate: dict) -> dict:
+    starting_price = candidate.get("starting_price")
+    has_price = isinstance(starting_price, (int, float)) and starting_price > 0
     return {
         "name": candidate["name"],
         "address": candidate.get("address", ""),
         "location": candidate.get("location"),
-        "price_range": "",
-        "rating": "",
+        "price_range": candidate.get("price_raw", ""),
+        "rating": candidate.get("rating", ""),
         "distance": "",
-        "type": candidate.get("type", ""),
-        "estimated_cost": 0,
-        "source": "amap",
+        "type": candidate.get("star") or candidate.get("type", ""),
+        "estimated_cost": round(float(starting_price), 2) if has_price else 0,
+        "source": candidate.get("source", "amap"),
         "source_hotel_id": candidate["id"],
-        "price_status": "unavailable",
+        "source_url": candidate.get("source_url", ""),
+        "image_url": candidate.get("image_url", ""),
+        "price_checked_at": candidate.get("price_checked_at", ""),
+        "price_method": "provider_starting_price" if has_price else "",
+        "price_status": "estimated" if has_price else "unavailable",
     }
 
 
 def _resolve_day_hotel(
     day: dict,
     candidates: dict[str, dict],
-    allow_llm_fallback: bool,
     trusted_hotel_data: bool,
     hotel_required: bool = True,
 ) -> None:
@@ -206,24 +283,17 @@ def _resolve_day_hotel(
         if not isinstance(hotel, dict):
             raise ValueError("checkpoint 酒店结构无效")
         source_id = str(hotel.get("source_hotel_id") or "").strip()
-        if hotel.get("source") == "amap" and source_id in candidates:
-            day["hotel"] = _verified_hotel(candidates[source_id])
+        candidate = candidates.get(source_id)
+        candidate_source = str((candidate or {}).get("source") or "amap")
+        if candidate is not None and hotel.get("source") == candidate_source:
+            day["hotel"] = _verified_hotel(candidate)
             return
-        if allow_llm_fallback:
-            return
-        raise ValueError("checkpoint 酒店未通过高德来源验证")
+        raise ValueError("checkpoint 酒店未通过受控来源验证")
 
     selected_id = str(day.pop("hotel_id", "") or "").strip()
     generated_hotel = day.get("hotel")
     if generated_hotel is not None:
-        if not allow_llm_fallback:
-            raise ValueError("Agent 不得生成酒店名称、坐标或价格")
-        if not isinstance(generated_hotel, dict):
-            raise ValueError("hotel 必须为 JSON object")
-        generated_hotel.setdefault("source", "llm")
-        generated_hotel.setdefault("source_hotel_id", "")
-        generated_hotel.setdefault("price_status", "estimated")
-        return
+        raise ValueError("Agent 不得生成酒店名称、坐标或价格")
 
     if not selected_id:
         if candidates:
@@ -232,15 +302,15 @@ def _resolve_day_hotel(
             day["hotel"] = None
             return
     if selected_id not in candidates:
-        raise ValueError("hotel_id 不在高德酒店候选列表中")
+        raise ValueError("hotel_id 不在受控酒店候选列表中")
     day["hotel"] = _verified_hotel(candidates[selected_id])
 
 
 def parse_segment_output(
     text: str,
     expected: dict,
+    attraction_candidates: Optional[dict[str, dict]] = None,
     hotel_candidates: Optional[dict[str, dict]] = None,
-    allow_llm_hotel_fallback: bool = False,
     trusted_hotel_data: bool = False,
     last_travel_day_index: Optional[int] = None,
 ) -> list[dict]:
@@ -254,10 +324,10 @@ def parse_segment_output(
         raise ValueError("days 必须为列表")
     candidates = hotel_candidates or {}
     for day in days:
+        _resolve_day_attractions(day, attraction_candidates or {})
         _resolve_day_hotel(
             day,
             candidates,
-            allow_llm_hotel_fallback,
             trusted_hotel_data,
             hotel_required=(
                 last_travel_day_index is None
@@ -268,6 +338,50 @@ def parse_segment_output(
     if [day.day_index for day in validated] != expected["day_indices"]:
         raise ValueError("day_index 与分段范围不符")
     return [day.model_dump() for day in validated]
+
+
+def _normalized_attraction_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
+def duplicate_attraction_issues(
+    days: list[DayPlan],
+    segments: list[dict],
+) -> dict[str, list[str]]:
+    """Return deterministic repair feedback for later duplicate attractions."""
+    segment_by_day = {
+        day_index: segment["segment_id"]
+        for segment in segments
+        for day_index in segment["day_indices"]
+    }
+    seen: dict[tuple[str, str], tuple[int, str]] = {}
+    issues: dict[str, list[str]] = {}
+    for day in sorted(days, key=lambda item: item.day_index):
+        city = day.city.strip()
+        for attraction in day.attractions:
+            poi_id = str(attraction.poi_id or "").strip()
+            identity = f"poi:{poi_id}" if poi_id else (
+                f"name:{_normalized_attraction_name(attraction.name)}"
+            )
+            if identity == "name:":
+                continue
+            key = (city, identity)
+            previous = seen.get(key)
+            if previous is None:
+                seen[key] = (day.day_index, attraction.name)
+                continue
+            first_day_index, first_name = previous
+            segment_id = segment_by_day.get(day.day_index)
+            if not segment_id:
+                raise ValueError("景点所在 day_index 不属于任何分段")
+            source = f"，高德 POI ID={poi_id}" if poi_id else ""
+            issues.setdefault(segment_id, []).append(
+                f"D{day.day_index + 1} 的“{attraction.name}”与 "
+                f"D{first_day_index + 1} 的“{first_name}”重复{source}；"
+                "必须改为尚未使用的真实景点"
+            )
+    return issues
 
 
 def _request_day_cities(request: TripRequest) -> list[str]:
@@ -304,10 +418,20 @@ def merge_segment_days(
     return days
 
 
-def build_budget(days: list[DayPlan]) -> Budget:
-    attractions = sum(item.ticket_price for day in days for item in day.attractions)
-    hotels = sum(day.hotel.estimated_cost for day in days if day.hotel)
-    meals = sum(meal.estimated_cost for day in days for meal in day.meals)
+def build_budget(
+    days: list[DayPlan],
+    traveler_count: int = 1,
+    room_count: int = 1,
+) -> Budget:
+    travelers = max(1, traveler_count)
+    rooms = max(1, room_count)
+    attractions = sum(
+        item.ticket_price * travelers for day in days for item in day.attractions
+    )
+    hotels = sum(day.hotel.estimated_cost * rooms for day in days if day.hotel)
+    meals = sum(
+        meal.estimated_cost * travelers for day in days for meal in day.meals
+    )
     return Budget(
         total_attractions=attractions,
         total_hotels=hotels,

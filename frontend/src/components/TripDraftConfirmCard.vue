@@ -21,6 +21,16 @@
       <span class="confirm-label">{{ t('composer.transport') }}</span>
       <span class="confirm-value">{{ transportLabel(draft.transportation) }} · {{ accommodationLabel(draft.accommodation) }}</span>
     </div>
+    <div class="confirm-row">
+      <span class="confirm-label">{{ t('composer.travelers') }}</span>
+      <span class="confirm-value">
+        {{ t('composer.travelerRoomValue', { travelers: travelerCount, rooms: roomCount }) }}
+      </span>
+    </div>
+    <div v-if="draft.budget_amount != null" class="confirm-row">
+      <span class="confirm-label">{{ t('composer.budget') }}</span>
+      <span class="confirm-value">{{ budgetText }}</span>
+    </div>
     <div class="confirm-hint">
       <div>{{ t('composer.confirmHint') }}</div>
       <template v-if="suggestions.length">
@@ -70,6 +80,23 @@ const accommodationLabelKeys: Record<string, string> = {
 }
 const accommodationLabel = (value: string) => t(accommodationLabelKeys[value] || value)
 
+const travelerCount = computed(() => Math.max(1, props.draft.traveler_count || 1))
+const roomCount = computed(() => Math.max(
+  1,
+  props.draft.room_count || Math.ceil(travelerCount.value / 2),
+))
+
+const budgetText = computed(() => {
+  const amount = Number(props.draft.budget_amount || 0)
+  const travelers = travelerCount.value
+  const groupTotal = props.draft.budget_basis === 'per_person' ? amount * travelers : amount
+  const perPerson = props.draft.budget_basis === 'per_person' ? amount : amount / travelers
+  return t('composer.budgetValue', {
+    group: groupTotal.toLocaleString(),
+    perPerson: Number(perPerson.toFixed(2)).toLocaleString(),
+  })
+})
+
 // 建议优先级:后端 LLM 推理生成的个性化建议 > LLM 标记的默认字段模板提示 > 前端正则兜底
 const isAgentSuggestions = computed(() => Boolean(props.draft.suggestions?.length))
 
@@ -78,6 +105,7 @@ const INFERRED_HINT_KEYS: Record<string, string> = {
   transportation: 'composer.hintTransport',
   accommodation: 'composer.hintAccommodation',
   preferences: 'composer.hintPrefs',
+  traveler_count: 'composer.hintTravelers',
 }
 
 const suggestions = computed(() => {

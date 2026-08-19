@@ -29,6 +29,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 COPY backend/pyproject.toml backend/uv.lock ./backend/
 RUN cd backend && uv sync --locked --python 3.10
 
+# FlyAI CLI is a controlled backend tool used for hotel inventory search.
+COPY backend/package.json ./backend/
+RUN cd backend && npm install --registry=https://registry.npmmirror.com
+
 # 将 venv 加入 PATH，后续 uvx / uvicorn 均使用它
 ENV PATH="/opt/venv/bin:$PATH"
 

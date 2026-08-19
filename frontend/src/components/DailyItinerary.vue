@@ -85,7 +85,42 @@ const groupHeading = (group: ItineraryDayGroup): string => {
   })
 }
 
-const timelineFor = (day: DayPlan) => buildDayTimeline(day)
+const weatherFor = (day: DayPlan) =>
+  props.tripPlan.weather_info?.find((weather) => weather.date === day.date) || null
+
+const timelineFor = (day: DayPlan) => buildDayTimeline(day, weatherFor(day))
+
+const formatVisitDuration = (rawMinutes: number): string => {
+  const totalMinutes = Math.max(0, Math.round(Number(rawMinutes) || 0))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours && minutes) return t('result.daily.durationHoursMinutes', { hours, minutes })
+  if (hours) return t('result.daily.durationHours', { hours })
+  return t('result.daily.durationMinutes', { minutes })
+}
+
+const recommendationReason = (
+  day: DayPlan,
+  outdoor: boolean,
+  hasCrowdGuidance: boolean,
+): string => {
+  const parsed = parseTripDate(day.date)
+  const weekend = parsed ? parsed.getDay() === 0 || parsed.getDay() === 6 : false
+  if (outdoor && hasCrowdGuidance) {
+    return t(weekend
+      ? 'result.daily.outdoorWeekendReason'
+      : 'result.daily.outdoorWeekdayReason')
+  }
+  if (outdoor) return t('result.daily.outdoorReason')
+  return t(weekend
+    ? 'result.daily.weekendReason'
+    : 'result.daily.weekdayReason')
+}
+
+const recommendationUpdateNote = (basis: 'weather' | 'seasonal'): string =>
+  t(basis === 'weather'
+    ? 'result.daily.weatherUpdateNote'
+    : 'result.daily.seasonalUpdateNote')
 
 const mealLabel = (type: string): string => {
   const key = `result.meals.${type}`
@@ -175,7 +210,7 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
         <ol v-if="timelineFor(item.day).length" class="daily-timeline">
           <li v-for="entry in timelineFor(item.day)" :key="entry.key" :data-kind="entry.kind">
           <time class="daily-timeline__time">
-            {{ entry.time || t('result.daily.timePending') }}
+            <strong>{{ entry.time || t('result.daily.timePending') }}</strong>
           </time>
           <span class="daily-timeline__marker" aria-hidden="true"></span>
           <div class="daily-timeline__content">
@@ -209,7 +244,10 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
             <template v-else>
               <div class="daily-timeline__title-row">
                 <strong><EnvironmentOutlined aria-hidden="true" /> {{ entry.item.name }}</strong>
-                <span v-if="entry.endTime" class="daily-timeline__range">
+                <span
+                  v-if="entry.endTime && !entry.timeRecommendationBasis"
+                  class="daily-timeline__range"
+                >
                   {{ entry.time }}–{{ entry.endTime }}
                 </span>
               </div>
@@ -231,10 +269,32 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
                   <p v-if="entry.item.description" class="daily-timeline__description">
                     {{ entry.item.description }}
                   </p>
+                  <div
+                    v-if="entry.timeRecommendationBasis"
+                    class="daily-timeline__guidance"
+                    :aria-label="t('result.daily.timeRecommendationBasis')"
+                  >
+                    <strong>
+                      {{ t('result.daily.recommendedTimeRange', {
+                        start: entry.time,
+                        end: entry.endTime,
+                      }) }}
+                    </strong>
+                    <p>
+                      {{ recommendationReason(
+                        item.day,
+                        entry.outdoor,
+                        Boolean(entry.crowdRecommendationBasis),
+                      ) }}
+                    </p>
+                    <p>{{ recommendationUpdateNote(entry.timeRecommendationBasis) }}</p>
+                  </div>
                   <div class="daily-timeline__metadata">
                     <span v-if="entry.item.visit_duration">
                       <ClockCircleOutlined aria-hidden="true" />
-                      {{ entry.item.visit_duration }} {{ t('result.minuteUnit') }}
+                      {{ t('result.daily.recommendedVisitDuration', {
+                        duration: formatVisitDuration(entry.item.visit_duration),
+                      }) }}
                     </span>
                     <span v-if="entry.item.rating">
                       <StarOutlined aria-hidden="true" /> {{ entry.item.rating }}
@@ -472,12 +532,18 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
 }
 
 .daily-timeline__time {
+  display: block;
   padding-block-start: 1px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.daily-timeline__time strong {
+  color: var(--text-secondary);
+  font: inherit;
 }
 
 .daily-timeline__marker {
@@ -603,6 +669,25 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.daily-timeline__guidance {
+  display: grid;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.daily-timeline__guidance strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.daily-timeline__guidance p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .daily-timeline__metadata span,

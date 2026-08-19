@@ -1,0 +1,26 @@
+{
+  "name": "flyai",
+  "version": "1.0.0-youban.1",
+  "upstream": {
+    "repository": "https://github.com/alibaba-flyai/flyai-skill",
+    "commit": "54277b27b68e53741954c08541faedba1d45cc7b",
+    "skill_version": "1.0.15",
+    "license": "MIT"
+  },
+  "runtime": {
+    "package": "@fly-ai/flyai-cli",
+    "version": "1.0.16",
+    "integrity": "sha512-Ksi06xvJSJcdhmfoDbpAnA84K4/pF+SkLsa5ZLvNruUc3e2EpoGaI6FcJXKTODvB/evprfy5pdRzW3lVazqfkA==",
+    "node": ">=18"
+  },
+  "allowed_commands": [
+    "search-hotel"
+  ],
+  "policy": {
+    "shell": false,
+    "timeout_seconds_max": 15,
+    "stdout_bytes_max": 2097152,
+    "raw_response_persisted": false,
+    "llm_may_generate_hotel_or_price": false
+  }
+}

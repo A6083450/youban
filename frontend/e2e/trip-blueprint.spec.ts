@@ -16,6 +16,11 @@ const attractionImage = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   </svg>
 `)}`
 
+type PlanApiMocks = {
+  budgetResponse?: unknown
+  attractionDeleteResponse?: unknown
+}
+
 const tripPlanWithBlueprint = {
   city: '上海',
   cities: ['上海', '杭州'],
@@ -147,9 +152,25 @@ const makeLongTripPlan = (dayCount: number, startDate: string): TripPlan => {
   }
 }
 
-const mockCommonApi = async (page: Page): Promise<void> => {
+const mockCommonApi = async (page: Page, mocks: PlanApiMocks = {}): Promise<void> => {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
+    if (
+      path === `/api/trip/plan/${planId}/budget-items`
+      && route.request().method() === 'GET'
+      && mocks.budgetResponse
+    ) {
+      await route.fulfill({ json: mocks.budgetResponse })
+      return
+    }
+    if (
+      path.startsWith(`/api/trip/plan/${planId}/attractions/`)
+      && route.request().method() === 'DELETE'
+      && mocks.attractionDeleteResponse
+    ) {
+      await route.fulfill({ json: mocks.attractionDeleteResponse })
+      return
+    }
     if (path === '/api/auth/me') {
       await route.fulfill({ json: { success: true, user } })
       return
@@ -174,6 +195,7 @@ const preparePlanPage = async (
   page: Page,
   plan: TripPlan = tripPlanWithBlueprint,
   locale = 'zh-CN',
+  mocks: PlanApiMocks = {},
 ): Promise<void> => {
   await page.addInitScript(
     ({ storedUser, storedPlanId, storedPlan, storedLocale }) => {
@@ -184,7 +206,7 @@ const preparePlanPage = async (
     },
     { storedUser: user, storedPlanId: planId, storedPlan: plan, storedLocale: locale },
   )
-  await mockCommonApi(page)
+  await mockCommonApi(page, mocks)
   await page.goto(`/plan/${planId}`)
   await expect(page.locator('.top-switch-menu')).toBeVisible()
 }
@@ -293,15 +315,112 @@ test('renders every day with its own ordered reference timeline', async ({ page 
   await preparePlanPage(page)
   await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.locator('#daily-day-1 .daily-timeline__time')).toHaveText(['08:30', '12:00', '14:00'])
-  await expect(page.getByText('以下时间为参考时间').first()).toBeVisible()
+  await expect(page.getByText('以下时间为参考时间，开放时间以景点当日公告为准').first()).toBeVisible()
   await expect(page.locator('.daily-itinerary__day-panel')).toHaveCount(3)
 })
 
-test('shows untimed legacy items after timed items', async ({ page }) => {
+test('adds suggested times to untimed legacy items', async ({ page }) => {
   await preparePlanPage(page, legacyTripPlan)
   await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.getByRole('radiogroup', { name: '日程分组' })).toHaveCount(0)
-  await expect(page.locator('.daily-timeline__time')).toHaveText(['时间待定', '时间待定'])
+  await expect(page.locator('.daily-timeline__time')).toHaveText(['09:00', '14:00'])
+  await expect(page.getByText('建议 09:00–10:00')).toBeVisible()
+  await expect(page.getByText('季节性建议，临近出发时根据天气更新').first()).toBeVisible()
+})
+
+test('deleting a budget attraction updates budget, overview, and detailed itinerary together', async ({ page }) => {
+  const initialPlan = JSON.parse(JSON.stringify(tripPlanWithBlueprint)) as TripPlan
+  const attraction = initialPlan.days[0].attractions[0]
+  attraction.id = 'attr-bund'
+  attraction.poi_id = 'amap-bund'
+  attraction.ticket_price = 80
+  initialPlan.budget = {
+    total_attractions: 80,
+    total_hotels: 0,
+    total_meals: 0,
+    total_transportation: 0,
+    total: 80,
+  }
+
+  const updatedPlan = JSON.parse(JSON.stringify(initialPlan)) as TripPlan
+  updatedPlan.days[0].attractions = []
+  updatedPlan.blueprint!.stages[0].highlights = ['西湖']
+  updatedPlan.budget = {
+    total_attractions: 0,
+    total_hotels: 0,
+    total_meals: 0,
+    total_transportation: 0,
+    total: 0,
+  }
+
+  const budgetItem = {
+    id: 'itinerary:attraction:attr-bund',
+    type: 'attraction',
+    day_index: 0,
+    day_end_index: 0,
+    name: '外滩',
+    amount: 80,
+    amount_basis: 'per_person',
+    traveler_count: 1,
+    per_person_amount: 80,
+    calculation_summary: '¥80/人 × 1人',
+    unit_amount: 80,
+    room_count: null,
+    nights: null,
+    origin: 'itinerary',
+    price_source: 'estimated',
+    linked_item_id: 'attr-bund',
+    entity_source: 'amap',
+    source_url: '',
+    price_checked_at: '',
+    note: '',
+    user_locked: false,
+    deleted: false,
+  }
+  const zeroBudget = updatedPlan.budget
+
+  await preparePlanPage(page, initialPlan, 'zh-CN', {
+    budgetResponse: {
+      plan_id: planId,
+      items: [budgetItem],
+      totals: initialPlan.budget,
+      per_person_totals: initialPlan.budget,
+      traveler_count: 1,
+      room_count: 1,
+      pending_count: 0,
+    },
+    attractionDeleteResponse: {
+      plan_id: planId,
+      plan: updatedPlan,
+      items: [],
+      totals: zeroBudget,
+      per_person_totals: zeroBudget,
+      traveler_count: 1,
+      room_count: 1,
+      pending_count: 0,
+    },
+  })
+
+  await page.getByRole('menuitem', { name: '预算明细' }).click()
+  const budgetRow = page.locator('.budget-detail-row').filter({ hasText: '外滩' })
+  await expect(budgetRow).toBeVisible()
+  await budgetRow.locator('.budget-delete-btn').click()
+  await expect(page.getByText('将从今日行程、行程总览、详细日程、景点地图和预算中同时删除「外滩」。')).toBeVisible()
+  await page.locator('.ant-modal-confirm .ant-btn-dangerous').click()
+  await expect(budgetRow).toHaveCount(0)
+
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+  await expect(page.locator('.overview-card')).not.toContainText('外滩')
+  await expect(page.locator('.overview-card')).toContainText('西湖')
+
+  await page.getByRole('menuitem', { name: '详细日程' }).click()
+  await expect(page.locator('.days-card')).not.toContainText('外滩')
+  await expect(page.locator('.days-card')).toContainText('西湖')
+
+  const storedPlan = await page.evaluate(() => JSON.parse(sessionStorage.getItem('tripPlan') || '{}'))
+  expect(storedPlan.days.flatMap((day: TripPlan['days'][number]) => day.attractions)
+    .some((item: TripPlan['days'][number]['attractions'][number]) => item.name === '外滩')).toBe(false)
+  expect(storedPlan.blueprint.stages[0].highlights).toEqual(['西湖'])
 })
 
 test('uses the same blueprint and daily views on a readonly share page', async ({ page }) => {
@@ -310,7 +429,7 @@ test('uses the same blueprint and daily views on a readonly share page', async (
   await page.getByRole('menuitem', { name: '行程总览' }).click()
   await expect(page.getByRole('heading', { name: '江南慢游' })).toBeVisible()
   await page.getByRole('menuitem', { name: '详细日程' }).click()
-  await expect(page.getByText('以下时间为参考时间').first()).toBeVisible()
+  await expect(page.getByText('以下时间为参考时间，开放时间以景点当日公告为准').first()).toBeVisible()
   await expect(page.locator('.daily-itinerary__day')).toHaveCount(3)
   await expect(page.getByRole('button', { name: '分享' })).toHaveCount(0)
 })
