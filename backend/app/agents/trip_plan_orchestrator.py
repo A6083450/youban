@@ -98,6 +98,48 @@ def build_segments(request: TripRequest) -> list[dict]:
     return segments
 
 
+def allocate_segment_attraction_candidates(
+    segments: list[dict],
+    attractions: dict[str, Any],
+) -> list[dict]:
+    """Give concurrent segments disjoint, deterministic POI candidate pools."""
+    allocated = copy.deepcopy(segments)
+    indices_by_city: dict[str, list[int]] = {}
+    for index, segment in enumerate(allocated):
+        indices_by_city.setdefault(segment["city"], []).append(index)
+
+    for city, segment_indices in indices_by_city.items():
+        candidate_ids = list(
+            parse_attraction_candidates(attractions.get(city, "")).keys()
+        )
+        if not candidate_ids:
+            continue
+        weights = [len(allocated[index]["day_indices"]) for index in segment_indices]
+        total_weight = max(1, sum(weights))
+        raw_quotas = [len(candidate_ids) * weight / total_weight for weight in weights]
+        quotas = [int(value) for value in raw_quotas]
+        remainder = len(candidate_ids) - sum(quotas)
+        remainder_order = sorted(
+            range(len(segment_indices)),
+            key=lambda index: (-(raw_quotas[index] - quotas[index]), index),
+        )
+        for index in remainder_order[:remainder]:
+            quotas[index] += 1
+
+        pools = [[] for _ in segment_indices]
+        cursor = 0
+        for candidate_id in candidate_ids:
+            for _ in range(len(segment_indices)):
+                pool_index = cursor % len(segment_indices)
+                cursor += 1
+                if len(pools[pool_index]) < quotas[pool_index]:
+                    pools[pool_index].append(candidate_id)
+                    break
+        for pool_index, segment_index in enumerate(segment_indices):
+            allocated[segment_index]["attraction_candidate_ids"] = pools[pool_index]
+    return allocated
+
+
 def _extract_json_object(text: str) -> str:
     cleaned = sanitize_json_str(text)
     object_start = cleaned.find("{")
@@ -213,11 +255,17 @@ def parse_attraction_candidates(value: Any) -> dict[str, dict]:
     return candidates
 
 
-def _resolve_day_attractions(day: dict, candidates: dict[str, dict]) -> None:
+def _resolve_day_attractions(
+    day: dict,
+    candidates: dict[str, dict],
+    enforce_candidates: bool = False,
+) -> None:
     attractions = day.get("attractions")
     if not isinstance(attractions, list):
         raise ValueError("attractions 必须为列表")
     if not candidates:
+        if enforce_candidates and attractions:
+            raise ValueError("本分段没有可用景点候选，attractions 必须为空")
         return
 
     for attraction in attractions:
@@ -313,6 +361,7 @@ def parse_segment_output(
     hotel_candidates: Optional[dict[str, dict]] = None,
     trusted_hotel_data: bool = False,
     last_travel_day_index: Optional[int] = None,
+    enforce_attraction_candidates: bool = False,
 ) -> list[dict]:
     data = _decode_single_object(_extract_json_object(text))
     if set(data) != {"segment_id", "days"}:
@@ -324,7 +373,11 @@ def parse_segment_output(
         raise ValueError("days 必须为列表")
     candidates = hotel_candidates or {}
     for day in days:
-        _resolve_day_attractions(day, attraction_candidates or {})
+        _resolve_day_attractions(
+            day,
+            attraction_candidates or {},
+            enforce_attraction_candidates,
+        )
         _resolve_day_hotel(
             day,
             candidates,

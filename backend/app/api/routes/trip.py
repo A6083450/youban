@@ -1885,6 +1885,8 @@ def _budget_context(task: Dict[str, Any]) -> tuple[int, int]:
 
 
 def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+    from ...services.budget_guard import calculate_budget_status
+
     traveler_count, room_count = _budget_context(task)
     items = sync_budget_items(
         task.get("result"),
@@ -1895,6 +1897,23 @@ def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any
     task["budget_items"] = [item.model_dump(mode="json") for item in items]
     totals = calculate_budget_totals(items)
     apply_budget_totals(task.get("result"), totals)
+    request = task.get("request_payload") or {}
+    plan = _plan_data(task.get("result")) or {}
+
+    def read(source: Any, key: str, default: Any = None) -> Any:
+        if isinstance(source, dict):
+            return source.get(key, default)
+        return getattr(source, key, default)
+
+    budget_status = calculate_budget_status(
+        totals,
+        items,
+        traveler_count,
+        read(request, "budget_amount", read(plan, "budget_amount")),
+        str(read(request, "budget_basis", read(plan, "budget_basis", "group_total"))),
+        adjustment_applied=bool(read(plan, "budget_adjustment_applied", False)),
+        adjustment_note=str(read(plan, "budget_adjustment_note", "") or ""),
+    )
     _persist_task_state(plan_id, task, raise_errors=True)
     return {
         "plan_id": plan_id,
@@ -1906,6 +1925,7 @@ def _budget_ledger_response(plan_id: str, task: Dict[str, Any]) -> Dict[str, Any
         "pending_count": sum(
             1 for item in items if not item.deleted and item.amount is None
         ),
+        **budget_status,
     }
 
 

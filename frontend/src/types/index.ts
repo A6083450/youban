@@ -108,6 +108,14 @@ export interface BudgetLedgerResponse {
   traveler_count: number
   room_count: number
   pending_count: number
+  budget_limit: number | null
+  quoted_total: number
+  over_budget_amount: number
+  pending_buffer: number
+  projected_total: number
+  projected_over_budget_amount: number
+  adjustment_applied: boolean
+  adjustment_note: string
 }
 
 export interface BudgetItemInput {
@@ -196,6 +204,8 @@ export interface TripPlan {
   room_count?: number
   budget_amount?: number | null
   budget_basis?: BudgetAmountBasis
+  budget_adjustment_applied?: boolean
+  budget_adjustment_note?: string
   days: DayPlan[]
   weather_info: WeatherInfo[]
   overall_suggestions: string

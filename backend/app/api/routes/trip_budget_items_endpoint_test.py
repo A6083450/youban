@@ -144,6 +144,26 @@ class BudgetItemsEndpointTest(unittest.TestCase):
         self.assertEqual(diy["amount"], 250)
         self.assertEqual(diy["per_person_amount"], 125)
 
+    def test_budget_status_reports_overage_and_separate_pending_buffer(self):
+        task = trip._tasks["t1"]
+        task["request_payload"] = {
+            "traveler_count": 2,
+            "room_count": 1,
+            "budget_amount": 50,
+            "budget_basis": "group_total",
+        }
+
+        body = self._get().json()
+
+        self.assertEqual(body["budget_limit"], 50)
+        self.assertEqual(body["over_budget_amount"], 90)
+        self.assertEqual(body["pending_count"], 3)
+        self.assertGreater(body["pending_buffer"], 0)
+        self.assertEqual(
+            body["projected_total"],
+            body["quoted_total"] + body["pending_buffer"],
+        )
+
     def test_edit_hotel_price_updates_totals_and_survives_reload(self):
         hotel = next(item for item in self._get().json()["items"] if item["type"] == "hotel")
         response = self.client.patch(

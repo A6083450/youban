@@ -25,7 +25,9 @@ from ..config import get_settings
 from ..models.schemas import TripPlan, TripRequest
 from ..services.llm_service import get_chat_model
 from ..services.itinerary_scheduler import recommend_visit_times
+from ..services.budget_guard import adjust_generated_days_to_budget
 from .trip_plan_orchestrator import (
+    allocate_segment_attraction_candidates,
     build_budget,
     build_segments,
     build_weather_info,
@@ -444,15 +446,39 @@ def _build_segment_query(request, segment, attractions, weather, hotels,
     )
 
 
-async def _generate_segment(model, request, segment, state) -> list[dict]:
-    attraction_candidates = parse_attraction_candidates(
-        state.get("attractions", {}).get(segment["city"], "")
+def _attraction_candidates_for_segment(
+    segment: dict,
+    attractions: dict[str, str],
+) -> dict[str, dict]:
+    all_attraction_candidates = parse_attraction_candidates(
+        attractions.get(segment["city"], "")
     )
+    allowed_candidate_ids = segment.get("attraction_candidate_ids")
+    return (
+        {
+            candidate_id: all_attraction_candidates[candidate_id]
+            for candidate_id in allowed_candidate_ids
+            if candidate_id in all_attraction_candidates
+        }
+        if isinstance(allowed_candidate_ids, list)
+        else all_attraction_candidates
+    )
+
+
+async def _generate_segment(model, request, segment, state) -> list[dict]:
+    attraction_candidates = _attraction_candidates_for_segment(
+        segment, state.get("attractions", {})
+    )
+    allowed_candidate_ids = segment.get("attraction_candidate_ids")
     hotel_candidates = parse_hotel_candidates(
         state.get("hotels", {}).get(segment["city"], "[]")
     )
+    segment_attractions = dict(state.get("attractions", {}))
+    segment_attractions[segment["city"]] = json.dumps(
+        list(attraction_candidates.values()), ensure_ascii=False
+    )
     query = _build_segment_query(
-        request, segment, state.get("attractions", {}), state.get("weather", {}),
+        request, segment, segment_attractions, state.get("weather", {}),
         state.get("hotels", {}), state.get("memory_context", ""),
         state["checkpoint"]["segments"][segment["segment_id"]]["error"],
         state["checkpoint"],
@@ -467,6 +493,7 @@ async def _generate_segment(model, request, segment, state) -> list[dict]:
         attraction_candidates=attraction_candidates,
         hotel_candidates=hotel_candidates,
         last_travel_day_index=request.travel_days - 1,
+        enforce_attraction_candidates=isinstance(allowed_candidate_ids, list),
     )
     _validate_segment_days(request, segment, output)
     return output
@@ -488,11 +515,13 @@ def _prepare_segments(
     hotels: Optional[dict[str, str]] = None,
     attractions: Optional[dict[str, str]] = None,
 ) -> tuple[list[dict], bool]:
-    segments = build_segments(request)
+    segments = allocate_segment_attraction_candidates(
+        build_segments(request), attractions or {}
+    )
     changed = False
     for segment in segments:
-        attraction_candidates = parse_attraction_candidates(
-            (attractions or {}).get(segment["city"], "")
+        attraction_candidates = _attraction_candidates_for_segment(
+            segment, attractions or {}
         )
         hotel_candidates = parse_hotel_candidates(
             (hotels or {}).get(segment["city"], "[]")
@@ -507,10 +536,13 @@ def _prepare_segments(
                             "days": saved["output"],
                         }),
                         segment,
-                            attraction_candidates=attraction_candidates,
-                            hotel_candidates=hotel_candidates,
-                            trusted_hotel_data=True,
+                        attraction_candidates=attraction_candidates,
+                        hotel_candidates=hotel_candidates,
+                        trusted_hotel_data=True,
                         last_travel_day_index=request.travel_days - 1,
+                        enforce_attraction_candidates=isinstance(
+                            segment.get("attraction_candidate_ids"), list
+                        ),
                     )
                     _validate_segment_days(request, segment, output)
                     continue
@@ -672,8 +704,9 @@ async def _run_summary(model, request, days, state, runtime) -> dict:
 
 
 def _assemble_plan(request, days, state, summary) -> dict:
+    budget_days, adjustment = adjust_generated_days_to_budget(request, days)
     weather_info = build_weather_info(request, state.get("weather", {}))
-    scheduled_days = recommend_visit_times(days, weather_info)
+    scheduled_days = recommend_visit_times(budget_days, weather_info)
     return {
         "city": request.cities[0].city,
         "cities": [stay.city for stay in request.cities],
@@ -683,11 +716,12 @@ def _assemble_plan(request, days, state, summary) -> dict:
         "room_count": request.room_count,
         "budget_amount": request.budget_amount,
         "budget_basis": request.budget_basis,
+        **adjustment,
         "days": [day.model_dump() for day in scheduled_days],
         "weather_info": [item.model_dump() for item in weather_info],
         "overall_suggestions": summary["overall_suggestions"],
         "budget": build_budget(
-            days,
+            budget_days,
             traveler_count=request.traveler_count,
             room_count=request.room_count or 1,
         ).model_dump(),

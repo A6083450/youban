@@ -102,6 +102,48 @@ class AmapServiceTest(unittest.TestCase):
 
     @patch("app.services.amap_service.get_settings")
     @patch("app.services.amap_service.requests.get")
+    def test_search_poi_prioritizes_exact_main_attraction(self, request_get, settings):
+        settings.return_value = SimpleNamespace(vite_amap_web_key="test-web-key")
+        request_get.return_value = _FakeResponse({
+            "status": "1",
+            "pois": [
+                {
+                    "id": "wall",
+                    "name": "西安城墙",
+                    "type": "风景名胜",
+                    "address": "南大街",
+                    "location": "108.94,34.26",
+                },
+                {
+                    "id": "north-square",
+                    "name": "大雁塔北广场",
+                    "type": "风景名胜;广场",
+                    "address": "雁塔区",
+                    "location": "108.96,34.22",
+                },
+                {
+                    "id": "main",
+                    "name": "大雁塔",
+                    "type": "风景名胜",
+                    "address": "雁塔区",
+                    "location": "108.96,34.22",
+                },
+                {
+                    "id": "scenic",
+                    "name": "大雁塔文化休闲景区",
+                    "type": "风景名胜",
+                    "address": "雁塔区",
+                    "location": "108.96,34.22",
+                },
+            ],
+        })
+
+        result = AmapService().search_poi("大雁塔", "西安", types="110000")
+
+        self.assertEqual(["main", "scenic", "north-square", "wall"], [item.id for item in result])
+
+    @patch("app.services.amap_service.get_settings")
+    @patch("app.services.amap_service.requests.get")
     def test_search_poi_does_not_call_network_without_key(self, request_get, settings):
         settings.return_value = SimpleNamespace(vite_amap_web_key="")
 

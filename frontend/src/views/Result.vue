@@ -44,10 +44,40 @@
                 <ShareAltOutlined class="action-icon" />
                 {{ t('result.share.button') }}
               </a-button>
-              <a-button type="default" @click="exportAsImage" class="action-btn">
-                <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                {{ t('result.exportImage') }}
-              </a-button>
+              <a-dropdown :trigger="['click']" placement="bottomRight">
+                <a-button
+                  type="default"
+                  class="action-btn"
+                  :loading="exportingGuide"
+                  :disabled="exportingGuide"
+                >
+                  <DownloadOutlined class="action-icon" />
+                  {{ t('result.exportImage') }}
+                  <DownOutlined class="action-chevron" />
+                </a-button>
+                <template #overlay>
+                  <a-menu class="guide-export-menu" @click="handleExportMenuClick">
+                    <a-menu-item key="image">
+                      <div class="guide-export-option">
+                        <FileImageOutlined />
+                        <span>
+                          <strong>{{ t('result.export.imageOption') }}</strong>
+                          <small>{{ t('result.export.imageOptionDescription') }}</small>
+                        </span>
+                      </div>
+                    </a-menu-item>
+                    <a-menu-item key="pdf">
+                      <div class="guide-export-option">
+                        <FilePdfOutlined />
+                        <span>
+                          <strong>{{ t('result.export.pdfOption') }}</strong>
+                          <small>{{ t('result.export.pdfOptionDescription') }}</small>
+                        </span>
+                      </div>
+                    </a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
               <a-button type="default" @click="exportAsCalendar" class="action-btn">
                 <CalendarOutlined class="action-icon" />
                 {{ t('result.exportCalendar') }}
@@ -172,7 +202,9 @@
                     <span>{{ t('result.budget.detailName') }}</span>
                     <span>{{ t('result.budget.calculation') }}</span>
                     <span>{{ budgetAmountHeader }}</span>
-                    <span v-if="!props.readonly">{{ t('result.budget.detailAction') }}</span>
+                    <span v-if="!props.readonly" class="budget-detail-action-heading">
+                      {{ t('result.budget.detailAction') }}
+                    </span>
                   </div>
                   <div
                     v-for="item in filteredBudgetItems"
@@ -208,6 +240,8 @@
                         type="button"
                         class="budget-icon-btn budget-edit-btn"
                         :title="t('result.budget.editItem')"
+                        :aria-label="t('result.budget.editItem')"
+                        :disabled="budgetSaving"
                         @click="openBudgetEditor(item)"
                       >
                         <EditOutlined />
@@ -216,6 +250,8 @@
                         type="button"
                         class="budget-icon-btn budget-delete-btn"
                         :title="t('common.delete')"
+                        :aria-label="t('common.delete')"
+                        :disabled="budgetSaving"
                         @click="removeBudgetItem(item)"
                       >
                         <DeleteOutlined />
@@ -240,6 +276,38 @@
                 <span class="budget-summary-currency">¥</span>
                 <span class="budget-summary-total-value">{{ formatBudgetAmount(displayBudgetTotals.total) }}</span>
                 <span v-if="budgetDisplayBasis === 'per_person'" class="budget-summary-unit">/人</span>
+              </div>
+              <div
+                v-if="budgetLimit !== null && (budgetOverAmount > 0 || budgetPendingCount > 0)"
+                class="budget-status-alert"
+                :class="{ 'budget-status-alert--danger': budgetOverAmount > 0 || budgetProjectedOverAmount > 0 }"
+              >
+                <ExclamationCircleOutlined />
+                <span v-if="budgetOverAmount > 0 && budgetPendingCount > 0">
+                  {{ t('result.budget.overWithPending', {
+                    amount: formatBudgetAmount(budgetOverAmount),
+                    count: budgetPendingCount,
+                  }) }}
+                </span>
+                <span v-else-if="budgetOverAmount > 0">
+                  {{ t('result.budget.overBudget', { amount: formatBudgetAmount(budgetOverAmount) }) }}
+                </span>
+                <span v-else-if="budgetProjectedOverAmount > 0">
+                  {{ t('result.budget.pendingProjectedOver', {
+                    count: budgetPendingCount,
+                    buffer: formatBudgetAmount(budgetPendingBuffer),
+                    amount: formatBudgetAmount(budgetProjectedOverAmount),
+                  }) }}
+                </span>
+                <span v-else>
+                  {{ t('result.budget.pendingWithinBudget', {
+                    count: budgetPendingCount,
+                    buffer: formatBudgetAmount(budgetPendingBuffer),
+                  }) }}
+                </span>
+              </div>
+              <div v-if="budgetAdjustmentNote" class="budget-adjustment-note">
+                {{ budgetAdjustmentNote }}
               </div>
               <div class="budget-summary-sub-grid">
                 <div class="budget-summary-sub-item">
@@ -268,7 +336,7 @@
                 </div>
               </div>
 
-              <div v-if="budgetPendingCount > 0" class="budget-unpriced-status">
+              <div v-if="budgetPendingCount > 0 && budgetLimit === null" class="budget-unpriced-status">
                 {{ t('result.budget.pendingAmountCount', { count: budgetPendingCount }) }}
               </div>
 
@@ -398,159 +466,293 @@
     <a-modal
       v-if="!props.readonly"
       v-model:open="budgetEditorOpen"
-      :title="budgetEditorTitle"
-      :ok-text="t('common.ok')"
+      :width="budgetEditorWidth"
+      :title="null"
+      :ok-text="t('result.budget.reviewAction')"
       :cancel-text="t('common.cancel')"
       :confirm-loading="budgetSaving"
-      @ok="saveBudgetEditor"
+      :mask-closable="false"
+      wrap-class-name="budget-editor-modal-wrap"
+      @ok="requestBudgetSaveConfirmation"
     >
-      <a-form layout="vertical" class="budget-editor-form">
-        <a-form-item :label="t('result.budget.detailType')" required>
-          <a-select v-model:value="budgetEditor.type" :disabled="editingItineraryAttraction">
-            <a-select-option
-              value="attraction"
-              :disabled="Boolean(budgetEditor.id) && budgetEditor.type !== 'attraction'"
-            >
-              {{ t('result.budget.attraction') }}
-            </a-select-option>
-            <a-select-option value="hotel">{{ t('result.budget.hotel') }}</a-select-option>
-            <a-select-option value="meal">{{ t('result.budget.meal') }}</a-select-option>
-            <a-select-option value="transport">{{ t('result.budget.transport') }}</a-select-option>
-            <a-select-option value="other">{{ t('result.budget.other') }}</a-select-option>
-          </a-select>
-        </a-form-item>
-
-        <template v-if="isAttractionEditorMode">
-          <a-form-item :label="t('result.budget.detailDay')" required>
-            <a-select v-model:value="attractionEditor.dayIndex">
-              <a-select-option
-                v-for="day in tripPlan?.days ?? []"
-                :key="day.day_index"
-                :value="day.day_index"
-              >
-                {{ t('common.dayNumber', { day: day.day_index + 1 }) }} · {{ day.city || tripPlan?.city }}
-              </a-select-option>
-            </a-select>
-          </a-form-item>
-          <a-form-item :label="t('result.budget.realAttraction')" required>
-            <a-input-search
-              v-model:value="attractionEditor.query"
-              :placeholder="t('result.budget.attractionSearchPlaceholder')"
-              :enter-button="t('result.budget.search')"
-              :loading="attractionSearchLoading"
-              @search="searchAttractionPoiOptions"
-            />
-            <div v-if="attractionPoiResults.length" class="attraction-poi-results">
-              <button
-                v-for="poi in attractionPoiResults"
-                :key="poi.id"
-                type="button"
-                class="attraction-poi-option"
-                :class="{ 'is-selected': attractionEditor.poi?.id === poi.id }"
-                @click="selectAttractionPoi(poi)"
-              >
-                <EnvironmentOutlined aria-hidden="true" />
-                <span>
-                  <strong>{{ poi.name }}</strong>
-                  <small>{{ poi.address || poi.type }}</small>
-                </span>
-              </button>
-            </div>
-            <div v-if="attractionEditor.poi" class="attraction-poi-selected">
-              <EnvironmentOutlined aria-hidden="true" />
-              <span>
-                <strong>{{ attractionEditor.poi.name }}</strong>
-                <small>{{ attractionEditor.poi.address }}</small>
-              </span>
-              <span>{{ t('result.budget.amapVerified') }}</span>
-            </div>
-          </a-form-item>
-          <div class="attraction-schedule-grid">
-            <a-form-item :label="t('result.budget.startTime')" required>
-              <a-input v-model:value="attractionEditor.startTime" type="time" />
-            </a-form-item>
-            <a-form-item :label="t('result.fieldVisitDurationMinutes')" required>
-              <a-input-number
-                v-model:value="attractionEditor.visitDuration"
-                :min="30"
-                :max="720"
-                :step="30"
-                class="budget-amount-input"
-              />
-            </a-form-item>
+      <div class="budget-editor-shell">
+        <div class="budget-editor-heading">
+          <span class="budget-editor-heading-icon" aria-hidden="true">
+            <EditOutlined v-if="budgetEditorIsEditing" />
+            <PlusOutlined v-else />
+          </span>
+          <div>
+            <span class="budget-editor-eyebrow">{{ budgetEditorEyebrow }}</span>
+            <h3>{{ budgetEditorTitle }}</h3>
           </div>
-          <a-form-item :label="t('result.budget.ticketPricePerPerson')">
-            <a-input-number
-              v-model:value="attractionEditor.ticketPrice"
-              :min="0"
-              :max="1000000"
-              :precision="0"
-              class="budget-amount-input"
-            />
-          </a-form-item>
-          <a-form-item :label="t('result.fieldDescription')">
-            <a-textarea
-              v-model:value="attractionEditor.description"
-              :maxlength="1000"
-              :rows="3"
-            />
-          </a-form-item>
-          <a-form-item>
-            <a-checkbox v-model:checked="attractionEditor.reservationRequired">
-              {{ t('result.reservationRequired') }}
-            </a-checkbox>
-          </a-form-item>
-          <a-form-item
-            v-if="attractionEditor.reservationRequired"
-            :label="t('result.budget.reservationTips')"
-          >
-            <a-input
-              v-model:value="attractionEditor.reservationTips"
-              :maxlength="500"
-            />
-          </a-form-item>
-        </template>
+        </div>
 
-        <template v-else>
-          <a-form-item :label="t('result.budget.detailDay')" required>
-            <a-select v-model:value="budgetEditor.dayIndex">
-              <a-select-option :value="-1">{{ t('result.budget.wholeTrip') }}</a-select-option>
-              <a-select-option
-                v-for="day in tripPlan?.days ?? []"
-                :key="day.day_index"
-                :value="day.day_index"
+        <a-form layout="vertical" class="budget-editor-form">
+          <section class="budget-editor-section">
+            <div class="budget-editor-section-title">
+              <span>01</span>
+              <strong>{{ t('result.budget.editorBasicInfo') }}</strong>
+            </div>
+            <div class="budget-editor-grid">
+              <a-form-item :label="t('result.budget.detailType')" required>
+                <a-select v-model:value="budgetEditor.type" :disabled="editingItineraryAttraction">
+                  <a-select-option
+                    value="attraction"
+                    :disabled="Boolean(budgetEditor.id) && budgetEditor.type !== 'attraction'"
+                  >
+                    {{ t('result.budget.attraction') }}
+                  </a-select-option>
+                  <a-select-option value="hotel">{{ t('result.budget.hotel') }}</a-select-option>
+                  <a-select-option value="meal">{{ t('result.budget.meal') }}</a-select-option>
+                  <a-select-option value="transport">{{ t('result.budget.transport') }}</a-select-option>
+                  <a-select-option value="other">{{ t('result.budget.other') }}</a-select-option>
+                </a-select>
+              </a-form-item>
+
+              <a-form-item v-if="isAttractionEditorMode" :label="t('result.budget.detailDay')" required>
+                <a-select v-model:value="attractionEditor.dayIndex">
+                  <a-select-option
+                    v-for="day in tripPlan?.days ?? []"
+                    :key="day.day_index"
+                    :value="day.day_index"
+                  >
+                    {{ t('common.dayNumber', { day: day.day_index + 1 }) }} · {{ day.city || tripPlan?.city }}
+                  </a-select-option>
+                </a-select>
+              </a-form-item>
+              <a-form-item v-else :label="t('result.budget.detailDay')" required>
+                <a-select v-model:value="budgetEditor.dayIndex">
+                  <a-select-option :value="-1">{{ t('result.budget.wholeTrip') }}</a-select-option>
+                  <a-select-option
+                    v-for="day in tripPlan?.days ?? []"
+                    :key="day.day_index"
+                    :value="day.day_index"
+                  >
+                    {{ t('common.dayNumber', { day: day.day_index + 1 }) }}
+                  </a-select-option>
+                </a-select>
+              </a-form-item>
+            </div>
+            <a-form-item v-if="!isAttractionEditorMode" :label="t('result.budget.detailName')" required>
+              <a-input v-model:value="budgetEditor.name" :maxlength="120" />
+            </a-form-item>
+          </section>
+
+          <template v-if="isAttractionEditorMode">
+            <section class="budget-editor-section">
+              <div class="budget-editor-section-title">
+                <span>02</span>
+                <strong>{{ t('result.budget.editorAttractionInfo') }}</strong>
+              </div>
+              <a-form-item :label="t('result.budget.realAttraction')" required>
+                <a-input-search
+                  v-model:value="attractionEditor.query"
+                  :placeholder="t('result.budget.attractionSearchPlaceholder')"
+                  :enter-button="t('result.budget.search')"
+                  :loading="attractionSearchLoading"
+                  @search="searchAttractionPoiOptions"
+                />
+                <div v-if="attractionPoiResults.length" class="attraction-poi-results">
+                  <button
+                    v-for="poi in attractionPoiResults"
+                    :key="poi.id"
+                    type="button"
+                    class="attraction-poi-option"
+                    :class="{ 'is-selected': attractionEditor.poi?.id === poi.id }"
+                    @click="selectAttractionPoi(poi)"
+                  >
+                    <EnvironmentOutlined aria-hidden="true" />
+                    <span>
+                      <strong>{{ poi.name }}</strong>
+                      <small>{{ poi.address || poi.type }}</small>
+                    </span>
+                  </button>
+                </div>
+                <div v-if="attractionEditor.poi" class="attraction-poi-selected">
+                  <EnvironmentOutlined aria-hidden="true" />
+                  <span>
+                    <strong>{{ attractionEditor.poi.name }}</strong>
+                    <small>{{ attractionEditor.poi.address }}</small>
+                  </span>
+                  <span>{{ t('result.budget.amapVerified') }}</span>
+                </div>
+              </a-form-item>
+            </section>
+
+            <section class="budget-editor-section">
+              <div class="budget-editor-section-title">
+                <span>03</span>
+                <strong>{{ t('result.budget.editorScheduleCost') }}</strong>
+              </div>
+              <div class="attraction-schedule-grid">
+                <a-form-item :label="t('result.budget.startTime')" required>
+                  <a-input v-model:value="attractionEditor.startTime" type="time" />
+                </a-form-item>
+                <a-form-item :label="t('result.fieldVisitDurationMinutes')" required>
+                  <a-input-number
+                    v-model:value="attractionEditor.visitDuration"
+                    :min="30"
+                    :max="720"
+                    :step="30"
+                    class="budget-amount-input"
+                  />
+                </a-form-item>
+                <a-form-item :label="t('result.budget.ticketPricePerPerson')">
+                  <a-input-number
+                    v-model:value="attractionEditor.ticketPrice"
+                    :min="0"
+                    :max="1000000"
+                    :precision="0"
+                    class="budget-amount-input"
+                  />
+                </a-form-item>
+              </div>
+            </section>
+
+            <section class="budget-editor-section">
+              <div class="budget-editor-section-title">
+                <span>04</span>
+                <strong>{{ t('result.budget.editorAdditionalInfo') }}</strong>
+              </div>
+              <a-form-item :label="t('result.fieldDescription')">
+                <a-textarea
+                  v-model:value="attractionEditor.description"
+                  :maxlength="1000"
+                  :rows="3"
+                />
+              </a-form-item>
+              <div class="budget-editor-reservation-row">
+                <a-checkbox v-model:checked="attractionEditor.reservationRequired">
+                  {{ t('result.reservationRequired') }}
+                </a-checkbox>
+              </div>
+              <a-form-item
+                v-if="attractionEditor.reservationRequired"
+                :label="t('result.budget.reservationTips')"
               >
-                {{ t('common.dayNumber', { day: day.day_index + 1 }) }}
-              </a-select-option>
-            </a-select>
-          </a-form-item>
-          <a-form-item :label="t('result.budget.detailName')" required>
-            <a-input v-model:value="budgetEditor.name" :maxlength="120" />
-          </a-form-item>
-          <a-form-item :label="t('result.budget.amountBasis')" required>
-            <a-segmented
-              v-model:value="budgetEditor.amountBasis"
-              :options="budgetBasisOptions"
-              block
-            />
-          </a-form-item>
-          <a-form-item :label="budgetEditor.amountBasis === 'per_person'
-            ? t('result.budget.perPersonAmount')
-            : t('result.budget.groupTotalAmount')">
-            <a-input-number
-              v-model:value="budgetEditor.amount"
-              :min="0"
-              :max="100000000"
-              :precision="2"
-              :placeholder="t('result.budget.amountPending')"
-              class="budget-amount-input"
-            />
-          </a-form-item>
-          <a-form-item :label="t('result.budget.note')">
-            <a-input v-model:value="budgetEditor.note" :maxlength="300" />
-          </a-form-item>
-        </template>
-      </a-form>
+                <a-input
+                  v-model:value="attractionEditor.reservationTips"
+                  :maxlength="500"
+                />
+              </a-form-item>
+            </section>
+          </template>
+
+          <template v-else>
+            <section class="budget-editor-section">
+              <div class="budget-editor-section-title">
+                <span>02</span>
+                <strong>{{ t('result.budget.editorAmountInfo') }}</strong>
+              </div>
+              <div class="budget-editor-grid budget-editor-grid--amount">
+                <a-form-item :label="t('result.budget.amountBasis')" required>
+                  <a-segmented
+                    v-model:value="budgetEditor.amountBasis"
+                    :options="budgetBasisOptions"
+                    block
+                  />
+                </a-form-item>
+                <a-form-item :label="budgetEditor.amountBasis === 'per_person'
+                  ? t('result.budget.perPersonAmount')
+                  : t('result.budget.groupTotalAmount')">
+                  <a-input-number
+                    v-model:value="budgetEditor.amount"
+                    :min="0"
+                    :max="100000000"
+                    :precision="2"
+                    :placeholder="t('result.budget.amountPending')"
+                    class="budget-amount-input"
+                  />
+                </a-form-item>
+              </div>
+            </section>
+
+            <section class="budget-editor-section">
+              <div class="budget-editor-section-title">
+                <span>03</span>
+                <strong>{{ t('result.budget.editorAdditionalInfo') }}</strong>
+              </div>
+              <a-form-item :label="t('result.budget.note')">
+                <a-textarea v-model:value="budgetEditor.note" :maxlength="300" :rows="2" />
+              </a-form-item>
+            </section>
+          </template>
+        </a-form>
+      </div>
+    </a-modal>
+    <a-modal
+      v-if="!props.readonly"
+      v-model:open="budgetConfirmationOpen"
+      :width="520"
+      :title="null"
+      :closable="!budgetSaving"
+      :keyboard="!budgetSaving"
+      :mask-closable="false"
+      :confirm-loading="budgetSaving"
+      :ok-text="budgetConfirmationOkText"
+      :cancel-text="t('common.cancel')"
+      :ok-button-props="{ danger: budgetConfirmationIsDelete }"
+      wrap-class-name="budget-confirm-modal-wrap"
+      @ok="executeBudgetConfirmation"
+      @cancel="cancelBudgetConfirmation"
+    >
+      <div v-if="budgetConfirmation" class="budget-confirmation">
+        <div class="budget-confirmation-heading">
+          <span
+            class="budget-confirmation-icon"
+            :class="{ 'is-delete': budgetConfirmationIsDelete }"
+            aria-hidden="true"
+          >
+            <DeleteOutlined v-if="budgetConfirmationIsDelete" />
+            <EditOutlined v-else-if="budgetConfirmation.action === 'update'" />
+            <PlusOutlined v-else />
+          </span>
+          <div>
+            <span class="budget-confirmation-eyebrow">
+              {{ t('result.budget.confirmationPending') }}
+            </span>
+            <h3>{{ budgetConfirmationTitle }}</h3>
+            <p>{{ budgetConfirmationDescription }}</p>
+          </div>
+        </div>
+
+        <div class="budget-confirmation-summary">
+          <div class="budget-confirmation-field budget-confirmation-field--wide">
+            <span>{{ t('result.budget.confirmationItem') }}</span>
+            <strong>{{ budgetConfirmationItemName }}</strong>
+          </div>
+          <div class="budget-confirmation-field">
+            <span>{{ t('result.budget.confirmationType') }}</span>
+            <strong>{{ budgetConfirmationTypeLabel }}</strong>
+          </div>
+          <div class="budget-confirmation-field">
+            <span>{{ t('result.budget.confirmationDay') }}</span>
+            <strong>{{ budgetConfirmationDayLabel }}</strong>
+          </div>
+          <div class="budget-confirmation-field">
+            <span>{{ t('result.budget.confirmationAmount') }}</span>
+            <strong>{{ budgetConfirmationAmountLabel }}</strong>
+          </div>
+          <div class="budget-confirmation-field">
+            <span>{{ budgetConfirmation.itemKind === 'attraction' && budgetConfirmation.action !== 'delete'
+              ? t('result.budget.confirmationSchedule')
+              : t('result.budget.calculation') }}</span>
+            <strong>{{ budgetConfirmationCalculationLabel }}</strong>
+          </div>
+          <div v-if="budgetConfirmationNote" class="budget-confirmation-field budget-confirmation-field--wide">
+            <span>{{ t('result.budget.note') }}</span>
+            <strong>{{ budgetConfirmationNote }}</strong>
+          </div>
+        </div>
+
+        <div class="budget-confirmation-impact" :class="{ 'is-delete': budgetConfirmationIsDelete }">
+          <ExclamationCircleOutlined aria-hidden="true" />
+          <span>{{ budgetConfirmationImpact }}</span>
+        </div>
+        <p class="budget-confirmation-footnote">
+          {{ t('result.budget.confirmationNotApplied') }}
+        </p>
+      </div>
     </a-modal>
   </div>
 </template>
@@ -559,12 +761,17 @@
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { message, Modal } from 'ant-design-vue'
+import { message } from 'ant-design-vue'
 import {
   CalendarOutlined,
   DeleteOutlined,
+  DownloadOutlined,
+  DownOutlined,
   EditOutlined,
   EnvironmentOutlined,
+  ExclamationCircleOutlined,
+  FileImageOutlined,
+  FilePdfOutlined,
   PlusOutlined,
   ShareAltOutlined,
   UndoOutlined,
@@ -630,6 +837,7 @@ import {
 } from '@/utils/tripPresentation.js'
 import { findTodayArrayIndex } from '@/utils/tripExecution'
 import { buildTripCalendar, countCalendarEvents } from '@/utils/tripCalendar'
+import { buildImagePdf } from '@/utils/imagePdf.js'
 
 const props = withDefaults(defineProps<{ planId?: string; readonly?: boolean }>(), {
   readonly: false,
@@ -648,6 +856,7 @@ const pendingDayScrollIndex = ref<number | null>(null)
 const failedTaskEvent = ref<TripTaskEvent | null>(null)
 const retryingFailedPlan = ref(false)
 const loadingPlan = ref(false)
+const exportingGuide = ref(false)
 let isAlive = true
 let planOperationToken = 0
 
@@ -928,6 +1137,25 @@ type AttractionEditorState = {
   reservationTips: string
 }
 
+type BudgetConfirmationState =
+  | {
+      action: 'create' | 'update'
+      itemKind: 'budget'
+      targetId: string
+      payload: BudgetItemInput
+    }
+  | {
+      action: 'create' | 'update'
+      itemKind: 'attraction'
+      targetId: string
+      payload: ItineraryAttractionInput
+    }
+  | {
+      action: 'delete'
+      itemKind: 'budget' | 'attraction'
+      item: BudgetDetailItem
+    }
+
 const budgetFilterType = ref<'all' | BudgetItemType>('all')
 const budgetSortMode = ref<BudgetSortMode>('amountDesc')
 const budgetDisplayBasis = ref<BudgetAmountBasis>('per_person')
@@ -935,9 +1163,16 @@ const budgetLedgerItems = ref<BudgetLedgerItem[]>([])
 const budgetPerPersonTotals = ref<Budget | null>(null)
 const budgetTravelerCount = ref(0)
 const budgetPendingCount = ref(0)
+const budgetLimit = ref<number | null>(null)
+const budgetOverAmount = ref(0)
+const budgetPendingBuffer = ref(0)
+const budgetProjectedOverAmount = ref(0)
+const budgetAdjustmentNote = ref('')
 const budgetLoading = ref(false)
 const budgetSaving = ref(false)
 const budgetEditorOpen = ref(false)
+const budgetConfirmationOpen = ref(false)
+const budgetConfirmation = ref<BudgetConfirmationState | null>(null)
 const budgetEditor = ref<BudgetEditorState>({
   id: '',
   type: 'other',
@@ -1119,6 +1354,11 @@ const applyTripPlanPayload = async (payload: {
   budgetPerPersonTotals.value = null
   budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
+  budgetLimit.value = null
+  budgetOverAmount.value = 0
+  budgetPendingBuffer.value = 0
+  budgetProjectedOverAmount.value = 0
+  budgetAdjustmentNote.value = ''
 
   if (payload.planId) {
     planId.value = payload.planId
@@ -1150,6 +1390,11 @@ const restoreTripPlanFromResponse = async (
   budgetPerPersonTotals.value = null
   budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
+  budgetLimit.value = null
+  budgetOverAmount.value = 0
+  budgetPendingBuffer.value = 0
+  budgetProjectedOverAmount.value = 0
+  budgetAdjustmentNote.value = ''
   const responsePlanId = String(response.plan_id || planId.value || '')
   if (responsePlanId) {
     planId.value = responsePlanId
@@ -1254,6 +1499,11 @@ const loadPlanById = async (targetPlanId: string) => {
   budgetPerPersonTotals.value = null
   budgetTravelerCount.value = 0
   budgetPendingCount.value = 0
+  budgetLimit.value = null
+  budgetOverAmount.value = 0
+  budgetPendingBuffer.value = 0
+  budgetProjectedOverAmount.value = 0
+  budgetAdjustmentNote.value = ''
   attractionPhotos.value = {}
   activeSection.value = 'overview'
   executionMap.value = {}
@@ -1525,6 +1775,11 @@ const applyBudgetLedgerResponse = (response: BudgetLedgerResponse) => {
   budgetPendingCount.value = response.pending_count
   budgetPerPersonTotals.value = response.per_person_totals
   budgetTravelerCount.value = response.traveler_count
+  budgetLimit.value = response.budget_limit
+  budgetOverAmount.value = response.over_budget_amount
+  budgetPendingBuffer.value = response.pending_buffer
+  budgetProjectedOverAmount.value = response.projected_over_budget_amount
+  budgetAdjustmentNote.value = response.adjustment_note || ''
   if (tripPlan.value) {
     tripPlan.value.budget = response.totals
     sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
@@ -1603,6 +1858,154 @@ const budgetEditorTitle = computed(() => {
       : 'result.budget.addAttraction')
   }
   return t(budgetEditor.value.id ? 'result.budget.editItem' : 'result.budget.addItem')
+})
+
+const budgetEditorIsEditing = computed(() =>
+  isAttractionEditorMode.value
+    ? Boolean(attractionEditor.value.itemId)
+    : Boolean(budgetEditor.value.id),
+)
+
+const budgetEditorWidth = computed(() => isAttractionEditorMode.value ? 680 : 600)
+
+const budgetEditorEyebrow = computed(() => t(isAttractionEditorMode.value
+  ? 'result.budget.editorAttractionEyebrow'
+  : 'result.budget.editorBudgetEyebrow'))
+
+const budgetConfirmationIsDelete = computed(() =>
+  budgetConfirmation.value?.action === 'delete',
+)
+
+const budgetConfirmationTitle = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.itemKind === 'attraction') {
+    if (pending.action === 'delete') return t('result.budget.deleteAttractionTitle')
+    return t(pending.action === 'create'
+      ? 'result.budget.confirmAddAttractionTitle'
+      : 'result.budget.confirmUpdateAttractionTitle')
+  }
+  if (pending.action === 'delete') return t('result.budget.confirmDeleteTitle')
+  return t(pending.action === 'create'
+    ? 'result.budget.confirmAddTitle'
+    : 'result.budget.confirmUpdateTitle')
+})
+
+const budgetConfirmationItemName = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  return pending.action === 'delete' ? pending.item.name : pending.payload.name
+})
+
+const budgetConfirmationDescription = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.action === 'delete') {
+    return pending.itemKind === 'attraction'
+      ? t('result.budget.deleteAttractionContent', { name: pending.item.name })
+      : t('result.budget.confirmDeleteDescription', { name: pending.item.name })
+  }
+  return t(pending.action === 'create'
+    ? 'result.budget.confirmAddDescription'
+    : 'result.budget.confirmUpdateDescription', {
+    name: pending.payload.name,
+  })
+})
+
+const budgetConfirmationOkText = computed(() => {
+  const action = budgetConfirmation.value?.action
+  if (action === 'delete') return t('result.budget.confirmDeleteButton')
+  if (action === 'update') return t('result.budget.confirmUpdateButton')
+  return t('result.budget.confirmAddButton')
+})
+
+const budgetConfirmationTypeLabel = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  const type = pending.itemKind === 'attraction'
+    ? 'attraction'
+    : pending.action === 'delete'
+      ? pending.item.type
+      : pending.payload.type
+  return getBudgetTypeLabel(type)
+})
+
+const formatConfirmationDay = (dayIndex: number | null): string => {
+  if (dayIndex === null || dayIndex < 0) return t('result.budget.wholeTrip')
+  return t('common.dayNumber', { day: dayIndex + 1 })
+}
+
+const budgetConfirmationDayLabel = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.action === 'delete') return formatBudgetDayRange(pending.item)
+  return formatConfirmationDay(pending.payload.day_index)
+})
+
+const budgetConfirmationAmountLabel = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.itemKind === 'attraction') {
+    const amount = pending.action === 'delete'
+      ? pending.item.per_person_amount
+      : pending.payload.ticket_price
+    return amount === null
+      ? t('result.budget.amountPending')
+      : t('result.budget.perPersonValue', { amount: formatBudgetAmount(amount) })
+  }
+  if (pending.action === 'delete') {
+    const amount = pending.item.amount_basis === 'per_person'
+      ? pending.item.per_person_amount
+      : pending.item.amount
+    if (amount === null) return t('result.budget.amountPending')
+    return t(pending.item.amount_basis === 'per_person'
+      ? 'result.budget.perPersonValue'
+      : 'result.budget.groupValue', {
+      amount: formatBudgetAmount(amount),
+    })
+  }
+  if (pending.payload.amount === null) return t('result.budget.amountPending')
+  return t(pending.payload.amount_basis === 'per_person'
+    ? 'result.budget.perPersonValue'
+    : 'result.budget.groupValue', {
+    amount: formatBudgetAmount(pending.payload.amount),
+  })
+})
+
+const budgetConfirmationCalculationLabel = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.itemKind === 'attraction' && pending.action !== 'delete') {
+    return t('result.budget.confirmationScheduleValue', {
+      time: pending.payload.start_time,
+      duration: pending.payload.visit_duration,
+    })
+  }
+  if (pending.action === 'delete') return formatBudgetCalculation(pending.item)
+  return t(pending.payload.amount_basis === 'per_person'
+    ? 'result.budget.enteredPerPerson'
+    : 'result.budget.enteredGroupTotal')
+})
+
+const budgetConfirmationNote = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.action === 'delete') return pending.item.note || ''
+  if (pending.itemKind === 'attraction') return pending.payload.description || ''
+  return pending.payload.note || ''
+})
+
+const budgetConfirmationImpact = computed(() => {
+  const pending = budgetConfirmation.value
+  if (!pending) return ''
+  if (pending.itemKind === 'attraction') {
+    return t(pending.action === 'delete'
+      ? 'result.budget.confirmationAttractionDeleteImpact'
+      : 'result.budget.confirmationAttractionSyncImpact')
+  }
+  return t(pending.action === 'delete'
+    ? 'result.budget.confirmationBudgetDeleteImpact'
+    : 'result.budget.confirmationBudgetTotalImpact')
 })
 
 const findPlanAttraction = (attractionId: string): { attraction: Attraction; dayIndex: number } | null => {
@@ -1727,11 +2130,10 @@ const applyItineraryMutationResponse = async (response: ItineraryMutationRespons
   await loadAttractionPhotos()
 }
 
-const saveItineraryAttraction = async () => {
-  const targetPlanId = planId.value
+const requestAttractionSaveConfirmation = () => {
   const editor = attractionEditor.value
   const startTime = normalizeReferenceTime(editor.startTime)
-  if (!targetPlanId || !editor.poi || editor.dayIndex < 0 || !startTime) {
+  if (!planId.value || !editor.poi || editor.dayIndex < 0 || !startTime) {
     message.warning(t('result.messages.attractionFieldsRequired'))
     return
   }
@@ -1749,7 +2151,7 @@ const saveItineraryAttraction = async () => {
     poi_id: editor.poi.id,
     name: editor.poi.name,
     address: editor.poi.address,
-    location: editor.poi.location,
+    location: { ...editor.poi.location },
     visit_duration: Math.round(editor.visitDuration),
     description: editor.description.trim(),
     ticket_price: Math.round(editor.ticketPrice),
@@ -1758,31 +2160,22 @@ const saveItineraryAttraction = async () => {
     reservation_tips: editor.reservationTips.trim(),
   }
 
-  budgetSaving.value = true
-  try {
-    const response = editor.itemId
-      ? await updateItineraryAttraction(targetPlanId, editor.itemId, payload)
-      : await createItineraryAttraction(targetPlanId, payload)
-    await applyItineraryMutationResponse(response)
-    budgetEditorOpen.value = false
-    message.success(t(editor.itemId
-      ? 'result.messages.attractionUpdated'
-      : 'result.messages.attractionAdded'))
-  } catch {
-    message.error(t('result.messages.attractionSaveFailed'))
-  } finally {
-    budgetSaving.value = false
+  budgetConfirmation.value = {
+    action: editor.itemId ? 'update' : 'create',
+    itemKind: 'attraction',
+    targetId: editor.itemId,
+    payload,
   }
+  budgetConfirmationOpen.value = true
 }
 
-const saveBudgetEditor = async () => {
+const requestBudgetSaveConfirmation = () => {
   if (isAttractionEditorMode.value) {
-    await saveItineraryAttraction()
+    requestAttractionSaveConfirmation()
     return
   }
-  const targetPlanId = planId.value
   const name = budgetEditor.value.name.trim()
-  if (!targetPlanId || !name) {
+  if (!planId.value || !name) {
     message.warning(t('result.messages.budgetNameRequired'))
     return
   }
@@ -1800,65 +2193,77 @@ const saveBudgetEditor = async () => {
     note: budgetEditor.value.note.trim(),
   }
 
+  budgetConfirmation.value = {
+    action: budgetEditor.value.id ? 'update' : 'create',
+    itemKind: 'budget',
+    targetId: budgetEditor.value.id,
+    payload,
+  }
+  budgetConfirmationOpen.value = true
+}
+
+const cancelBudgetConfirmation = () => {
+  if (budgetSaving.value) return
+  budgetConfirmationOpen.value = false
+  budgetConfirmation.value = null
+}
+
+const executeBudgetConfirmation = async () => {
+  const pending = budgetConfirmation.value
+  const targetPlanId = planId.value
+  if (!pending || !targetPlanId || budgetSaving.value) return
+
   budgetSaving.value = true
   try {
-    const response = budgetEditor.value.id
-      ? await updateBudgetItem(targetPlanId, budgetEditor.value.id, payload)
-      : await createBudgetItem(targetPlanId, payload)
-    applyBudgetLedgerResponse(response)
-    budgetEditorOpen.value = false
-    message.success(
-      t(budgetEditor.value.id
+    if (pending.itemKind === 'attraction') {
+      if (pending.action === 'delete') {
+        if (!pending.item.linked_item_id) return
+        const response = await deleteItineraryAttraction(targetPlanId, pending.item.linked_item_id)
+        await applyItineraryMutationResponse(response)
+        message.success(t('result.messages.attractionDeletedEverywhere'))
+      } else {
+        const response = pending.targetId
+          ? await updateItineraryAttraction(targetPlanId, pending.targetId, pending.payload)
+          : await createItineraryAttraction(targetPlanId, pending.payload)
+        await applyItineraryMutationResponse(response)
+        budgetEditorOpen.value = false
+        message.success(t(pending.action === 'update'
+          ? 'result.messages.attractionUpdated'
+          : 'result.messages.attractionAdded'))
+      }
+    } else if (pending.action === 'delete') {
+      applyBudgetLedgerResponse(await deleteBudgetLedgerItem(targetPlanId, pending.item.id))
+      message.success(t('result.messages.budgetItemDeleted'))
+    } else {
+      const response = pending.targetId
+        ? await updateBudgetItem(targetPlanId, pending.targetId, pending.payload)
+        : await createBudgetItem(targetPlanId, pending.payload)
+      applyBudgetLedgerResponse(response)
+      budgetEditorOpen.value = false
+      message.success(t(pending.action === 'update'
         ? 'result.messages.budgetItemUpdated'
-        : 'result.messages.budgetItemAdded'),
-    )
-  } catch {
-    message.error(t('result.messages.budgetSaveFailed'))
-  } finally {
-    budgetSaving.value = false
-  }
-}
+        : 'result.messages.budgetItemAdded'))
+    }
 
-const removeBudgetOnlyItem = async (item: BudgetDetailItem) => {
-  if (!planId.value || budgetSaving.value) return
-  budgetSaving.value = true
-  try {
-    applyBudgetLedgerResponse(await deleteBudgetLedgerItem(planId.value, item.id))
-    message.success(t('result.messages.budgetItemDeleted'))
+    budgetConfirmationOpen.value = false
+    budgetConfirmation.value = null
   } catch {
-    message.error(t('result.messages.budgetSaveFailed'))
-  } finally {
-    budgetSaving.value = false
-  }
-}
-
-const removeItineraryAttraction = async (item: BudgetDetailItem) => {
-  if (!planId.value || !item.linked_item_id || budgetSaving.value) return
-  budgetSaving.value = true
-  try {
-    const response = await deleteItineraryAttraction(planId.value, item.linked_item_id)
-    await applyItineraryMutationResponse(response)
-    message.success(t('result.messages.attractionDeletedEverywhere'))
-  } catch {
-    message.error(t('result.messages.attractionSaveFailed'))
+    message.error(t(pending.itemKind === 'attraction'
+      ? 'result.messages.attractionSaveFailed'
+      : 'result.messages.budgetSaveFailed'))
   } finally {
     budgetSaving.value = false
   }
 }
 
 const removeBudgetItem = (item: BudgetDetailItem) => {
-  if (item.type === 'attraction' && item.linked_item_id) {
-    Modal.confirm({
-      title: t('result.budget.deleteAttractionTitle'),
-      content: t('result.budget.deleteAttractionContent', { name: item.name }),
-      okText: t('common.delete'),
-      cancelText: t('common.cancel'),
-      okType: 'danger',
-      onOk: () => removeItineraryAttraction(item),
-    })
-    return
+  if (budgetSaving.value) return
+  budgetConfirmation.value = {
+    action: 'delete',
+    itemKind: item.type === 'attraction' && item.linked_item_id ? 'attraction' : 'budget',
+    item: { ...item },
   }
-  void removeBudgetOnlyItem(item)
+  budgetConfirmationOpen.value = true
 }
 
 const restoreBudgetItem = async (item: BudgetLedgerItem) => {
@@ -1955,7 +2360,7 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
         `<span style="font-size:12px;color:#A66A47;background:#F5EDE4;padding:3px 10px;border-radius:20px;">${durationText}</span>` +
         (a.ticket_price ? `<span style="font-size:12px;color:#A66A47;background:#F5EDE4;padding:3px 10px;border-radius:20px;">¥${a.ticket_price}</span>` : '')
       attractionsHTML += `
-        <div style="flex:0 0 48%;box-sizing:border-box;background:#FFFFFF;border:1px solid #EBE3D8;border-radius:14px;padding:14px;">
+        <div data-export-attraction-card="true" style="flex:0 0 48%;box-sizing:border-box;background:#FFFFFF;border:1px solid #EBE3D8;border-radius:14px;padding:14px;">
           ${imgTag}
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
             <span style="flex:none;width:22px;height:22px;border-radius:50%;background:#C17F59;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">${ai + 1}</span>
@@ -1976,7 +2381,7 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
         mealPills += `<span style="background:#F5EDE4;color:#5C4B3E;font-size:12px;padding:6px 12px;border-radius:8px;"><b style="color:#A66A47;">${escapeHtml(mealTime)} · ${escapeHtml(mealLabels[m.type] || m.type)}</b> ${escapeHtml(m.name || t('result.export.noMealRecommendation'))}${m.estimated_cost ? ` · ¥${m.estimated_cost}` : ''}</span>`
       })
       mealsHTML = `
-        <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #EBE3D8;">
+        <div data-export-meals="true" style="margin-top:14px;padding-top:12px;border-top:1px dashed #EBE3D8;">
           <div style="font-size:13px;font-weight:600;color:#A66A47;margin-bottom:8px;">${t('result.export.mealTitle')}</div>
           <div style="display:flex;flex-wrap:wrap;gap:8px;">${mealPills}</div>
         </div>`
@@ -1984,17 +2389,17 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
 
     const transferTime = normalizeReferenceTime(day.transfer_time) || t('result.daily.timePending')
     const transferHTML = day.is_transfer_day && day.transfer_info
-      ? `<div style="margin-bottom:14px;padding:10px 12px;border-left:3px solid #D97757;background:#F5F0E8;font-size:13px;color:#6B5D52;line-height:1.6;"><b style="color:#3D3229;">${escapeHtml(transferTime)} · ${escapeHtml(t('result.daily.transfer'))}</b> ${escapeHtml(day.transfer_info)}</div>`
+      ? `<div data-export-transfer="true" style="margin-bottom:14px;padding:10px 12px;border-left:3px solid #D97757;background:#F5F0E8;font-size:13px;color:#6B5D52;line-height:1.6;"><b style="color:#3D3229;">${escapeHtml(transferTime)} · ${escapeHtml(t('result.daily.transfer'))}</b> ${escapeHtml(day.transfer_info)}</div>`
       : ''
 
     daysHTML += `
-      <div style="margin-bottom:26px;">
-        <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #EBE3D8;">
+      <div data-export-day="true" style="margin-bottom:26px;">
+        <div data-export-day-heading="true" style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #EBE3D8;">
           <span style="font-size:20px;font-weight:700;color:#C17F59;">${t('result.export.dayTitle', { day: index + 1 })}</span>
           ${day.date ? `<span style="font-size:13px;color:#8B7D6B;">${day.date}</span>` : ''}
         </div>
         ${transferHTML}
-        <div style="display:flex;flex-wrap:wrap;gap:14px;">
+        <div data-export-attractions="true" style="display:flex;flex-wrap:wrap;gap:14px;">
           ${attractionsHTML}
         </div>
         ${mealsHTML}
@@ -2095,7 +2500,7 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
   // 底部二维码 — 当前页面地址
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(window.location.href)}`
   const footerHTML = `
-    <div style="text-align:center;padding:28px 16px 8px;margin-top:4px;border-top:1px solid #EBE3D8;">
+    <div data-export-final-footer="true" style="text-align:center;padding:28px 16px 8px;margin-top:4px;border-top:1px solid #EBE3D8;">
       <img src="${qrUrl}" style="width:92px;height:92px;background:#fff;border:1px solid #EBE3D8;border-radius:10px;padding:6px;box-sizing:border-box;" crossorigin="anonymous" />
       <div style="font-size:14px;color:#C17F59;font-weight:700;letter-spacing:2px;margin-top:12px;">游伴</div>
       <div style="font-size:11px;color:#B8A99A;margin-top:6px;">${t('result.export.footer')}</div>
@@ -2123,54 +2528,363 @@ const buildExportHTML = (mapDataUrl: string = ''): string => {
     </div>`
 }
 
-// 导出为图片
+const PDF_PAGE_WIDTH_PX = 794
+const PDF_PAGE_HEIGHT_PX = 1123
+const PDF_PAGE_PADDING_X_PX = 30
+const PDF_PAGE_PADDING_TOP_PX = 36
+const PDF_PAGE_PADDING_BOTTOM_PX = 56
+const PDF_MIN_GROUP_SCALE = 0.8
+const PDF_MIN_QR_PAGE_SCALE = 0.76
+const PDF_FIT_SAFETY_PX = 8
+const PDF_ATTRACTION_IMAGE_MAX_HEIGHT_PX = 170
+const PDF_CONTENT_HEIGHT_PX = PDF_PAGE_HEIGHT_PX
+  - PDF_PAGE_PADDING_TOP_PX
+  - PDF_PAGE_PADDING_BOTTOM_PX
+
+const waitForExportImages = async (root: ParentNode) => {
+  const images = root.querySelectorAll('img')
+  await Promise.all(
+    Array.from(images).map((img) => (
+      img.complete
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            img.onload = () => resolve()
+            img.onerror = () => resolve()
+          })
+    )),
+  )
+}
+
+const createOffscreenExportMount = () => {
+  const mount = document.createElement('div')
+  mount.style.position = 'fixed'
+  mount.style.left = '-10000px'
+  mount.style.top = '0'
+  mount.style.zIndex = '-1'
+  mount.style.pointerEvents = 'none'
+  document.body.appendChild(mount)
+  return mount
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.download = filename
+  link.href = url
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  window.setTimeout(() => {
+    link.remove()
+    URL.revokeObjectURL(url)
+  }, 1000)
+}
+
+interface PdfPageElement {
+  page: HTMLDivElement
+  content: HTMLDivElement
+  flow: HTMLDivElement
+  footer: HTMLDivElement
+}
+
+const createPdfPageElement = (mount: HTMLElement): PdfPageElement => {
+  const page = document.createElement('div')
+  page.style.cssText = [
+    `width:${PDF_PAGE_WIDTH_PX}px`,
+    `height:${PDF_PAGE_HEIGHT_PX}px`,
+    'box-sizing:border-box',
+    `padding:${PDF_PAGE_PADDING_TOP_PX}px ${PDF_PAGE_PADDING_X_PX}px ${PDF_PAGE_PADDING_BOTTOM_PX}px`,
+    'position:relative',
+    'overflow:hidden',
+    'background:#FAF7F2',
+    "font-family:'PingFang SC','Microsoft YaHei','Segoe UI',sans-serif",
+    'color:#3D3229',
+  ].join(';')
+
+  const content = document.createElement('div')
+  content.style.cssText = `height:${PDF_CONTENT_HEIGHT_PX}px;overflow:hidden;box-sizing:border-box;`
+  page.appendChild(content)
+
+  const flow = document.createElement('div')
+  flow.style.cssText = 'width:100%;transform-origin:top left;'
+  content.appendChild(flow)
+
+  const footer = document.createElement('div')
+  footer.style.cssText = [
+    'position:absolute',
+    'left:30px',
+    'right:30px',
+    'bottom:18px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:space-between',
+    'border-top:1px solid #EBE3D8',
+    'padding-top:8px',
+    'font-size:10px',
+    'color:#9B8C7D',
+  ].join(';')
+  page.appendChild(footer)
+  mount.appendChild(page)
+  return { page, content, flow, footer }
+}
+
+const fitPdfPageFlow = ({ flow }: PdfPageElement) => {
+  flow.style.transform = 'none'
+  flow.style.width = '100%'
+  const naturalHeight = Math.max(flow.scrollHeight, flow.getBoundingClientRect().height)
+  const scale = naturalHeight > 0
+    ? Math.min(1, (PDF_CONTENT_HEIGHT_PX - PDF_FIT_SAFETY_PX) / naturalHeight)
+    : 1
+  if (scale < 1) {
+    flow.style.transform = `scale(${scale})`
+    flow.style.width = `${100 / scale}%`
+  }
+  return scale
+}
+
+interface PdfFlowBlock {
+  element: HTMLElement
+  continuationHeading?: HTMLElement
+  isFinalQrBlock?: boolean
+}
+
+const createPdfContinuationHeading = (heading: HTMLElement) => {
+  const continuation = heading.cloneNode(true) as HTMLElement
+  continuation.style.marginBottom = '12px'
+  const marker = document.createElement('span')
+  marker.textContent = t('result.export.continued')
+  marker.style.cssText = [
+    'margin-left:auto',
+    'font-size:11px',
+    'font-weight:600',
+    'color:#8B7D6B',
+  ].join(';')
+  continuation.appendChild(marker)
+  return continuation
+}
+
+const buildPdfFlowBlocks = (sourceRoot: HTMLElement): PdfFlowBlock[] => {
+  const blocks: PdfFlowBlock[] = []
+
+  Array.from(sourceRoot.children).forEach((sourceBlock) => {
+    if (sourceBlock.getAttribute('data-export-day') !== 'true') {
+      blocks.push({
+        element: sourceBlock.cloneNode(true) as HTMLElement,
+        isFinalQrBlock: sourceBlock.getAttribute('data-export-final-footer') === 'true',
+      })
+      return
+    }
+
+    const heading = sourceBlock.querySelector<HTMLElement>('[data-export-day-heading="true"]')
+    const transfer = sourceBlock.querySelector<HTMLElement>('[data-export-transfer="true"]')
+    const attractions = sourceBlock.querySelector<HTMLElement>('[data-export-attractions="true"]')
+    const attractionCards = attractions
+      ? Array.from(attractions.querySelectorAll<HTMLElement>('[data-export-attraction-card="true"]'))
+      : []
+    const meals = sourceBlock.querySelector<HTMLElement>('[data-export-meals="true"]')
+
+    if (!heading) {
+      blocks.push({ element: sourceBlock.cloneNode(true) as HTMLElement })
+      return
+    }
+
+    const rowCount = Math.max(1, Math.ceil(attractionCards.length / 2))
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const fragment = document.createElement('div')
+      fragment.setAttribute('data-export-day-fragment', 'true')
+      fragment.style.marginBottom = '18px'
+
+      if (rowIndex === 0) {
+        fragment.appendChild(heading.cloneNode(true))
+        if (transfer) fragment.appendChild(transfer.cloneNode(true))
+      }
+
+      if (attractions && attractionCards.length > 0) {
+        const attractionRow = attractions.cloneNode(false) as HTMLElement
+        attractionCards
+          .slice(rowIndex * 2, rowIndex * 2 + 2)
+          .forEach((card) => attractionRow.appendChild(card.cloneNode(true)))
+        fragment.appendChild(attractionRow)
+      }
+
+      blocks.push({
+        element: fragment,
+        continuationHeading: rowIndex > 0
+          ? createPdfContinuationHeading(heading)
+          : undefined,
+      })
+    }
+
+    if (meals) {
+      const mealFragment = document.createElement('div')
+      mealFragment.setAttribute('data-export-day-fragment', 'true')
+      mealFragment.style.marginBottom = '18px'
+      mealFragment.appendChild(meals.cloneNode(true))
+      blocks.push({
+        element: mealFragment,
+        continuationHeading: createPdfContinuationHeading(heading),
+      })
+    }
+  })
+  return blocks
+}
+
+const paginateExportContent = async (sourceRoot: HTMLElement, mount: HTMLElement) => {
+  const pages: PdfPageElement[] = []
+  let currentPage = createPdfPageElement(mount)
+  pages.push(currentPage)
+
+  buildPdfFlowBlocks(sourceRoot).forEach(({ element, continuationHeading, isFinalQrBlock }) => {
+    const block = element
+    currentPage.flow.style.transform = 'none'
+    currentPage.flow.style.width = '100%'
+    currentPage.flow.appendChild(block)
+
+    const candidateHeight = Math.max(
+      currentPage.flow.scrollHeight,
+      currentPage.flow.getBoundingClientRect().height,
+    )
+    const candidateScale = candidateHeight > 0
+      ? Math.min(1, (PDF_CONTENT_HEIGHT_PX - PDF_FIT_SAFETY_PX) / candidateHeight)
+      : 1
+    const minimumScale = isFinalQrBlock ? PDF_MIN_QR_PAGE_SCALE : PDF_MIN_GROUP_SCALE
+
+    if (candidateScale < minimumScale && currentPage.flow.childElementCount > 1) {
+      currentPage.flow.removeChild(block)
+      fitPdfPageFlow(currentPage)
+      currentPage = createPdfPageElement(mount)
+      pages.push(currentPage)
+      if (continuationHeading) {
+        currentPage.flow.appendChild(continuationHeading)
+      }
+      currentPage.flow.appendChild(block)
+    }
+    fitPdfPageFlow(currentPage)
+  })
+
+  pages.forEach(({ footer }, index) => {
+    footer.innerHTML = `
+      <span>${escapeHtml(t('result.export.pdfFooter'))}</span>
+      <span>${escapeHtml(t('result.export.pageNumber', { current: index + 1, total: pages.length }))}</span>
+    `
+  })
+  await waitForExportImages(mount)
+  return pages.map(({ page }) => page)
+}
+
+const canvasToJpegBytes = (canvas: HTMLCanvasElement) => new Promise<Uint8Array>((resolve, reject) => {
+  canvas.toBlob(async (blob) => {
+    if (!blob) {
+      reject(new Error(t('result.messages.pdfRenderFailed')))
+      return
+    }
+    resolve(new Uint8Array(await blob.arrayBuffer()))
+  }, 'image/jpeg', 0.9)
+})
+
 const exportAsImage = async () => {
+  if (exportingGuide.value) return
+  exportingGuide.value = true
+  let exportContainer: HTMLDivElement | null = null
   try {
     message.loading({ content: t('result.messages.generatingImage'), key: 'export', duration: 0 })
-
-    // 1. 先捕获地图截图
     const mapDataUrl = await tripMapRef.value?.captureScreenshot() || ''
-
-    // 2. 构建包含地图的完整导出 HTML
-    const exportContainer = document.createElement('div')
+    exportContainer = createOffscreenExportMount()
     exportContainer.innerHTML = buildExportHTML(mapDataUrl)
-    exportContainer.style.position = 'absolute'
-    exportContainer.style.left = '-9999px'
-    document.body.appendChild(exportContainer)
-
-    // 3. 等待二维码等外部图片加载完成
-    const images = exportContainer.querySelectorAll('img')
-    await Promise.all(
-      Array.from(images).map(img =>
-        img.complete
-          ? Promise.resolve()
-          : new Promise(resolve => {
-              img.onload = resolve
-              img.onerror = resolve
-            })
-      )
-    )
+    await waitForExportImages(exportContainer)
 
     const canvas = await html2canvas(exportContainer, {
       backgroundColor: '#FAF7F2',
       scale: 2,
       logging: false,
       useCORS: true,
-      allowTaint: true
+      allowTaint: true,
     })
-
-    document.body.removeChild(exportContainer)
-
     const link = document.createElement('a')
     link.download = `${t('result.export.filePrefix')}_${tripPlan.value?.city}_${new Date().getTime()}.png`
     link.href = canvas.toDataURL('image/png')
     link.click()
-
     message.success({ content: t('result.messages.imageSuccess'), key: 'export' })
   } catch (error: any) {
     console.error('导出图片失败:', error)
     message.error({ content: t('result.messages.imageFailed', { error: error.message }), key: 'export' })
+  } finally {
+    exportContainer?.remove()
+    exportingGuide.value = false
   }
+}
+
+const exportAsPdf = async () => {
+  if (exportingGuide.value) return
+  exportingGuide.value = true
+  let sourceMount: HTMLDivElement | null = null
+  let pageMount: HTMLDivElement | null = null
+  try {
+    message.loading({ content: t('result.messages.generatingPdf'), key: 'export', duration: 0 })
+    const mapDataUrl = await tripMapRef.value?.captureScreenshot() || ''
+
+    sourceMount = createOffscreenExportMount()
+    sourceMount.innerHTML = buildExportHTML(mapDataUrl)
+    const sourceRoot = sourceMount.firstElementChild
+    if (!(sourceRoot instanceof HTMLElement)) {
+      throw new Error(t('result.messages.pdfRenderFailed'))
+    }
+    sourceRoot.style.width = `${PDF_PAGE_WIDTH_PX - PDF_PAGE_PADDING_X_PX * 2}px`
+    sourceRoot.style.padding = '0'
+    sourceRoot.style.background = 'transparent'
+    sourceRoot.querySelectorAll<HTMLElement>('[data-export-day="true"]').forEach((day) => {
+      day.style.marginBottom = '18px'
+      day.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
+        image.style.maxHeight = `${PDF_ATTRACTION_IMAGE_MAX_HEIGHT_PX}px`
+      })
+    })
+    await waitForExportImages(sourceRoot)
+
+    pageMount = createOffscreenExportMount()
+    pageMount.style.width = `${PDF_PAGE_WIDTH_PX}px`
+    const pages = await paginateExportContent(sourceRoot, pageMount)
+    const renderedPages = []
+    for (const page of pages) {
+      const canvas = await html2canvas(page, {
+        backgroundColor: '#FAF7F2',
+        scale: 1.5,
+        logging: false,
+        useCORS: true,
+        allowTaint: false,
+      })
+      renderedPages.push({
+        jpegBytes: await canvasToJpegBytes(canvas),
+        width: canvas.width,
+        height: canvas.height,
+      })
+    }
+
+    const pdfBytes = buildImagePdf(renderedPages)
+    const pdfBuffer = pdfBytes.buffer.slice(
+      pdfBytes.byteOffset,
+      pdfBytes.byteOffset + pdfBytes.byteLength,
+    ) as ArrayBuffer
+    downloadBlob(
+      new Blob([pdfBuffer], { type: 'application/pdf' }),
+      `${t('result.export.filePrefix')}_${tripPlan.value?.city}_${new Date().getTime()}.pdf`,
+    )
+    message.success({ content: t('result.messages.pdfSuccess'), key: 'export' })
+  } catch (error: any) {
+    console.error('导出 PDF 失败:', error)
+    message.error({ content: t('result.messages.pdfFailed', { error: error.message }), key: 'export' })
+  } finally {
+    sourceMount?.remove()
+    pageMount?.remove()
+    exportingGuide.value = false
+  }
+}
+
+const handleExportMenuClick = ({ key }: { key: string | number }) => {
+  if (key === 'pdf') {
+    void exportAsPdf()
+    return
+  }
+  void exportAsImage()
 }
 // 导出为日历订阅文件（.ics）
 const exportAsCalendar = () => {
@@ -2337,6 +3051,56 @@ const escapeHtml = (value: unknown): string => {
 
 .action-icon {
   flex-shrink: 0;
+}
+
+.action-chevron {
+  flex-shrink: 0;
+  margin-left: 2px;
+  font-size: 10px;
+  opacity: 0.65;
+}
+
+.guide-export-menu {
+  width: min(300px, calc(100vw - 24px));
+  padding: 6px !important;
+}
+
+.guide-export-menu :deep(.ant-dropdown-menu-item) {
+  padding: 10px 12px !important;
+  border-radius: 6px;
+}
+
+.guide-export-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: #C4603D;
+}
+
+.guide-export-option > svg {
+  margin-top: 3px;
+  font-size: 18px;
+}
+
+.guide-export-option span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.guide-export-option strong {
+  color: #3D3229;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.guide-export-option small {
+  color: #8B7D6B;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
 }
 
 .top-switch-actions :deep(.ant-btn-default) {
@@ -2929,6 +3693,8 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-detail-panel {
+  container-name: budget-detail;
+  container-type: inline-size;
   min-height: 100%;
   border-radius: 14px;
   border: 1px solid rgba(61, 50, 41, 0.1);
@@ -2984,13 +3750,17 @@ const escapeHtml = (value: unknown): string => {
   max-width: 100%;
   border: 1px solid rgba(61, 50, 41, 0.1);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
   background: rgba(255, 255, 255, 0.4);
 }
 
 .budget-detail-row {
   display: grid;
-  grid-template-columns: 92px 82px minmax(160px, 1fr) minmax(180px, 0.9fr) 118px 64px;
+  grid-template-columns: 82px 76px minmax(180px, 1.35fr) minmax(170px, 1fr) 128px 72px;
+  min-width: 800px;
   align-items: center;
   gap: 10px;
   padding: 11px 12px;
@@ -3003,7 +3773,8 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-detail-row--readonly {
-  grid-template-columns: 92px 82px minmax(160px, 1fr) minmax(180px, 0.9fr) 118px;
+  grid-template-columns: 82px 76px minmax(220px, 1.3fr) minmax(200px, 1fr) 128px;
+  min-width: 760px;
 }
 
 .budget-detail-header {
@@ -3029,7 +3800,7 @@ const escapeHtml = (value: unknown): string => {
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .budget-detail-name-main {
@@ -3042,19 +3813,17 @@ const escapeHtml = (value: unknown): string => {
 
 .budget-detail-name-main > span:first-child {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .budget-detail-source {
   max-width: 100%;
-  overflow: hidden;
   color: rgba(61, 50, 41, 0.56);
   font-size: 11px;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .budget-detail-calculation {
@@ -3088,11 +3857,32 @@ const escapeHtml = (value: unknown): string => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  align-self: stretch;
+  justify-content: flex-end;
+  margin: -11px -12px -11px 0;
+  padding: 11px 12px 11px 8px;
+  background: #fff;
+}
+
+.budget-detail-action-heading {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin: -11px -12px -11px 0;
+  padding: 11px 12px 11px 8px;
+  background: #f7f5f2;
 }
 
 .budget-icon-btn {
-  width: 22px;
-  height: 22px;
+  min-width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
   padding: 0;
@@ -3105,23 +3895,60 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .budget-icon-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
 }
 
-.budget-edit-btn {
-  color: rgba(61, 50, 41, 0.55);
-}
-
+.budget-edit-btn,
 .budget-delete-btn {
-  color: rgba(61, 50, 41, 0.55);
+  width: 28px;
+  border: none;
+  background: transparent;
+  color: rgba(61, 50, 41, 0.5);
+  padding: 0;
 }
 
 .budget-edit-btn:hover,
 .budget-delete-btn:hover {
-  color: #D97757;
-  transform: scale(1.1);
-  /* background: rgba(217, 119, 87, 0.12); */
+  color: rgba(61, 50, 41, 0.76);
+  background: rgba(61, 50, 41, 0.06);
+}
+
+.budget-icon-btn:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.budget-status-alert,
+.budget-adjustment-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 12px;
+  border: 1px solid rgba(181, 126, 27, 0.26);
+  border-radius: 6px;
+  background: rgba(255, 247, 224, 0.78);
+  color: #765814;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.budget-status-alert > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.budget-status-alert--danger {
+  border-color: rgba(182, 61, 61, 0.28);
+  background: rgba(255, 239, 239, 0.82);
+  color: #9b3030;
+}
+
+.budget-adjustment-note {
+  border-color: rgba(45, 113, 89, 0.22);
+  background: rgba(45, 113, 89, 0.07);
+  color: #2d7159;
 }
 
 .right-budget-summary {
@@ -3140,13 +3967,54 @@ const escapeHtml = (value: unknown): string => {
     width: 100%;
   }
 
-  .budget-detail-list {
-    overflow-x: auto;
-    overflow-y: hidden;
+}
+
+@container budget-detail (max-width: 820px) {
+  .budget-detail-row {
+    grid-template-columns: 64px 64px minmax(0, 1fr) 112px 72px;
+    grid-template-areas:
+      'type day name amount actions'
+      'type day calculation amount actions';
+    min-width: 0;
+    row-gap: 4px;
   }
 
-  .budget-detail-row {
-    min-width: 860px;
+  .budget-detail-row--readonly {
+    grid-template-columns: 64px 64px minmax(0, 1fr) 112px;
+    grid-template-areas:
+      'type day name amount'
+      'type day calculation amount';
+  }
+
+  .budget-detail-header > span:nth-child(1),
+  .budget-detail-type {
+    grid-area: type;
+  }
+
+  .budget-detail-header > span:nth-child(2),
+  .budget-detail-day {
+    grid-area: day;
+  }
+
+  .budget-detail-header > span:nth-child(3),
+  .budget-detail-name {
+    grid-area: name;
+  }
+
+  .budget-detail-header > span:nth-child(4),
+  .budget-detail-calculation {
+    grid-area: calculation;
+  }
+
+  .budget-detail-header > span:nth-child(5),
+  .budget-detail-amount {
+    grid-area: amount;
+  }
+
+  .budget-detail-header > span:nth-child(6),
+  .budget-action-wrap,
+  .budget-detail-action-heading {
+    grid-area: actions;
   }
 }
 
@@ -3244,11 +4112,420 @@ const escapeHtml = (value: unknown): string => {
   font-size: 12px;
 }
 
+:global(.budget-editor-modal-wrap .ant-modal-content) {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(61, 50, 41, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(48, 39, 32, 0.18);
+}
+
+:global(.budget-editor-modal-wrap .ant-modal) {
+  top: 48px;
+  padding-bottom: 24px;
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-body) {
+  padding: 26px 28px 18px;
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-close) {
+  top: 18px;
+  inset-inline-end: 18px;
+  color: rgba(61, 50, 41, 0.62);
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-footer) {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 28px;
+  border-top: 1px solid rgba(61, 50, 41, 0.09);
+  background: #faf9f7;
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-footer .ant-btn) {
+  min-width: 96px;
+  height: 36px;
+  margin-inline-start: 0;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-footer .ant-btn-primary) {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  box-shadow: none;
+}
+
+:global(.budget-editor-modal-wrap .ant-modal-footer .ant-btn-primary:hover),
+:global(.budget-editor-modal-wrap .ant-modal-footer .ant-btn-primary:focus-visible) {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.budget-editor-shell {
+  color: var(--text-primary);
+}
+
+.budget-editor-heading {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding-right: 34px;
+}
+
+.budget-editor-heading-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(217, 119, 87, 0.2);
+  border-radius: 8px;
+  background: rgba(217, 119, 87, 0.09);
+  color: var(--accent-strong);
+  font-size: 21px;
+}
+
+.budget-editor-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #a35e3e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.budget-editor-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .budget-editor-form {
-  max-height: clamp(240px, calc(100vh - 260px), 620px);
-  padding-top: 8px;
-  padding-right: 4px;
+  max-height: clamp(280px, calc(100vh - 300px), 620px);
+  margin-top: 22px;
+  padding-right: 6px;
   overflow-y: auto;
+  scrollbar-color: rgba(61, 50, 41, 0.18) transparent;
+  scrollbar-width: thin;
+}
+
+.budget-editor-form::-webkit-scrollbar {
+  width: 5px;
+}
+
+.budget-editor-form::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(61, 50, 41, 0.2);
+}
+
+.budget-editor-section {
+  padding: 17px 0 4px;
+  border-top: 1px solid rgba(61, 50, 41, 0.1);
+}
+
+.budget-editor-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.budget-editor-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 13px;
+}
+
+.budget-editor-section-title > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: #a35e3e;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.budget-editor-section-title > strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.budget-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.budget-editor-grid--amount {
+  grid-template-columns: minmax(220px, 1.1fr) minmax(180px, 0.9fr);
+}
+
+.budget-editor-form :deep(.ant-form-item) {
+  min-width: 0;
+  margin-bottom: 14px;
+}
+
+.budget-editor-form :deep(.ant-form-item-label) {
+  padding-bottom: 6px;
+}
+
+.budget-editor-form :deep(.ant-form-item-label > label) {
+  height: auto;
+  color: rgba(61, 50, 41, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.budget-editor-form :deep(.ant-input),
+.budget-editor-form :deep(.ant-input-number),
+.budget-editor-form :deep(.ant-input-affix-wrapper),
+.budget-editor-form :deep(.ant-select-selector),
+.budget-editor-form :deep(.ant-segmented) {
+  border-color: rgba(61, 50, 41, 0.13) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.budget-editor-form :deep(.ant-input:not(textarea)),
+.budget-editor-form :deep(.ant-input-affix-wrapper),
+.budget-editor-form :deep(.ant-input-number),
+.budget-editor-form :deep(.ant-select-single .ant-select-selector) {
+  min-height: 38px;
+}
+
+.budget-editor-form :deep(.ant-input:hover),
+.budget-editor-form :deep(.ant-input:focus),
+.budget-editor-form :deep(.ant-input-number:hover),
+.budget-editor-form :deep(.ant-input-number-focused),
+.budget-editor-form :deep(.ant-input-affix-wrapper:hover),
+.budget-editor-form :deep(.ant-input-affix-wrapper-focused),
+.budget-editor-form :deep(.ant-select-focused .ant-select-selector),
+.budget-editor-form :deep(.ant-select-selector:hover) {
+  border-color: rgba(217, 119, 87, 0.72) !important;
+}
+
+.budget-editor-form :deep(.ant-select-selection-item),
+.budget-editor-form :deep(.ant-select-selection-placeholder) {
+  line-height: 36px !important;
+}
+
+.budget-editor-form :deep(.ant-input-number-input) {
+  height: 36px;
+}
+
+.budget-editor-form :deep(textarea.ant-input) {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.budget-editor-form :deep(.ant-segmented) {
+  padding: 3px;
+  background: var(--surface-soft);
+}
+
+.budget-editor-form :deep(.ant-segmented-item) {
+  min-height: 32px;
+  color: var(--text-secondary);
+  line-height: 32px;
+}
+
+.budget-editor-form :deep(.ant-segmented-item-selected) {
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(61, 50, 41, 0.1);
+}
+
+.budget-editor-form :deep(.ant-input-search-button) {
+  height: 38px;
+  border-color: var(--accent-primary);
+  border-radius: 0 6px 6px 0 !important;
+  background: var(--accent-primary);
+}
+
+.budget-editor-reservation-row {
+  margin: -2px 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(217, 119, 87, 0.76);
+  background: rgba(217, 119, 87, 0.06);
+}
+
+.budget-editor-reservation-row :deep(.ant-checkbox-wrapper) {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+:global(.budget-confirm-modal-wrap .ant-modal-content) {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(61, 50, 41, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(48, 39, 32, 0.18);
+}
+
+:global(.budget-confirm-modal-wrap .ant-modal-body) {
+  padding: 26px 26px 18px;
+}
+
+:global(.budget-confirm-modal-wrap .ant-modal-footer) {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 26px;
+  border-top: 1px solid rgba(61, 50, 41, 0.09);
+  background: #faf9f7;
+}
+
+:global(.budget-confirm-modal-wrap .ant-modal-footer .ant-btn) {
+  min-width: 96px;
+  height: 36px;
+  margin-inline-start: 0;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.budget-confirmation {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.budget-confirmation-heading {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.budget-confirmation-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(48, 126, 89, 0.18);
+  border-radius: 8px;
+  background: rgba(48, 126, 89, 0.1);
+  color: #2f7a57;
+  font-size: 21px;
+}
+
+.budget-confirmation-icon.is-delete {
+  border-color: rgba(190, 70, 56, 0.18);
+  background: rgba(190, 70, 56, 0.09);
+  color: #b3483d;
+}
+
+.budget-confirmation-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #a35e3e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.budget-confirmation-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.budget-confirmation-heading p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.budget-confirmation-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 20px;
+  border-top: 1px solid rgba(61, 50, 41, 0.1);
+  border-bottom: 1px solid rgba(61, 50, 41, 0.1);
+  background: #fbfaf8;
+}
+
+.budget-confirmation-field {
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(61, 50, 41, 0.07);
+}
+
+.budget-confirmation-field:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.budget-confirmation-field--wide {
+  grid-column: 1 / -1;
+}
+
+.budget-confirmation-field--wide:last-child {
+  border-top: 1px solid rgba(61, 50, 41, 0.07);
+}
+
+.budget-confirmation-field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: rgba(61, 50, 41, 0.58);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.budget-confirmation-field > strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.budget-confirmation-impact {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-left: 3px solid #4b8a69;
+  background: rgba(48, 126, 89, 0.07);
+  color: #365f4a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.budget-confirmation-impact > svg {
+  margin-top: 2px;
+}
+
+.budget-confirmation-impact.is-delete {
+  border-left-color: #bd594c;
+  background: rgba(190, 70, 56, 0.07);
+  color: #8d4037;
+}
+
+.budget-confirmation-footnote {
+  margin: 12px 0 0;
+  color: rgba(61, 50, 41, 0.54);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .attraction-poi-results {
@@ -3317,7 +4594,7 @@ const escapeHtml = (value: unknown): string => {
 
 .attraction-schedule-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -3905,12 +5182,130 @@ const escapeHtml = (value: unknown): string => {
 
   .budget-action-wrap {
     grid-area: actions;
+    position: static;
+    z-index: auto;
+    align-self: auto;
     justify-self: end;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
 }
 
 @media (max-width: 480px) {
+  :global(.budget-editor-modal-wrap .ant-modal) {
+    top: 0;
+    width: calc(100% - 24px) !important;
+    max-width: none;
+    margin: 12px auto;
+    padding-bottom: 0;
+  }
+
+  :global(.budget-editor-modal-wrap .ant-modal-body) {
+    padding: 20px 18px 12px;
+  }
+
+  :global(.budget-editor-modal-wrap .ant-modal-footer) {
+    padding: 12px 18px;
+  }
+
+  :global(.budget-editor-modal-wrap .ant-modal-footer .ant-btn) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .budget-editor-heading {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 11px;
+    padding-right: 28px;
+  }
+
+  .budget-editor-heading-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .budget-editor-heading h3 {
+    font-size: 17px;
+  }
+
+  .budget-editor-form {
+    max-height: calc(100vh - 190px);
+    margin-top: 18px;
+    padding-right: 3px;
+  }
+
+  .budget-editor-grid,
+  .budget-editor-grid--amount {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .budget-editor-section {
+    padding-top: 14px;
+  }
+
+  :global(.budget-confirm-modal-wrap .ant-modal) {
+    width: calc(100% - 24px) !important;
+    max-width: none;
+    margin: 12px auto;
+    padding-bottom: 0;
+  }
+
+  :global(.budget-confirm-modal-wrap .ant-modal-body) {
+    padding: 20px 18px 14px;
+  }
+
+  :global(.budget-confirm-modal-wrap .ant-modal-footer) {
+    padding: 12px 18px;
+  }
+
+  :global(.budget-confirm-modal-wrap .ant-modal-footer .ant-btn) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .budget-confirmation {
+    max-height: calc(100vh - 180px);
+  }
+
+  .budget-confirmation-heading {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 11px;
+  }
+
+  .budget-confirmation-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .budget-confirmation-heading h3 {
+    font-size: 17px;
+  }
+
+  .budget-confirmation-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .budget-confirmation-field,
+  .budget-confirmation-field--wide {
+    grid-column: 1;
+    padding: 9px 11px;
+    border-bottom: 1px solid rgba(61, 50, 41, 0.07);
+  }
+
+  .budget-confirmation-field:nth-last-child(-n + 2) {
+    border-bottom: 1px solid rgba(61, 50, 41, 0.07);
+  }
+
+  .budget-confirmation-field:last-child {
+    border-bottom: none;
+  }
+
   .attraction-schedule-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;

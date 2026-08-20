@@ -1,5 +1,7 @@
 """高德地图服务封装(REST API)"""
 
+import unicodedata
+from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -9,6 +11,11 @@ from ..models.schemas import Location, POIInfo, WeatherInfo
 
 
 _AMAP_PLACE_TEXT_URL = "https://restapi.amap.com/v5/place/text"
+_SUB_POI_MARKERS = (
+    "停车场", "售票处", "游客中心", "服务中心", "出入口", "入口", "出口",
+    "北广场", "南广场", "东广场", "西广场", "商店", "服务点", "卫生间",
+    "地铁站", "公交站", "餐厅", "酒店",
+)
 
 
 def _string_value(value: Any) -> str:
@@ -23,6 +30,33 @@ def _parse_amap_location(value: Any) -> Optional[Location]:
         return Location(longitude=float(longitude), latitude=float(latitude))
     except (TypeError, ValueError):
         return None
+
+
+def _normalized_poi_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", _string_value(value)).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
+def _poi_relevance_key(keywords: str, poi: POIInfo, source_index: int) -> tuple:
+    """Rank exact names and main attractions ahead of child/nearby POIs."""
+    query = _normalized_poi_text(keywords)
+    name = _normalized_poi_text(poi.name)
+    if not query:
+        return (4, 0, 0, source_index)
+
+    is_sub_poi = any(marker in poi.name for marker in _SUB_POI_MARKERS)
+    if name == query:
+        tier = 0
+    elif name.startswith(query) and not is_sub_poi:
+        tier = 1
+    elif query in name and not is_sub_poi:
+        tier = 2
+    elif query in name:
+        tier = 3
+    else:
+        tier = 4
+    similarity = SequenceMatcher(None, query, name).ratio()
+    return (tier, int(is_sub_poi), -similarity, abs(len(name) - len(query)), source_index)
 
 
 class AmapService:
@@ -80,8 +114,8 @@ class AmapService:
                 )
                 return []
 
-            results: List[POIInfo] = []
-            for item in payload.get("pois") or []:
+            indexed_results: list[tuple[int, POIInfo]] = []
+            for source_index, item in enumerate(payload.get("pois") or []):
                 if not isinstance(item, dict):
                     continue
                 poi_id = _string_value(item.get("id"))
@@ -89,15 +123,18 @@ class AmapService:
                 location = _parse_amap_location(item.get("location"))
                 if not poi_id or not name or location is None:
                     continue
-                results.append(POIInfo(
+                indexed_results.append((source_index, POIInfo(
                     id=poi_id,
                     name=name,
                     type=_string_value(item.get("type")),
                     address=_string_value(item.get("address")),
                     location=location,
                     tel=_string_value(item.get("tel")) or None,
-                ))
-            return results
+                )))
+            indexed_results.sort(
+                key=lambda entry: _poi_relevance_key(keywords, entry[1], entry[0])
+            )
+            return [poi for _, poi in indexed_results]
         except (requests.RequestException, ValueError, TypeError) as error:
             print(f"❌ 高德 POI 搜索异常: {error}")
             return []

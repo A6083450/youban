@@ -3,6 +3,7 @@ import unittest
 from datetime import date, timedelta
 
 from app.agents.trip_plan_orchestrator import (
+    allocate_segment_attraction_candidates,
     build_budget,
     build_segments,
     build_weather_info,
@@ -132,6 +133,26 @@ class SegmentBuilderTest(unittest.TestCase):
             request.cities = [CityStay(city="北京", days=city_days)]
             with self.subTest(city_days=city_days), self.assertRaisesRegex(ValueError, "travel_days"):
                 build_segments(request)
+
+    def test_attraction_candidates_are_disjoint_across_parallel_segments(self):
+        candidates = [
+            {
+                "poi_id": f"poi-{index}",
+                "name": f"景点{index}",
+                "address": "西安",
+                "location": {"longitude": 108.9 + index / 1000, "latitude": 34.2},
+            }
+            for index in range(12)
+        ]
+        segments = allocate_segment_attraction_candidates(
+            build_segments(_request(7)),
+            {"北京": json.dumps(candidates, ensure_ascii=False)},
+        )
+        pools = [segment["attraction_candidate_ids"] for segment in segments]
+
+        self.assertEqual([len(pool) for pool in pools], [5, 4, 3])
+        self.assertEqual(len({poi_id for pool in pools for poi_id in pool}), 12)
+        self.assertTrue(all(set(left).isdisjoint(right) for left, right in zip(pools, pools[1:])))
 
 
 class CheckpointTest(unittest.TestCase):

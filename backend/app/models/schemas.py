@@ -384,6 +384,14 @@ class TripPlan(BaseModel):
     room_count: int = Field(default=1, ge=1, le=50, description="住宿房间数")
     budget_amount: Optional[float] = Field(default=None, ge=0, description="用户预算金额")
     budget_basis: Literal["group_total", "per_person"] = "group_total"
+    budget_adjustment_applied: bool = Field(
+        default=False,
+        description="是否在生成后按用户预算对未验证的弹性估算执行过一次确定性调整",
+    )
+    budget_adjustment_note: str = Field(
+        default="",
+        description="预算调整说明；真实供应商价格不会被改写",
+    )
     days: List[DayPlan] = Field(..., description="每日行程")
     weather_info: List[WeatherInfo] = Field(default=[], description="天气信息")
     overall_suggestions: str = Field(..., description="总体建议")
