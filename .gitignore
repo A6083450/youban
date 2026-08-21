@@ -27,3 +27,4 @@ output
 !imgs/**/*.png
 youban-spec
 /docs/superpowers
+backend-ts/node_modules/
