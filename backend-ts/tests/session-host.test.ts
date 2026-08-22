@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { createYoubanAgentSession } from "../src/agents/session-host.ts";
+import { YOUBAN_SUBAGENT_NAMES } from "../src/agents/subagent-definitions.ts";
 import type {
   SkillAgentId,
   SkillCatalogSnapshot,
@@ -49,24 +50,41 @@ function builtinSnapshot(): SkillCatalogSnapshot {
 }
 
 describe("Pi session host", () => {
-  it("pins the parent prompt and generation to the supplied catalog snapshot", async () => {
+  it("pins every parent and child prompt before asynchronous session initialization", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "youban-pi-session-"));
-    const model = getModel("openai", "gpt-4o-mini");
-    expect(model).toBeDefined();
-    const generationOne = snapshot(201, {
-      "parent-assistant": [prompt("generation-one-marker")],
+    const runtimeDir = join(tempRoot, "runtime");
+    const mockModel = createMockPiModel(runtimeDir);
+    const markers: Record<SkillAgentId, string> = {
+      "parent-assistant": "parent-original-marker",
+      "destination-researcher": "destination-original-marker",
+      "segment-planner": "segment-original-marker",
+      summary: "summary-original-marker",
+      "itinerary-reviewer": "review-original-marker",
+      "plan-editor": "editor-original-marker",
+    };
+    const original = snapshot(201, {
+      "parent-assistant": [prompt(markers["parent-assistant"])],
+      "destination-researcher": [prompt(markers["destination-researcher"])],
+      "segment-planner": [prompt(markers["segment-planner"])],
+      summary: [prompt(markers.summary)],
+      "itinerary-reviewer": [prompt(markers["itinerary-reviewer"])],
+      "plan-editor": [prompt(markers["plan-editor"])],
     });
-    const generationTwo = snapshot(202, {
-      "parent-assistant": [prompt("generation-two-marker")],
-    });
-
-    const host = await createYoubanAgentSession({
+    const hostPromise = createYoubanAgentSession({
       cwd: tempRoot,
-      runtimeDir: join(tempRoot, "runtime"),
-      model: model!,
-      skillSnapshot: generationOne,
+      runtimeDir,
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "youban-mock/mock-model",
+      skillSnapshot: original,
       tools: ["subagent"],
     });
+    original.generation = 202;
+    for (const agentId of Object.keys(markers) as SkillAgentId[]) {
+      const assigned = original.assignments[agentId] as SkillPrompt[];
+      assigned[0]!.name = `mutated-${agentId}`;
+      assigned[0]!.content = `mutated-${agentId}`;
+    }
+    const host = await hostPromise;
 
     try {
       expect(host.extensionErrors).toEqual([]);
@@ -76,12 +94,48 @@ describe("Pi session host", () => {
       expect(host.session.getActiveToolNames()).not.toContain("edit");
       expect(host.session.getActiveToolNames()).not.toContain("write");
       expect(host.resourceLoader.getSkills().skills).toEqual([]);
-      expect(host.generation).toBe(generationOne.generation);
-      expect(host.session.systemPrompt).toContain("generation-one-marker");
-      expect(host.session.systemPrompt).not.toContain("generation-two-marker");
+      expect(host.generation).toBe(201);
+      expect(host.session.systemPrompt).toContain(markers["parent-assistant"]);
+      for (const agentId of YOUBAN_SUBAGENT_NAMES) {
+        expect(host.session.systemPrompt).not.toContain(markers[agentId]);
+      }
+      expect(host.session.systemPrompt).not.toContain("mutated-parent-assistant");
       expect(host.session.systemPrompt).not.toContain("SKILL.md");
 
-      expect(generationTwo.generation).toBeGreaterThan(host.generation);
+      for (const agentId of YOUBAN_SUBAGENT_NAMES) {
+        const response = await host.delegate({
+          requestId: crypto.randomUUID(),
+          ownerRunId: "snapshot-pinning",
+          nodeId: `pinned-${agentId}`,
+          agent: agentId,
+          task: `Return the fixed verdict for ${agentId}.`,
+          context: "fresh",
+          cwd: tempRoot,
+          timeoutMs: 10_000,
+          turnBudget: { maxTurns: 1 },
+          toolBudget: { hard: 0, block: ["read", "bash", "edit", "write", "grep", "find", "ls"] },
+          result: {
+            kind: "structured",
+            schema: {
+              type: "object",
+              properties: { verdict: { type: "string" } },
+              required: ["verdict"],
+              additionalProperties: false,
+            },
+          },
+        });
+        expect(response.status).toBe("completed");
+      }
+      expect(mockModel.requests).toHaveLength(YOUBAN_SUBAGENT_NAMES.length);
+      for (const [index, agentId] of YOUBAN_SUBAGENT_NAMES.entries()) {
+        const request = JSON.stringify(mockModel.requests[index]);
+        expect(request).toContain(markers[agentId]);
+        expect(request).not.toContain(markers["parent-assistant"]);
+        for (const otherAgentId of YOUBAN_SUBAGENT_NAMES) {
+          if (otherAgentId !== agentId) expect(request).not.toContain(markers[otherAgentId]);
+        }
+        expect(request).not.toContain("mutated-");
+      }
 
       const denied = await host.delegate({
         requestId: crypto.randomUUID(),
@@ -97,6 +151,7 @@ describe("Pi session host", () => {
       expect(denied.error?.toLowerCase()).toContain("capability ceiling");
     } finally {
       host.dispose();
+      mockModel.stop();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });

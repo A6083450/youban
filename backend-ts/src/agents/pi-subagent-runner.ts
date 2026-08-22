@@ -4,6 +4,8 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { BROWSER_USER_AGENT } from "./llm/providers.ts";
 import type { StructuredAgentRequest, StructuredAgentRunner } from "./pi-trip-planner.ts";
 import { createYoubanAgentSession, type YoubanAgentSessionHost } from "./session-host.ts";
+import { createBuiltinSkillCatalogSnapshot } from "./skill-registry.ts";
+import type { SkillCatalogSnapshot } from "./skill-types.ts";
 
 export const PI_RUNTIME_API_KEY_ENV = "YOUBAN_PI_RUNTIME_API_KEY";
 
@@ -82,6 +84,7 @@ interface PiSubagentRunnerOptions {
   subagentModel: string;
   apiKey?: string;
   timeoutMs?: number;
+  skillSnapshot?: SkillCatalogSnapshot;
   hostFactory?: () => Promise<YoubanAgentSessionHost>;
 }
 
@@ -89,8 +92,11 @@ export class PiSubagentRunner implements StructuredAgentRunner {
   private hostPromise: Promise<YoubanAgentSessionHost> | undefined;
   private releaseApiKey: (() => void) | undefined;
   private closed = false;
+  private readonly skillSnapshot: SkillCatalogSnapshot;
 
-  constructor(private readonly options: PiSubagentRunnerOptions) {}
+  constructor(private readonly options: PiSubagentRunnerOptions) {
+    this.skillSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
+  }
 
   private host(): Promise<YoubanAgentSessionHost> {
     if (this.closed) return Promise.reject(new Error("Pi subagent runner is closed"));
@@ -101,6 +107,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
         runtimeDir: this.options.runtimeDir,
         model: this.options.model,
         subagentModel: this.options.subagentModel,
+        skillSnapshot: this.skillSnapshot,
         tools: ["subagent"],
       }).catch((error) => {
         this.releaseApiKey?.();

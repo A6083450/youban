@@ -71,6 +71,24 @@ export function reconcileBuiltinSkills(repository: SkillCatalogRepository): void
   for (const skill of loadBuiltinSkillDefinitions()) repository.reconcileBuiltin(skill);
 }
 
+export function createBuiltinSkillCatalogSnapshot(): SkillCatalogSnapshot {
+  const definitions = new Map(loadBuiltinSkillDefinitions().map((skill) => [skill.name, skill]));
+  const assignments = {} as Record<SkillAgentId, SkillPrompt[]>;
+  for (const agentId of SKILL_AGENT_IDS) {
+    assignments[agentId] = BUILTIN_SKILL_ASSIGNMENTS[agentId].map((name) => {
+      const skill = definitions.get(name);
+      if (!skill) throw new Error(`Unknown approved skill: ${name}`);
+      return {
+        id: `builtin:${name}`,
+        name: skill.name,
+        content: skill.content,
+        versionId: skill.sha256,
+      } satisfies SkillPrompt;
+    });
+  }
+  return { generation: 0, assignments };
+}
+
 export function renderAssignedSkills(
   snapshot: SkillCatalogSnapshot,
   agentId: SkillAgentId,

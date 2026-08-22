@@ -30,24 +30,12 @@ interface RuntimeLease {
 
 let activeRuntimeLease: RuntimeLease | undefined;
 
-const EMPTY_SKILL_CATALOG_SNAPSHOT: SkillCatalogSnapshot = {
-  generation: 0,
-  assignments: {
-    "parent-assistant": [],
-    "destination-researcher": [],
-    "segment-planner": [],
-    summary: [],
-    "itinerary-reviewer": [],
-    "plan-editor": [],
-  },
-};
-
 export interface CreateYoubanAgentSessionOptions {
   cwd: string;
   runtimeDir: string;
   model: Model<Api>;
   subagentModel?: string;
-  skillSnapshot?: SkillCatalogSnapshot;
+  skillSnapshot: SkillCatalogSnapshot;
   tools?: readonly string[];
   customTools?: ToolDefinition[];
   sessionDir?: string;
@@ -107,7 +95,9 @@ function acquireRuntimeLease(runtimeDirInput: string): () => void {
 export async function createYoubanAgentSession(
   options: CreateYoubanAgentSessionOptions,
 ): Promise<YoubanAgentSessionHost> {
-  const skillSnapshot = options.skillSnapshot ?? EMPTY_SKILL_CATALOG_SNAPSHOT;
+  const generation = options.skillSnapshot.generation;
+  const parentSystemPrompt = renderAssignedSkills(options.skillSnapshot, "parent-assistant");
+  const subagentDefinitions = createYoubanSubagentDefinitions(options.skillSnapshot);
   const releaseRuntime = acquireRuntimeLease(options.runtimeDir);
   let session: AgentSession | undefined;
 
@@ -140,7 +130,7 @@ export async function createYoubanAgentSession(
         {
           name: "pi-subagents",
           factory(pi) {
-            for (const agent of createYoubanSubagentDefinitions(skillSnapshot)) {
+            for (const agent of subagentDefinitions) {
               registerAgent({
                 pi,
                 name: agent.name,
@@ -161,7 +151,7 @@ export async function createYoubanAgentSession(
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
-      appendSystemPrompt: [renderAssignedSkills(skillSnapshot, "parent-assistant")].filter(Boolean),
+      appendSystemPrompt: [parentSystemPrompt].filter(Boolean),
       skillsOverride: () => ({ skills: [], diagnostics: [] }),
     });
     await resourceLoader.reload();
@@ -245,7 +235,7 @@ export async function createYoubanAgentSession(
       extensionErrors: result.extensionsResult.errors.map(
         (error) => `${error.path}: ${error.error}`,
       ),
-      generation: skillSnapshot.generation,
+      generation,
       delegate,
       cancel(request) {
         eventBus.emit(delegation.SUBAGENT_DELEGATION_CANCEL_EVENT, request);

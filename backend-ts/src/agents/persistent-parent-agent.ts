@@ -5,6 +5,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { StructuredAgentRequest } from "./pi-trip-planner.ts";
 import { acquirePiRuntimeApiKey } from "./pi-subagent-runner.ts";
 import { createYoubanAgentSession, type YoubanAgentSessionHost } from "./session-host.ts";
+import { createBuiltinSkillCatalogSnapshot } from "./skill-registry.ts";
 import type { SkillCatalogSnapshot } from "./skill-types.ts";
 
 export interface ParentAgentScope {
@@ -81,6 +82,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   private readonly sessionIdleMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: typeof createYoubanAgentSession;
+  private readonly skillSnapshot: SkillCatalogSnapshot;
   private readonly sweepTimer?: ReturnType<typeof setInterval>;
   private releaseApiKey: (() => void) | undefined;
   private closed = false;
@@ -90,6 +92,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     this.sessionIdleMs = options.sessionIdleMs ?? 1_800_000;
     this.now = options.now ?? Date.now;
     this.sessionFactory = options.sessionFactory ?? createYoubanAgentSession;
+    this.skillSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
     const sweepIntervalMs = options.sweepIntervalMs ?? 60_000;
     if (sweepIntervalMs > 0) {
       this.sweepTimer = setInterval(() => {
@@ -149,7 +152,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
         runtimeDir: this.options.runtimeDir,
         model: this.options.model,
         subagentModel: this.options.subagentModel,
-        skillSnapshot: this.options.skillSnapshot,
+        skillSnapshot: this.skillSnapshot,
         tools: ["subagent", ...customTools.map((tool) => tool.name)],
         customTools,
         sessionDir: join(this.options.runtimeDir, "sessions", id),

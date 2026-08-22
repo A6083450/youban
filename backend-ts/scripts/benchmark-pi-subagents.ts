@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
+import { createBuiltinSkillCatalogSnapshot } from "../src/agents/skill-registry.ts";
 import { createYoubanAgentSession } from "../src/agents/session-host.ts";
 import { createMockPiModel } from "../tests/helpers/mock-pi-model.ts";
 
@@ -25,6 +26,7 @@ const host = await createYoubanAgentSession({
   runtimeDir,
   model: parentModel,
   subagentModel: "youban-mock/mock-model",
+  skillSnapshot: createBuiltinSkillCatalogSnapshot(),
   tools: ["subagent"],
 });
 const sessionStartupMs = performance.now() - sessionStartedAt;

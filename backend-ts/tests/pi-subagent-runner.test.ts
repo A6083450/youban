@@ -39,6 +39,13 @@ describe("PiSubagentRunner", () => {
         signal: new AbortController().signal,
       })).toEqual({ verdict: "ok" });
       expect(mock.requests).toHaveLength(1);
+      const systemPrompt = (
+        mock.requests[0]?.messages as Array<{ role: string; content: string }> | undefined
+      )?.find((message) => message.role === "system")?.content ?? "";
+      expect(systemPrompt).toContain('<skill name="trip-planning">');
+      expect(systemPrompt).toContain('<skill name="budget-control">');
+      expect(systemPrompt).not.toContain('<skill name="plan-editing">');
+      expect(systemPrompt).not.toContain("SKILL.md");
       expect(process.env[PI_RUNTIME_API_KEY_ENV]).toBe("runtime-secret");
     } finally {
       await runner.close();

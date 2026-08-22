@@ -59,6 +59,30 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<v
 }
 
 describe("persistent Pi parent agent", () => {
+  it("uses the repository-owned built-in parent snapshot without a persisted catalog service", async () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-parent-default-snapshot-"));
+    const runtimeDir = join(root, "runtime");
+    const mock = createMockPiModel(runtimeDir, { text: "default-answer" });
+    const parent = new PersistentPiParentAgent({
+      cwd: root,
+      runtimeDir,
+      model: mock.model,
+      subagentModel: "youban-mock/mock-model",
+      sweepIntervalMs: 0,
+    });
+    try {
+      const inspected = await parent.inspect({ key: "user:defaults", userId: "defaults" });
+      expect(inspected.systemPrompt).toContain('<skill name="trip-planning">');
+      expect(inspected.systemPrompt).toContain('<skill name="budget-control">');
+      expect(inspected.systemPrompt).not.toContain("SKILL.md");
+      expect(inspected.tools).toEqual(["subagent"]);
+    } finally {
+      await parent.close();
+      mock.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("persists one scoped transcript, preloads skills, exposes business tools, and delegates a real child", async () => {
     const root = mkdtempSync(join(tmpdir(), "youban-parent-agent-"));
     const runtimeDir = join(root, "runtime");
