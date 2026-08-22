@@ -271,7 +271,10 @@ function safeRepositoryUrl(value: string | undefined): string | null {
 
 function containsConfiguredCredential(value: string): boolean {
   const token = process.env.YOUBAN_SKILL_GIT_TOKEN?.trim();
-  return Boolean(token && value.includes(token));
+  if (!token) return false;
+  if (value.includes(token)) return true;
+  return /^[0-9a-f]+$/i.test(token)
+    && value.toLowerCase().includes(token.toLowerCase());
 }
 
 function safeSourceRef(value: string | undefined): string | null {

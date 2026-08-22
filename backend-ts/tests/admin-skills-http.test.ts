@@ -715,6 +715,91 @@ describe("admin Skill HTTP", () => {
     }
   });
 
+  it("redacts a hexadecimal source commit across credential casing", async () => {
+    const previousToken = process.env.YOUBAN_SKILL_GIT_TOKEN;
+    const skills = new FakeSkillService();
+    const value = runtime({ skillService: skills });
+    try {
+      for (const [token, sourceCommit] of [
+        ["A".repeat(40), "a".repeat(40)],
+        ["b".repeat(40), "B".repeat(40)],
+      ] as const) {
+        process.env.YOUBAN_SKILL_GIT_TOKEN = token;
+        const credentialCommitVersion = version({
+          sha256: "f".repeat(64),
+          sourceCommit,
+        });
+        skills.current = detail({
+          candidateVersion: credentialCommitVersion,
+          versions: [credentialCommitVersion],
+        });
+
+        const response = await jsonRequest(
+          value,
+          "GET",
+          "/api/admin/skills/skill-1",
+          undefined,
+          ADMIN,
+        );
+        expect(response.status).toBe(200);
+        const body = await responseJson(response);
+        expect(body.skill.candidate_version.source_commit).toBeNull();
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain(token);
+        expect(serialized).not.toContain(sourceCommit);
+      }
+    } finally {
+      if (previousToken === undefined) delete process.env.YOUBAN_SKILL_GIT_TOKEN;
+      else process.env.YOUBAN_SKILL_GIT_TOKEN = previousToken;
+    }
+  });
+
+  it("fails closed for a hexadecimal SHA credential across casing", async () => {
+    const previousToken = process.env.YOUBAN_SKILL_GIT_TOKEN;
+    const skills = new FakeSkillService();
+    const value = runtime({ skillService: skills });
+    try {
+      for (const [token, sha256] of [
+        ["C".repeat(64), "c".repeat(64)],
+        ["d".repeat(64), "D".repeat(64)],
+      ] as const) {
+        process.env.YOUBAN_SKILL_GIT_TOKEN = token;
+        const credentialHashVersion = version({
+          sha256,
+          content: "Authorization: Bearer hidden /private/staging prompt-secret-content",
+          packageRelativePath: "/private/staging/prompt-secret-package",
+        });
+        skills.current = detail({
+          candidateVersion: credentialHashVersion,
+          versions: [credentialHashVersion],
+        });
+
+        const response = await jsonRequest(
+          value,
+          "GET",
+          "/api/admin/skills/skill-1",
+          undefined,
+          ADMIN,
+        );
+        expect(response.status).toBe(500);
+        const body = await responseJson(response);
+        expect(body).toEqual({
+          detail: "技能管理服务暂时不可用",
+          code: "internal_error",
+        });
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain(token);
+        expect(serialized).not.toContain(sha256);
+        expect(serialized).not.toContain("/private/staging");
+        expect(serialized).not.toContain("prompt-secret-content");
+        expect(serialized).not.toContain("prompt-secret-package");
+      }
+    } finally {
+      if (previousToken === undefined) delete process.env.YOUBAN_SKILL_GIT_TOKEN;
+      else process.env.YOUBAN_SKILL_GIT_TOKEN = previousToken;
+    }
+  });
+
   it("rejects built-in edits, archives, and restores below the HTTP boundary", async () => {
     const value = runtime();
     const list = await responseJson(await jsonRequest(value, "GET", "/api/admin/skills", undefined, ADMIN));
