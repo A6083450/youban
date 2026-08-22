@@ -11,8 +11,8 @@ import {
   type SkillConfigurationInput,
   type SkillVersion,
 } from "../agents/skill-types.ts";
+import { MAX_SKILL_ARCHIVE_BYTES } from "./admin-skill-limits.ts";
 
-const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 const MAX_FILENAME_LENGTH = 255;
 
 const SkillAgentIdSchema = t.Union([
@@ -176,6 +176,7 @@ const KNOWN_ERROR_CODES = new Set([
   "package_commit_failed",
   "package_compensation_failed",
   "candidate_write_failed",
+  "skill_version_conflict",
   "skill_activation_failed",
   "skill_configuration_failed",
   "skill_archive_failed",
@@ -217,6 +218,7 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
   skill_archived: "已归档技能不支持此操作",
   skill_not_git_managed: "该技能不是 Git 来源",
   skill_state_changed: "技能状态已变化，请刷新后重试",
+  skill_version_conflict: "技能候选版本不存在或已被激活",
   invalid_skill_encoding: "技能文档编码无效",
   invalid_skill_frontmatter: "技能文档格式无效",
   invalid_skill_name: "技能名称无效",
@@ -247,11 +249,8 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
 
 function skillState(skill: ManagedSkillSummary | ManagedSkillDetail): SkillState {
   if (skill.archivedAt) return "archived";
-  const active = "versions" in skill ? skill.activeVersion : skill.activeVersionId;
   const candidate = "versions" in skill ? skill.candidateVersion : skill.candidateVersionId;
-  if (candidate && (!active || skill.enabled)) {
-    return "candidate";
-  }
+  if (candidate) return "candidate";
   return skill.enabled ? "enabled" : "disabled";
 }
 
@@ -314,6 +313,13 @@ function toSummaryDto(skill: ManagedSkillSummary) {
 }
 
 function toVersionDto(version: SkillVersion) {
+  if (!/^[0-9a-f]{64}$/i.test(version.sha256)) {
+    throw new Error("invalid skill version sha256");
+  }
+  const sourceCommit = version.sourceCommit
+    && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(version.sourceCommit)
+    ? version.sourceCommit.toLowerCase()
+    : null;
   return {
     id: version.id,
     skill_id: version.skillId,
@@ -322,8 +328,8 @@ function toVersionDto(version: SkillVersion) {
     content: version.content,
     name: version.name,
     description: version.description,
-    sha256: version.sha256,
-    source_commit: version.sourceCommit ?? null,
+    sha256: version.sha256.toLowerCase(),
+    source_commit: sourceCommit,
     created_at: version.createdAt,
     activated_at: version.activatedAt ?? null,
   };
@@ -350,7 +356,9 @@ function toDetailDto(skill: ManagedSkillDetail) {
     ...base,
     active_version: skill.activeVersion ? toVersionDto(skill.activeVersion) : null,
     candidate_version: skill.candidateVersion ? toVersionDto(skill.candidateVersion) : null,
-    versions: skill.versions.map(toVersionDto),
+    versions: [...skill.versions]
+      .sort((left, right) => left.versionNumber - right.versionNumber)
+      .map(toVersionDto),
   };
 }
 
@@ -363,6 +371,7 @@ function statusForError(code: string): number {
     "skill_not_archived",
     "skill_archived",
     "skill_state_changed",
+    "skill_version_conflict",
   ].includes(code)) return 409;
   if (code === "skill_package_too_large") return 413;
   if (code === "git_unavailable") return 503;
@@ -469,7 +478,9 @@ export function createAdminSkillRoutes(options: AdminSkillRoutesOptions) {
           if (query.source && skill.source !== query.source) return false;
           if (query.state && skill.state !== query.state) return false;
           return true;
-        });
+        }).sort((left, right) => left.name === right.name
+          ? left.id.localeCompare(right.id)
+          : left.name.localeCompare(right.name));
         const available = capabilities();
         return {
           items,
@@ -511,7 +522,7 @@ export function createAdminSkillRoutes(options: AdminSkillRoutesOptions) {
       }
       const file = body.file;
       if (!(file instanceof File)) return fail(set, "invalid_archive", 422);
-      if (file.size > MAX_UPLOAD_BYTES) return fail(set, "skill_package_too_large", 413);
+      if (file.size > MAX_SKILL_ARCHIVE_BYTES) return fail(set, "skill_package_too_large", 413);
       const bytes = new Uint8Array(await file.arrayBuffer());
       const result = await execute(set, async () => ({
         skill: toDetailDto(await options.skills.stageUpload({

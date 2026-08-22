@@ -4,9 +4,18 @@ import { basename, join, resolve, sep } from "node:path";
 import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
 import { Elysia, t } from "elysia";
-import { createDefaultTripChatService } from "../agents/default-trip-chat-service.ts";
-import { createDefaultParentAgent } from "../agents/default-parent-agent.ts";
-import { createDefaultTripPlanner } from "../agents/default-trip-planner.ts";
+import {
+  createDefaultTripChatService,
+  type DefaultTripChatServiceOptions,
+} from "../agents/default-trip-chat-service.ts";
+import {
+  createDefaultParentAgent,
+  type DefaultParentAgentOptions,
+} from "../agents/default-parent-agent.ts";
+import {
+  createDefaultTripPlanner,
+  type DefaultTripPlannerOptions,
+} from "../agents/default-trip-planner.ts";
 import { SkillManagementService } from "../agents/skill-management-service.ts";
 import { SkillRuntimeDiagnostics } from "../agents/skill-runtime-diagnostics.ts";
 import { TripAssistant } from "../agents/trip-assistant.ts";
@@ -101,9 +110,22 @@ export interface HttpRuntimeOptions {
   skillService?: AdminSkillService;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   serviceFactories?: {
-    parentAgent?: () => YoubanParentAgent;
-    planner?: () => TripPlanner;
+    parentAgent?: (options: DefaultParentAgentOptions) => YoubanParentAgent;
+    planner?: (options: DefaultTripPlannerOptions) => TripPlanner;
+    chatService?: (options: DefaultTripChatServiceOptions) => TripChatService;
+    poiSearch?: (settings: AppSettings) => PoiSearch;
   };
+}
+
+function settleResourceClose(operation: () => unknown | Promise<unknown>): Promise<void> {
+  try {
+    return Promise.resolve(operation()).then(
+      () => undefined,
+      () => undefined,
+    );
+  } catch {
+    return Promise.resolve();
+  }
 }
 
 function failedEvent(taskId: string, error: string): Record<string, unknown> {
@@ -171,41 +193,91 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   });
   const skillRuntimeDiagnostics = options.skillRuntimeDiagnostics ?? new SkillRuntimeDiagnostics();
   const initialGenerationRuntimeDir = piGenerationRuntimeDir(options.dataDir, settings);
-  let parentAgent = options.parentAgent ?? options.serviceFactories?.parentAgent?.() ?? createDefaultParentAgent({
-    cwd: repoRoot,
-    dataDir: options.dataDir,
-    runtimeDir: initialGenerationRuntimeDir,
-    tasks,
-    memory,
-    settings,
-    skillCatalog: skills,
-    skillRuntimeDiagnostics,
-  });
+  let parentAgent!: YoubanParentAgent;
+  let assistant!: TripAssistant;
+  let planner!: TripPlanner;
+  let chatService!: TripChatService;
+  let poiSearch!: PoiSearch;
   const confirmationLedger = options.assistant?.ledger ?? new ConfirmationLedger();
-  let assistant = options.assistant ?? new TripAssistant({
-    llm: getPiLlmClient(),
-    ledger: confirmationLedger,
-    parentAgent,
-  });
-  let planner: TripPlanner = options.planner ?? options.serviceFactories?.planner?.() ?? createDefaultTripPlanner({
-    cwd: repoRoot,
-    dataDir: options.dataDir,
-    runtimeDir: initialGenerationRuntimeDir,
-    settings,
-    skillCatalog: skills,
-    skillRuntimeDiagnostics,
-  });
-  let chatService = options.chatService ?? createDefaultTripChatService({
-    cwd: repoRoot,
-    dataDir: options.dataDir,
-    runtimeDir: initialGenerationRuntimeDir,
-    parentAgent,
-    memory,
-    settings,
-    skillCatalog: skills,
-    skillRuntimeDiagnostics,
-  });
-  let poiSearch = options.poiSearch ?? new AmapResearchSources({ apiKey: settings.vite_amap_web_key });
+  try {
+    const parentOptions: DefaultParentAgentOptions = {
+      cwd: repoRoot,
+      dataDir: options.dataDir,
+      runtimeDir: initialGenerationRuntimeDir,
+      tasks,
+      memory,
+      settings,
+      skillCatalog: skills,
+      skillRuntimeDiagnostics,
+    };
+    parentAgent = options.parentAgent
+      ?? options.serviceFactories?.parentAgent?.(parentOptions)
+      ?? createDefaultParentAgent(parentOptions);
+    assistant = options.assistant ?? new TripAssistant({
+      llm: getPiLlmClient(),
+      ledger: confirmationLedger,
+      parentAgent,
+    });
+    const plannerOptions: DefaultTripPlannerOptions = {
+      cwd: repoRoot,
+      dataDir: options.dataDir,
+      runtimeDir: initialGenerationRuntimeDir,
+      settings,
+      skillCatalog: skills,
+      skillRuntimeDiagnostics,
+    };
+    planner = options.planner
+      ?? options.serviceFactories?.planner?.(plannerOptions)
+      ?? createDefaultTripPlanner(plannerOptions);
+    const chatOptions: DefaultTripChatServiceOptions = {
+      cwd: repoRoot,
+      dataDir: options.dataDir,
+      runtimeDir: initialGenerationRuntimeDir,
+      parentAgent,
+      memory,
+      settings,
+      skillCatalog: skills,
+      skillRuntimeDiagnostics,
+    };
+    chatService = options.chatService
+      ?? options.serviceFactories?.chatService?.(chatOptions)
+      ?? createDefaultTripChatService(chatOptions);
+    poiSearch = options.poiSearch
+      ?? options.serviceFactories?.poiSearch?.(settings)
+      ?? new AmapResearchSources({ apiKey: settings.vite_amap_web_key });
+  } catch (error) {
+    for (const closeStore of [
+      () => tasks.close(),
+      () => users.close(),
+      () => conversations.close(),
+    ]) {
+      try {
+        closeStore();
+      } catch {
+        // Construction must preserve its original error while closing every owned store.
+      }
+    }
+    const generatedResourceCloses = [
+      ...(!options.chatService && chatService
+        ? [settleResourceClose(() => chatService.close())]
+        : []),
+      ...(!options.planner && planner
+        ? [settleResourceClose(() => planner.close?.())]
+        : []),
+      ...(!options.parentAgent && parentAgent
+        ? [settleResourceClose(() => parentAgent.close())]
+        : []),
+    ];
+    void Promise.allSettled(generatedResourceCloses).then(() => {
+      if (options.skillService) return;
+      try {
+        skills.close();
+      } catch {
+        // Cleanup failure must not become an unhandled rejection or mask construction.
+      }
+    });
+    throw error;
+  }
   const planningAbort = new AbortController();
   const imagesDir = join(options.dataDir, "images");
   const adminPasswordFile = join(options.dataDir, "admin_password.txt");
@@ -323,34 +395,36 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         let nextPoiSearch: PoiSearch | undefined;
         try {
           const candidateLlm = createPiLlmClient(llmConfig(candidateSettings));
-          nextParent = options.parentAgent ?? options.serviceFactories?.parentAgent?.()
-            ?? createDefaultParentAgent({
-              cwd: repoRoot,
-              dataDir: options.dataDir,
-              runtimeDir: candidateRuntimeDir,
-              tasks,
-              memory,
-              model: candidateLlm.model,
-              settings: candidateSettings,
-              skillCatalog: skills,
-              skillRuntimeDiagnostics,
-            });
+          const parentOptions: DefaultParentAgentOptions = {
+            cwd: repoRoot,
+            dataDir: options.dataDir,
+            runtimeDir: candidateRuntimeDir,
+            tasks,
+            memory,
+            model: candidateLlm.model,
+            settings: candidateSettings,
+            skillCatalog: skills,
+            skillRuntimeDiagnostics,
+          };
+          nextParent = options.parentAgent ?? options.serviceFactories?.parentAgent?.(parentOptions)
+            ?? createDefaultParentAgent(parentOptions);
           nextAssistant = options.assistant ?? new TripAssistant({
             llm: candidateLlm,
             ledger: confirmationLedger,
             parentAgent: nextParent,
           });
-          nextPlanner = options.planner ?? options.serviceFactories?.planner?.()
-            ?? createDefaultTripPlanner({
-              cwd: repoRoot,
-              dataDir: options.dataDir,
-              runtimeDir: candidateRuntimeDir,
-              model: candidateLlm.model,
-              settings: candidateSettings,
-              skillCatalog: skills,
-              skillRuntimeDiagnostics,
-            });
-          nextChatService = options.chatService ?? createDefaultTripChatService({
+          const plannerOptions: DefaultTripPlannerOptions = {
+            cwd: repoRoot,
+            dataDir: options.dataDir,
+            runtimeDir: candidateRuntimeDir,
+            model: candidateLlm.model,
+            settings: candidateSettings,
+            skillCatalog: skills,
+            skillRuntimeDiagnostics,
+          };
+          nextPlanner = options.planner ?? options.serviceFactories?.planner?.(plannerOptions)
+            ?? createDefaultTripPlanner(plannerOptions);
+          const chatOptions: DefaultTripChatServiceOptions = {
             cwd: repoRoot,
             dataDir: options.dataDir,
             runtimeDir: candidateRuntimeDir,
@@ -360,14 +434,27 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
             settings: candidateSettings,
             skillCatalog: skills,
             skillRuntimeDiagnostics,
-          });
+          };
+          nextChatService = options.chatService
+            ?? options.serviceFactories?.chatService?.(chatOptions)
+            ?? createDefaultTripChatService(chatOptions);
           nextPoiSearch = options.poiSearch
+            ?? options.serviceFactories?.poiSearch?.(candidateSettings)
             ?? new AmapResearchSources({ apiKey: candidateSettings.vite_amap_web_key });
         } catch (error) {
+          const failedChatService = nextChatService;
+          const failedPlanner = nextPlanner;
+          const failedParent = nextParent;
           await Promise.allSettled([
-            ...(!options.chatService && nextChatService ? [Promise.resolve(nextChatService.close())] : []),
-            ...(!options.planner && nextPlanner ? [Promise.resolve(nextPlanner.close?.())] : []),
-            ...(!options.parentAgent && nextParent ? [Promise.resolve(nextParent.close())] : []),
+            ...(!options.chatService && failedChatService
+              ? [settleResourceClose(() => failedChatService.close())]
+              : []),
+            ...(!options.planner && failedPlanner
+              ? [settleResourceClose(() => failedPlanner.close?.())]
+              : []),
+            ...(!options.parentAgent && failedParent
+              ? [settleResourceClose(() => failedParent.close())]
+              : []),
           ]);
           if (!candidateRuntimeDirExisted && candidateRuntimeDir !== activeGenerationRuntimeDir) {
             removeGenerationRuntimeDir(candidateRuntimeDir);
@@ -380,9 +467,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           updated = prepared.commit();
         } catch (error) {
           await Promise.allSettled([
-            ...(!options.chatService ? [Promise.resolve(nextChatService.close())] : []),
-            ...(!options.planner ? [Promise.resolve(nextPlanner.close?.())] : []),
-            ...(!options.parentAgent ? [Promise.resolve(nextParent.close())] : []),
+            ...(!options.chatService ? [settleResourceClose(() => nextChatService.close())] : []),
+            ...(!options.planner ? [settleResourceClose(() => nextPlanner.close?.())] : []),
+            ...(!options.parentAgent ? [settleResourceClose(() => nextParent.close())] : []),
           ]);
           if (!candidateRuntimeDirExisted && candidateRuntimeDir !== activeGenerationRuntimeDir) {
             removeGenerationRuntimeDir(candidateRuntimeDir);
@@ -398,9 +485,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         activeGenerationRuntimeDir = candidateRuntimeDir;
 
         await Promise.allSettled([
-          ...(!options.parentAgent ? [Promise.resolve(previousParent.close())] : []),
-          ...(!options.planner ? [Promise.resolve(previousPlanner.close?.())] : []),
-          ...(!options.chatService ? [Promise.resolve(previousChatService.close())] : []),
+          ...(!options.parentAgent ? [settleResourceClose(() => previousParent.close())] : []),
+          ...(!options.planner ? [settleResourceClose(() => previousPlanner.close?.())] : []),
+          ...(!options.chatService ? [settleResourceClose(() => previousChatService.close())] : []),
         ]);
         return updated;
       } finally {
@@ -1481,9 +1568,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         users.close();
         conversations.close();
         await Promise.allSettled([
-          Promise.resolve(planner.close?.()),
-          Promise.resolve(chatService.close()),
-          ...(!options.parentAgent ? [Promise.resolve(parentAgent.close())] : []),
+          ...(!options.planner ? [settleResourceClose(() => planner.close?.())] : []),
+          ...(!options.chatService ? [settleResourceClose(() => chatService.close())] : []),
+          ...(!options.parentAgent ? [settleResourceClose(() => parentAgent.close())] : []),
         ]);
         if (!options.skillService) skills.close();
       };

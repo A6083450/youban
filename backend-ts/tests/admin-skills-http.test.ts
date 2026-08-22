@@ -19,6 +19,7 @@ import { createZipFixture } from "./helpers/zip-fixture.ts";
 const ADMIN = "admin@123";
 const SKILL = "---\nname: museum-guide\ndescription: A practical museum visit guide.\n---\n\n# Museum guide\n";
 const EDITED_SKILL = SKILL.replace("# Museum guide", "# Museum guide\n\nEdited candidate marker");
+const SECOND_EDITED_SKILL = SKILL.replace("# Museum guide", "# Museum guide\n\nSecond candidate marker");
 const COMMIT = "1".repeat(40);
 const EMPTY_SNAPSHOT: SkillCatalogSnapshot = {
   generation: 41,
@@ -103,7 +104,7 @@ class FakeSkillService {
   subscribe(): () => void { return () => {}; }
   close(): void { this.closeCount += 1; }
   list(options: { archived?: boolean } = {}): ManagedSkillSummary[] {
-    if (options.archived !== Boolean(this.current.archivedAt)) return [];
+    if (Boolean(options.archived) !== Boolean(this.current.archivedAt)) return [];
     return [summary(this.current)];
   }
   get(): ManagedSkillDetail { return structuredClone(this.current); }
@@ -290,6 +291,53 @@ describe("admin Skill HTTP", () => {
     expect(JSON.stringify(body)).not.toContain("package_relative_path");
   });
 
+  it("reports an active plus candidate Skill as candidate even while globally disabled", async () => {
+    const skills = new FakeSkillService();
+    const activeVersion = version({
+      id: "version-active",
+      versionNumber: 1,
+      state: "active",
+      activatedAt: "2026-08-22T00:30:00.000Z",
+    });
+    const candidateVersion = version({
+      id: "version-candidate",
+      versionNumber: 2,
+      state: "candidate",
+      content: EDITED_SKILL,
+    });
+    skills.current = detail({
+      enabled: false,
+      agentIds: ["segment-planner"],
+      activeVersion,
+      candidateVersion,
+      versions: [activeVersion, candidateVersion],
+    });
+    const value = runtime({ skillService: skills });
+
+    const detailBody = await responseJson(await jsonRequest(
+      value,
+      "GET",
+      "/api/admin/skills/skill-1",
+      undefined,
+      ADMIN,
+    ));
+    expect(detailBody.skill).toEqual(expect.objectContaining({
+      state: "candidate",
+      enabled: false,
+      agent_ids: ["segment-planner"],
+    }));
+
+    const filtered = await responseJson(await jsonRequest(
+      value,
+      "GET",
+      "/api/admin/skills?state=candidate",
+      undefined,
+      ADMIN,
+    ));
+    expect(filtered.items.map((item: Record<string, unknown>) => item.id)).toEqual(["skill-1"]);
+    expect(filtered.items[0].agent_ids).toEqual(["segment-planner"]);
+  });
+
   it("stages a ZIP as a disabled candidate and applies lifecycle changes explicitly", async () => {
     const value = runtime();
     const stagedResponse = await multipartRequest(value, "/api/admin/skills/upload", validUpload(), ADMIN);
@@ -319,6 +367,19 @@ describe("admin Skill HTTP", () => {
       active_version: expect.objectContaining({ content: SKILL }),
     }));
 
+    const repeatedActivation = await jsonRequest(
+      value,
+      "POST",
+      `/api/admin/skills/${id}/activate`,
+      { enabled: true, agent_ids: ["segment-planner"] },
+      ADMIN,
+    );
+    expect(repeatedActivation.status).toBe(409);
+    expect(await responseJson(repeatedActivation)).toEqual({
+      detail: "技能候选版本不存在或已被激活",
+      code: "skill_version_conflict",
+    });
+
     const edited = await responseJson(await jsonRequest(
       value,
       "PUT",
@@ -338,7 +399,49 @@ describe("admin Skill HTTP", () => {
       ADMIN,
     ));
     expect(disabled.skill.enabled).toBe(false);
+    expect(disabled.skill.state).toBe("candidate");
     expect(disabled.skill.agent_ids).toEqual(["segment-planner"]);
+
+    const candidateList = await responseJson(await jsonRequest(
+      value,
+      "GET",
+      "/api/admin/skills?state=candidate",
+      undefined,
+      ADMIN,
+    ));
+    expect(candidateList.items).toContainEqual(expect.objectContaining({
+      id,
+      state: "candidate",
+      enabled: false,
+      agent_ids: ["segment-planner"],
+    }));
+
+    const secondActivation = await responseJson(await jsonRequest(
+      value,
+      "POST",
+      `/api/admin/skills/${id}/activate`,
+      { enabled: false, agent_ids: ["segment-planner"] },
+      ADMIN,
+    ));
+    expect(secondActivation.skill.versions.map((item: Record<string, unknown>) => item.version_number))
+      .toEqual([1, 2]);
+
+    const nextCandidate = await responseJson(await jsonRequest(
+      value,
+      "PUT",
+      `/api/admin/skills/${id}/candidate`,
+      { content: SECOND_EDITED_SKILL },
+      ADMIN,
+    ));
+    expect(nextCandidate.skill).toEqual(expect.objectContaining({
+      state: "candidate",
+      enabled: false,
+      agent_ids: ["segment-planner"],
+    }));
+    expect(nextCandidate.skill.versions.map((item: Record<string, unknown>) => item.version_number))
+      .toEqual([1, 2, 3]);
+    expect(nextCandidate.skill.versions.map((item: Record<string, unknown>) => item.state))
+      .toEqual(["superseded", "active", "candidate"]);
 
     const archived = await responseJson(await jsonRequest(
       value,
@@ -358,6 +461,13 @@ describe("admin Skill HTTP", () => {
       ADMIN,
     ));
     expect(archivedList.items.some((item: Record<string, unknown>) => item.id === id)).toBe(true);
+    expect(archivedList.items.map((item: Record<string, unknown>) => item.name)).toEqual([
+      "budget-control",
+      "family-accessibility",
+      "museum-guide",
+      "plan-editing",
+      "trip-planning",
+    ]);
 
     const restored = await responseJson(await jsonRequest(
       value,
@@ -367,7 +477,7 @@ describe("admin Skill HTTP", () => {
       ADMIN,
     ));
     expect(restored.skill).toEqual(expect.objectContaining({
-      state: "disabled",
+      state: "candidate",
       enabled: false,
       archived_at: null,
     }));
@@ -408,6 +518,64 @@ describe("admin Skill HTTP", () => {
       changed: false,
       skill: expect.objectContaining({ id: "skill-1" }),
     }));
+  });
+
+  it("canonicalizes valid integrity fields and rejects tainted required hashes safely", async () => {
+    const taint = "Bearer private-token /private/staging/package";
+    const skills = new FakeSkillService();
+    const safeHashVersion = version({
+      versionNumber: 2,
+      sha256: "A".repeat(64),
+      sourceCommit: taint,
+    });
+    const activeVersion = version({
+      id: "version-active",
+      state: "active",
+      sourceCommit: "B".repeat(64),
+    });
+    skills.current = detail({
+      activeVersion,
+      candidateVersion: safeHashVersion,
+      versions: [activeVersion, safeHashVersion],
+    });
+    const value = runtime({ skillService: skills });
+
+    const safeResponse = await jsonRequest(
+      value,
+      "GET",
+      "/api/admin/skills/skill-1",
+      undefined,
+      ADMIN,
+    );
+    expect(safeResponse.status).toBe(200);
+    const safeBody = await responseJson(safeResponse);
+    expect(safeBody.skill.candidate_version.sha256).toBe("a".repeat(64));
+    expect(safeBody.skill.candidate_version.source_commit).toBeNull();
+    expect(safeBody.skill.active_version.source_commit).toBe("b".repeat(64));
+    expect(JSON.stringify(safeBody)).not.toContain(taint);
+
+    const taintedHashVersion = version({
+      sha256: taint,
+      sourceCommit: "B".repeat(40),
+    });
+    skills.current = detail({
+      candidateVersion: taintedHashVersion,
+      versions: [taintedHashVersion],
+    });
+    const rejected = await jsonRequest(
+      value,
+      "GET",
+      "/api/admin/skills/skill-1",
+      undefined,
+      ADMIN,
+    );
+    expect(rejected.status).toBe(500);
+    const rejectedBody = await responseJson(rejected);
+    expect(rejectedBody).toEqual({
+      detail: "技能管理服务暂时不可用",
+      code: "internal_error",
+    });
+    expect(JSON.stringify(rejectedBody)).not.toContain(taint);
   });
 
   it("rejects built-in edits, archives, and restores below the HTTP boundary", async () => {
@@ -463,6 +631,17 @@ describe("admin Skill HTTP", () => {
 
   it("accepts only one multipart file and returns stable assignment validation errors", async () => {
     const value = runtime();
+    const oversizedUpload = new FormData();
+    oversizedUpload.set("file", new File([
+      new Uint8Array((12 * 1024 * 1024) + 1),
+    ], "oversized.zip", { type: "application/zip" }));
+    const oversized = await multipartRequest(value, "/api/admin/skills/upload", oversizedUpload, ADMIN);
+    expect(oversized.status).toBe(413);
+    expect(await responseJson(oversized)).toEqual({
+      detail: "技能包超出大小或文件数限制",
+      code: "skill_package_too_large",
+    });
+
     const upload = validUpload();
     upload.set("metadata", "must-not-be-accepted");
     const extraField = await multipartRequest(value, "/api/admin/skills/upload", upload, ADMIN);

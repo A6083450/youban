@@ -1,4 +1,22 @@
 import type { ParentSessionPoolSnapshot } from "../agents/persistent-parent-agent.ts";
+import { MAX_PRODUCTION_REQUEST_BODY_BYTES } from "../http/admin-skill-limits.ts";
+
+export interface ProductionHttpListenOptions {
+  hostname: string;
+  port: number;
+}
+
+export function listenProductionHttpServer<TServer>(
+  app: {
+    listen(options: ProductionHttpListenOptions & { maxRequestBodySize: number }): TServer;
+  },
+  options: ProductionHttpListenOptions,
+): TServer {
+  return app.listen({
+    ...options,
+    maxRequestBodySize: MAX_PRODUCTION_REQUEST_BODY_BYTES,
+  });
+}
 
 export interface MemoryPressureProcess {
   on(event: "memoryPressure", listener: (level: unknown) => void): unknown;

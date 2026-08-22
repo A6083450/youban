@@ -7,6 +7,12 @@ import type {
   ParentAgentScope,
   YoubanParentAgent,
 } from "../src/agents/persistent-parent-agent.ts";
+import {
+  createDefaultTripChatService,
+  type DefaultTripChatServiceOptions,
+} from "../src/agents/default-trip-chat-service.ts";
+import type { DefaultParentAgentOptions } from "../src/agents/default-parent-agent.ts";
+import type { DefaultTripPlannerOptions } from "../src/agents/default-trip-planner.ts";
 import type { StructuredAgentRequest } from "../src/agents/pi-trip-planner.ts";
 import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
 import { _resetSettingsForTest, getSettings } from "../src/config/settings.ts";
@@ -202,5 +208,60 @@ describe("admin HTTP", () => {
     expect(skillService.closeCount).toBe(0);
     await runtime.close();
     expect(skillService.closeCount).toBe(0);
+  });
+
+  it("threads one Skill catalog and diagnostics object through initial and replacement factories", async () => {
+    await runtime.close();
+    const observed: Array<{
+      kind: "parent" | "planner" | "chat";
+      catalog: unknown;
+      diagnostics: unknown;
+    }> = [];
+    runtime = createHttpRuntime({
+      dataDir,
+      serviceFactories: {
+        parentAgent(options: DefaultParentAgentOptions) {
+          observed.push({
+            kind: "parent",
+            catalog: options.skillCatalog,
+            diagnostics: options.skillRuntimeDiagnostics,
+          });
+          return new ClosableParent();
+        },
+        planner(options: DefaultTripPlannerOptions) {
+          observed.push({
+            kind: "planner",
+            catalog: options.skillCatalog,
+            diagnostics: options.skillRuntimeDiagnostics,
+          });
+          return new NoopPlanner();
+        },
+        chatService(options: DefaultTripChatServiceOptions) {
+          observed.push({
+            kind: "chat",
+            catalog: options.skillCatalog,
+            diagnostics: options.skillRuntimeDiagnostics,
+          });
+          return createDefaultTripChatService(options);
+        },
+      },
+    });
+
+    expect((await call("PUT", "/api/admin/settings", {
+      openai_model: "factory-threading-model",
+    }, "admin@123")).status).toBe(200);
+
+    expect(observed.map((entry) => entry.kind)).toEqual([
+      "parent",
+      "planner",
+      "chat",
+      "parent",
+      "planner",
+      "chat",
+    ]);
+    for (const entry of observed) {
+      expect(entry.catalog).toBe(runtime.skills);
+      expect(entry.diagnostics).toBe(runtime.skillRuntimeDiagnostics);
+    }
   });
 });

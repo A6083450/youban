@@ -365,6 +365,27 @@ describe("SkillManagementService lifecycle", () => {
     expect(events[2] - events[1]).toBe(1);
   });
 
+  it("preserves a stable version conflict when activation has no pending candidate", async () => {
+    const { service } = createHarness();
+    const installed = await service.stageUpload({ filename: "museum.zip", bytes: uploadBytes() });
+    const active = service.activate(installed.id, {
+      enabled: true,
+      agentIds: ["segment-planner"],
+    });
+
+    expectManagementCode(() => service.activate(installed.id, {
+      enabled: false,
+      agentIds: ["summary"],
+    }), "skill_version_conflict");
+
+    const unchanged = service.get(installed.id);
+    expect(unchanged.generation).toBe(active.generation);
+    expect(unchanged.enabled).toBe(true);
+    expect(unchanged.agentIds).toEqual(["segment-planner"]);
+    expect(unchanged.activeVersion?.id).toBe(active.activeVersion?.id);
+    expect(unchanged.candidateVersion).toBeUndefined();
+  });
+
   it("allows built-in configuration but rejects edit, archive, and restore", async () => {
     const { service } = createHarness();
     const builtin = service.list().find((skill) => skill.name === "trip-planning")!;

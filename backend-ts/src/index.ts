@@ -2,7 +2,11 @@ import { join } from "node:path";
 import { getDataDir, getRepoRoot } from "./config/paths.ts";
 import { getSettings, validateConfig } from "./config/settings.ts";
 import { createHttpRuntime } from "./http/app.ts";
-import { installMemoryPressureHandler, shutdownServer } from "./runtime/server-lifecycle.ts";
+import {
+  installMemoryPressureHandler,
+  listenProductionHttpServer,
+  shutdownServer,
+} from "./runtime/server-lifecycle.ts";
 
 export const runtime = createHttpRuntime({
   dataDir: getDataDir(),
@@ -19,7 +23,7 @@ if (import.meta.main) {
       console.log(`  - ${warning}`);
     }
   }
-  const server = app.listen({ hostname: settings.host, port: settings.port });
+  const server = listenProductionHttpServer(app, { hostname: settings.host, port: settings.port });
   console.log(
     `${settings.app_name} v${settings.app_version} 已启动: http://${settings.host}:${settings.port}`,
   );

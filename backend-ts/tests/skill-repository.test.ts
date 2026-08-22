@@ -161,6 +161,32 @@ describe("SkillCatalogRepository", () => {
     }
   });
 
+  it("reports a repeated activation as a version conflict without changing active state", () => {
+    const { database, repository } = createRepository();
+    try {
+      const skill = repository.createCustomSkill(candidate("museum-guide", "first"));
+      const active = repository.activate(skill.id, {
+        enabled: true,
+        agentIds: ["segment-planner"],
+      });
+
+      expect(() => repository.activate(skill.id, {
+        enabled: false,
+        agentIds: ["summary"],
+      })).toThrowError(expect.objectContaining({ code: "skill_version_conflict" }));
+
+      const unchanged = repository.get(skill.id)!;
+      expect(unchanged.generation).toBe(active.generation);
+      expect(unchanged.enabled).toBe(true);
+      expect(unchanged.agentIds).toEqual(["segment-planner"]);
+      expect(unchanged.activeVersion?.id).toBe(active.activeVersion?.id);
+      expect(unchanged.candidateVersion).toBeUndefined();
+      expect(unchanged.versions.map((item) => item.state)).toEqual(["active"]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("rolls back activation when a replacement assignment fails", () => {
     const { database, repository } = createRepository();
     try {

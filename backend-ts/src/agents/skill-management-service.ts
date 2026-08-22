@@ -14,7 +14,7 @@ import {
   type StagedSkillPackage,
 } from "./skill-package-store.ts";
 import { loadBuiltinSkillDefinitions } from "./skill-registry.ts";
-import { SkillCatalogRepository } from "./skill-repository.ts";
+import { SkillCatalogRepository, SkillVersionConflictError } from "./skill-repository.ts";
 import type {
   CandidateWrite,
   ManagedSkill,
@@ -59,6 +59,7 @@ export type SkillManagementErrorCode =
   | "package_commit_failed"
   | "package_compensation_failed"
   | "candidate_write_failed"
+  | "skill_version_conflict"
   | "skill_activation_failed"
   | "skill_configuration_failed"
   | "skill_archive_failed"
@@ -376,8 +377,11 @@ export class SkillManagementService implements SkillCatalogProvider {
         return skill;
       });
     } catch (error) {
-      this.appendFailureAudit(skillId, "skill_activated", error);
-      if (error instanceof SkillManagementError) throw error;
+      const failure = error instanceof SkillVersionConflictError
+        ? managementError("skill_version_conflict", "skill has no pending candidate version")
+        : error;
+      this.appendFailureAudit(skillId, "skill_activated", failure);
+      if (failure instanceof SkillManagementError) throw failure;
       throw managementError("skill_activation_failed", "skill activation failed");
     }
     this.refreshAfterCommit();

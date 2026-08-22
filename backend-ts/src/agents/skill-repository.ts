@@ -85,6 +85,15 @@ function toVersion(row: SkillVersionRow): SkillVersion {
   };
 }
 
+export class SkillVersionConflictError extends Error {
+  readonly code = "skill_version_conflict";
+
+  constructor() {
+    super("skill has no pending candidate version");
+    this.name = "SkillVersionConflictError";
+  }
+}
+
 export class SkillCatalogRepository {
   constructor(private readonly database: YoubanDatabase) {}
 
@@ -245,9 +254,9 @@ export class SkillCatalogRepository {
     const agentIds = this.normalizeAgentIds(input.agentIds);
     this.transaction(() => {
       const skill = this.requireSkillRow(skillId);
-      if (!skill.candidate_version_id) throw new Error(`skill has no candidate version: ${skillId}`);
+      if (!skill.candidate_version_id) throw new SkillVersionConflictError();
       const candidate = this.versionRow(skill.candidate_version_id);
-      if (!candidate) throw new Error(`candidate version is missing: ${skill.candidate_version_id}`);
+      if (!candidate) throw new SkillVersionConflictError();
       const activatedAt = nowIso();
       if (skill.active_version_id) {
         this.database.raw.query(

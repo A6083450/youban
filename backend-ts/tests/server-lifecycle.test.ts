@@ -9,14 +9,25 @@ import type {
   ParentSessionPoolSnapshot,
   YoubanParentAgent,
 } from "../src/agents/persistent-parent-agent.ts";
+import type { DefaultParentAgentOptions } from "../src/agents/default-parent-agent.ts";
+import type { DefaultTripPlannerOptions } from "../src/agents/default-trip-planner.ts";
+import type { DefaultTripChatServiceOptions } from "../src/agents/default-trip-chat-service.ts";
 import type { LlmCallOptions, LlmClient } from "../src/agents/llm/providers.ts";
 import type { StructuredAgentRequest } from "../src/agents/pi-trip-planner.ts";
+import { SkillManagementService } from "../src/agents/skill-management-service.ts";
 import { TripAssistant } from "../src/agents/trip-assistant.ts";
+import { TripChatService } from "../src/agents/trip-chat-service.ts";
+import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
 import { ConfirmationLedger } from "../src/domain/confirmation.ts";
-import { createTaskState } from "../src/domain/task-store.ts";
+import { ConversationRepository } from "../src/domain/conversations.ts";
+import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
+import { createTaskState, SqliteTaskStore } from "../src/domain/task-store.ts";
+import { SqliteUserRepository } from "../src/domain/users.ts";
+import type { AdminSkillService } from "../src/http/admin-skills.ts";
 import { createHttpRuntime } from "../src/http/app.ts";
 import {
   installMemoryPressureHandler,
+  listenProductionHttpServer,
   shutdownServer,
   type MemoryPressureProcess,
 } from "../src/runtime/server-lifecycle.ts";
@@ -63,6 +74,48 @@ class HangingLlm implements LlmClient {
   }
 }
 
+class ClosablePlanner implements TripPlanner {
+  closeCount = 0;
+
+  constructor(private readonly onClose: () => void | Promise<void> = () => {}) {}
+
+  async plan(request: TripPlanningRequest, _context: PlannerRunContext) {
+    return { success: true, data: request };
+  }
+
+  close(): void | Promise<void> {
+    this.closeCount += 1;
+    return this.onClose();
+  }
+}
+
+function observeConstructionStoreCloses() {
+  const counts = { tasks: 0, users: 0, conversations: 0 };
+  const taskClose = SqliteTaskStore.prototype.close;
+  const userClose = SqliteUserRepository.prototype.close;
+  const conversationClose = ConversationRepository.prototype.close;
+  SqliteTaskStore.prototype.close = function closeObservedTaskStore() {
+    counts.tasks += 1;
+    return taskClose.call(this);
+  };
+  SqliteUserRepository.prototype.close = function closeObservedUserStore() {
+    counts.users += 1;
+    return userClose.call(this);
+  };
+  ConversationRepository.prototype.close = function closeObservedConversationStore() {
+    counts.conversations += 1;
+    return conversationClose.call(this);
+  };
+  return {
+    counts,
+    restore() {
+      SqliteTaskStore.prototype.close = taskClose;
+      SqliteUserRepository.prototype.close = userClose;
+      ConversationRepository.prototype.close = conversationClose;
+    },
+  };
+}
+
 async function flushAsyncWork(): Promise<void> {
   await Bun.sleep(0);
 }
@@ -76,6 +129,221 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<v
 }
 
 describe("Bun server lifecycle", () => {
+  it("supplies a bounded production request body limit with multipart envelope room", () => {
+    let received: {
+      hostname: string;
+      port: number;
+      maxRequestBodySize: number;
+    } | undefined;
+    const marker = { stop() {} };
+    const result = listenProductionHttpServer({
+      listen(options) {
+        received = options;
+        return marker;
+      },
+    }, { hostname: "127.0.0.1", port: 8000 });
+
+    expect(result).toBe(marker);
+    expect(received).toEqual({
+      hostname: "127.0.0.1",
+      port: 8000,
+      maxRequestBodySize: 13 * 1024 * 1024,
+    });
+  });
+
+  it("closes owned stores and Skills exactly once when the initial parent factory throws", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-construction-parent-failure-"));
+    const stores = observeConstructionStoreCloses();
+    let ownedSkills: AdminSkillService | undefined;
+    let skillCloseCount = 0;
+    try {
+      expect(() => createHttpRuntime({
+        dataDir,
+        serviceFactories: {
+          parentAgent(options: DefaultParentAgentOptions) {
+            ownedSkills = options.skillCatalog as AdminSkillService;
+            const close = ownedSkills.close.bind(ownedSkills);
+            ownedSkills.close = () => {
+              skillCloseCount += 1;
+              close();
+            };
+            throw new Error("initial parent factory failed");
+          },
+        },
+      })).toThrow("initial parent factory failed");
+
+      await waitUntil(() => skillCloseCount === 1);
+      expect(stores.counts).toEqual({ tasks: 1, users: 1, conversations: 1 });
+      expect(() => ownedSkills!.list()).toThrowError(expect.objectContaining({ code: "skill_service_closed" }));
+      await flushAsyncWork();
+      expect(skillCloseCount).toBe(1);
+      expect(stores.counts).toEqual({ tasks: 1, users: 1, conversations: 1 });
+    } finally {
+      stores.restore();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("settles generated agents before closing owned Skills when chat construction fails", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-construction-chat-failure-"));
+    const stores = observeConstructionStoreCloses();
+    const order: string[] = [];
+    let skillCloseCount = 0;
+    let catalog: AdminSkillService | undefined;
+    let diagnostics: DefaultParentAgentOptions["skillRuntimeDiagnostics"];
+    let parentCloseCount = 0;
+    let plannerCloseCount = 0;
+    const parent = new ReleasableParent();
+    parent.close = async () => {
+      parentCloseCount += 1;
+      order.push("parent:start");
+      await Bun.sleep(0);
+      order.push("parent:end");
+      throw new Error("generated parent close failed");
+    };
+    const planner = new ClosablePlanner(async () => {
+      order.push("planner:start");
+      await Bun.sleep(0);
+      order.push("planner:end");
+    });
+    try {
+      expect(() => createHttpRuntime({
+        dataDir,
+        serviceFactories: {
+          parentAgent(options: DefaultParentAgentOptions) {
+            catalog = options.skillCatalog as AdminSkillService;
+            diagnostics = options.skillRuntimeDiagnostics;
+            const close = catalog.close.bind(catalog);
+            catalog.close = () => {
+              skillCloseCount += 1;
+              order.push("skills");
+              close();
+            };
+            return parent;
+          },
+          planner(options: DefaultTripPlannerOptions) {
+            expect(options.skillCatalog).toBe(catalog);
+            expect(options.skillRuntimeDiagnostics).toBe(diagnostics);
+            return planner;
+          },
+          chatService(options: DefaultTripChatServiceOptions) {
+            expect(options.skillCatalog).toBe(catalog);
+            expect(options.skillRuntimeDiagnostics).toBe(diagnostics);
+            throw new Error("initial chat factory failed");
+          },
+        },
+      })).toThrow("initial chat factory failed");
+
+      await waitUntil(() => skillCloseCount === 1);
+      expect(parentCloseCount).toBe(1);
+      plannerCloseCount = planner.closeCount;
+      expect(plannerCloseCount).toBe(1);
+      expect(order.indexOf("parent:end")).toBeLessThan(order.indexOf("skills"));
+      expect(order.indexOf("planner:end")).toBeLessThan(order.indexOf("skills"));
+      expect(stores.counts).toEqual({ tasks: 1, users: 1, conversations: 1 });
+      await flushAsyncWork();
+      expect(skillCloseCount).toBe(1);
+    } finally {
+      stores.restore();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not close injected services when a later initial factory throws", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-construction-borrowed-failure-"));
+    const skillRoot = mkdtempSync(join(tmpdir(), "youban-construction-borrowed-skill-"));
+    const skillService = new SkillManagementService({
+      databasePath: join(skillRoot, "youban.db"),
+      dataDir: join(skillRoot, "skills"),
+      builtinSkillsDir: join(import.meta.dir, "../src/agents/skills"),
+    });
+    let skillCloseCount = 0;
+    const originalSkillClose = skillService.close.bind(skillService);
+    skillService.close = () => {
+      skillCloseCount += 1;
+      originalSkillClose();
+    };
+    const parent = new ReleasableParent();
+    let parentCloseCount = 0;
+    parent.close = async () => { parentCloseCount += 1; };
+    const planner = new ClosablePlanner();
+    const chat = new TripChatService({ llm: new HangingLlm(), mode: "simple", parentAgent: parent });
+    let chatCloseCount = 0;
+    chat.close = () => { chatCloseCount += 1; };
+    let unexpectedRuntime: ReturnType<typeof createHttpRuntime> | undefined;
+    try {
+      let constructionError: unknown;
+      try {
+        unexpectedRuntime = createHttpRuntime({
+          dataDir,
+          skillService,
+          parentAgent: parent,
+          planner,
+          chatService: chat,
+          serviceFactories: {
+            poiSearch() { throw new Error("initial poi factory failed"); },
+          },
+        });
+      } catch (error) {
+        constructionError = error;
+      }
+      expect(constructionError).toEqual(expect.objectContaining({ message: "initial poi factory failed" }));
+      await flushAsyncWork();
+      expect(skillCloseCount).toBe(0);
+      expect(parentCloseCount).toBe(0);
+      expect(planner.closeCount).toBe(0);
+      expect(chatCloseCount).toBe(0);
+    } finally {
+      await unexpectedRuntime?.close();
+      originalSkillClose();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(skillRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not close injected services during normal runtime shutdown", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-shutdown-borrowed-"));
+    const skillRoot = mkdtempSync(join(tmpdir(), "youban-shutdown-borrowed-skill-"));
+    const skillService = new SkillManagementService({
+      databasePath: join(skillRoot, "youban.db"),
+      dataDir: join(skillRoot, "skills"),
+      builtinSkillsDir: join(import.meta.dir, "../src/agents/skills"),
+    });
+    let skillCloseCount = 0;
+    const originalSkillClose = skillService.close.bind(skillService);
+    skillService.close = () => {
+      skillCloseCount += 1;
+      originalSkillClose();
+    };
+    const parent = new ReleasableParent();
+    let parentCloseCount = 0;
+    parent.close = async () => { parentCloseCount += 1; };
+    const planner = new ClosablePlanner();
+    const chat = new TripChatService({ llm: new HangingLlm(), mode: "simple", parentAgent: parent });
+    let chatCloseCount = 0;
+    chat.close = () => { chatCloseCount += 1; };
+    let runtime: ReturnType<typeof createHttpRuntime> | undefined;
+    try {
+      runtime = createHttpRuntime({
+        dataDir,
+        skillService,
+        parentAgent: parent,
+        planner,
+        chatService: chat,
+      });
+      await runtime.close();
+      expect(skillCloseCount).toBe(0);
+      expect(parentCloseCount).toBe(0);
+      expect(planner.closeCount).toBe(0);
+      expect(chatCloseCount).toBe(0);
+    } finally {
+      await runtime?.close();
+      originalSkillClose();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(skillRoot, { recursive: true, force: true });
+    }
+  });
+
   it("releases idle runtime resources on memory pressure and removes its listener", async () => {
     const processRef = new EventEmitter() as MemoryPressureProcess & EventEmitter;
     const calls: string[] = [];
