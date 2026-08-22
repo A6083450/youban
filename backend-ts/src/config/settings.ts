@@ -23,6 +23,8 @@ export interface RuntimeSettings {
   trip_review_enabled: boolean; // 默认 true
   trip_planner_timeout: number; // 默认 120（秒）
   trip_duplicate_repair_rounds: number; // 默认 2
+  pi_parent_session_limit: number; // 默认 64
+  pi_parent_session_idle_seconds: number; // 默认 1800
   llm_api_style: "responses" | "completions"; // 默认 "responses"
   chat_edit_agent: "pi" | "simple"; // 默认 "pi"
 }
@@ -55,7 +57,14 @@ const RUNTIME_NUMBER_KEYS = [
   "trip_segment_concurrency",
   "trip_planner_timeout",
   "trip_duplicate_repair_rounds",
+  "pi_parent_session_limit",
+  "pi_parent_session_idle_seconds",
 ] as const;
+
+const RUNTIME_NUMBER_RANGES = {
+  pi_parent_session_limit: { min: 1, max: 1024, fallback: 64 },
+  pi_parent_session_idle_seconds: { min: 60, max: 86400, fallback: 1800 },
+} as const;
 
 const RUNTIME_BOOLEAN_KEYS = ["trip_review_enabled"] as const;
 
@@ -89,6 +98,18 @@ function readEnvInt(fallback: number, ...names: string[]): number {
   if (raw === undefined) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function readEnvBoundedInt(
+  name: string,
+  bounds: { min: number; max: number; fallback: number },
+): number {
+  const raw = readEnv(name);
+  if (raw === undefined) return bounds.fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= bounds.min && value <= bounds.max
+    ? value
+    : bounds.fallback;
 }
 
 function readEnvBool(name: string, fallback: boolean): boolean {
@@ -130,6 +151,11 @@ function isValidRuntimeValue(key: RuntimeKey, value: unknown): boolean {
     return typeof value === "string";
   }
   if ((RUNTIME_NUMBER_KEYS as readonly string[]).includes(key)) {
+    if (key in RUNTIME_NUMBER_RANGES) {
+      const range = RUNTIME_NUMBER_RANGES[key as keyof typeof RUNTIME_NUMBER_RANGES];
+      return typeof value === "number" && Number.isInteger(value)
+        && value >= range.min && value <= range.max;
+    }
     return typeof value === "number" && Number.isFinite(value);
   }
   if ((RUNTIME_BOOLEAN_KEYS as readonly string[]).includes(key)) {
@@ -241,6 +267,14 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
     trip_review_enabled: readEnvBool("TRIP_REVIEW_ENABLED", true),
     trip_planner_timeout: readEnvInt(120, "TRIP_PLANNER_TIMEOUT"),
     trip_duplicate_repair_rounds: readEnvInt(2, "TRIP_DUPLICATE_REPAIR_ROUNDS"),
+    pi_parent_session_limit: readEnvBoundedInt(
+      "PI_PARENT_SESSION_LIMIT",
+      RUNTIME_NUMBER_RANGES.pi_parent_session_limit,
+    ),
+    pi_parent_session_idle_seconds: readEnvBoundedInt(
+      "PI_PARENT_SESSION_IDLE_SECONDS",
+      RUNTIME_NUMBER_RANGES.pi_parent_session_idle_seconds,
+    ),
     llm_api_style: readEnvEnum("LLM_API_STYLE", RUNTIME_ENUM_VALUES.llm_api_style, "responses"),
     chat_edit_agent: readEnvEnum("CHAT_EDIT_AGENT", RUNTIME_ENUM_VALUES.chat_edit_agent, "pi"),
     llm_timeout: readEnvInt(60, "LLM_TIMEOUT"),

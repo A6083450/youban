@@ -52,6 +52,8 @@ const ENV_KEYS = [
   "TRIP_DUPLICATE_REPAIR_ROUNDS",
   "LLM_API_STYLE",
   "CHAT_EDIT_AGENT",
+  "PI_PARENT_SESSION_LIMIT",
+  "PI_PARENT_SESSION_IDLE_SECONDS",
 ];
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -152,6 +154,34 @@ describe("settings: env 读取", () => {
     expect(settings.llm_api_style).toBe("responses");
     expect(settings.chat_edit_agent).toBe("pi");
     expect(settings.llm_timeout).toBe(60);
+    expect(settings.pi_parent_session_limit).toBe(64);
+    expect(settings.pi_parent_session_idle_seconds).toBe(1800);
+  });
+
+  it("读取父 Agent 会话池的有界环境变量", () => {
+    process.env.PI_PARENT_SESSION_LIMIT = "8";
+    process.env.PI_PARENT_SESSION_IDLE_SECONDS = "120";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    const settings = getSettings();
+
+    expect(settings.pi_parent_session_limit).toBe(8);
+    expect(settings.pi_parent_session_idle_seconds).toBe(120);
+  });
+
+  it("忽略越界的父 Agent 会话池环境变量和运行时覆盖", () => {
+    process.env.PI_PARENT_SESSION_LIMIT = "2048";
+    process.env.PI_PARENT_SESSION_IDLE_SECONDS = "59";
+    writeRuntimeFile(caseDir, {
+      pi_parent_session_limit: 0,
+      pi_parent_session_idle_seconds: 86401,
+    });
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    const settings = getSettings();
+
+    expect(settings.pi_parent_session_limit).toBe(64);
+    expect(settings.pi_parent_session_idle_seconds).toBe(1800);
   });
 
   it("已移除的 FlyAI 环境变量不会重新进入服务配置面", () => {

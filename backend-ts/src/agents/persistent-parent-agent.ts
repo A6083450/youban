@@ -34,6 +34,8 @@ interface PersistentParentAgentOptions {
   subagentModel: string;
   apiKey?: string;
   timeoutMs?: number;
+  sessionLimit?: number;
+  sessionIdleMs?: number;
   toolsForScope?: (scope: ParentAgentScope) => ToolDefinition[];
 }
 
