@@ -295,6 +295,7 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
 let settingsCache: AppSettings | null = null;
 let runtimeOverrides: Partial<RuntimeSettings> = {};
 let overridesLoaded = false;
+let settingsRevision = 0;
 const resetListeners: Array<() => void> = [];
 
 function ensureLoaded(): void {
@@ -311,11 +312,18 @@ export function getSettings(): AppSettings {
   return settingsCache;
 }
 
-/** 更新运行时配置：过滤非法键→持久化→应用→触发重置监听器；返回最新 settings。 */
-export function updateRuntimeSettings(
+export interface PreparedRuntimeSettings {
+  settings: AppSettings;
+  commit(): AppSettings;
+}
+
+/** 准备候选配置但不改变文件或全局配置；调用 commit 后才原子生效。 */
+export function prepareRuntimeSettings(
   partial: Partial<RuntimeSettings>,
-): AppSettings {
+): PreparedRuntimeSettings {
   ensureLoaded();
+  const baseRevision = settingsRevision;
+  const nextOverrides = { ...runtimeOverrides };
   for (const [key, value] of Object.entries(partial)) {
     if (!isRuntimeKey(key) || !isValidRuntimeValue(key, value)) {
       console.warn(`⚠️  忽略非法运行时配置项: ${key}`);
@@ -323,21 +331,42 @@ export function updateRuntimeSettings(
     }
     if (!isEffectiveOverride(value)) {
       // 空字符串 = 移除该键的覆盖，回退 env/默认值
-      delete (runtimeOverrides as Record<string, unknown>)[key];
+      delete (nextOverrides as Record<string, unknown>)[key];
     } else {
-      (runtimeOverrides as Record<string, unknown>)[key] = value;
+      (nextOverrides as Record<string, unknown>)[key] = value;
     }
   }
-  persistOverrides(runtimeOverrides);
-  settingsCache = buildSettings(runtimeOverrides);
-  for (const listener of resetListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.warn(`⚠️  配置重置监听器执行失败: ${error}`);
-    }
-  }
-  return settingsCache;
+  const candidate = buildSettings(nextOverrides);
+  let committed = false;
+  return {
+    settings: candidate,
+    commit() {
+      if (committed) return candidate;
+      if (settingsRevision !== baseRevision) {
+        throw new Error("运行时配置已被其他更新修改，请重试");
+      }
+      persistOverrides(nextOverrides);
+      runtimeOverrides = nextOverrides;
+      settingsCache = candidate;
+      settingsRevision += 1;
+      committed = true;
+      for (const listener of resetListeners) {
+        try {
+          listener();
+        } catch (error) {
+          console.warn(`⚠️  配置重置监听器执行失败: ${error}`);
+        }
+      }
+      return candidate;
+    },
+  };
+}
+
+/** 更新运行时配置：过滤非法键→持久化→应用→触发重置监听器；返回最新 settings。 */
+export function updateRuntimeSettings(
+  partial: Partial<RuntimeSettings>,
+): AppSettings {
+  return prepareRuntimeSettings(partial).commit();
 }
 
 /** 注册热更新监听（如 resetModels），在 updateRuntimeSettings 应用后依次调用。 */
@@ -369,6 +398,7 @@ export function _resetSettingsForTest(options?: {
   settingsCache = null;
   runtimeOverrides = {};
   overridesLoaded = false;
+  settingsRevision = 0;
   resetListeners.length = 0;
   legacyRuntimeFileOverride = undefined;
   _resetDataDirCacheForTest();

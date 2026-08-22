@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
@@ -8,7 +8,7 @@ import { createDefaultTripChatService } from "../agents/default-trip-chat-servic
 import { createDefaultParentAgent } from "../agents/default-parent-agent.ts";
 import { createDefaultTripPlanner } from "../agents/default-trip-planner.ts";
 import { TripAssistant } from "../agents/trip-assistant.ts";
-import { getPiLlmClient } from "../agents/llm/providers.ts";
+import { createPiLlmClient, getPiLlmClient } from "../agents/llm/providers.ts";
 import type { TripPlanner } from "../agents/trip-planner.ts";
 import {
   planRevision,
@@ -17,7 +17,12 @@ import {
   UnsafePlanPatchError,
 } from "../agents/trip-chat-service.ts";
 import { getRepoRoot } from "../config/paths.ts";
-import { getSettings, updateRuntimeSettings, type RuntimeSettings } from "../config/settings.ts";
+import {
+  getSettings,
+  prepareRuntimeSettings,
+  type AppSettings,
+  type RuntimeSettings,
+} from "../config/settings.ts";
 import { ConfirmationLedger } from "../domain/confirmation.ts";
 import { ConversationRepository } from "../domain/conversations.ts";
 import {
@@ -87,6 +92,7 @@ export interface HttpRuntimeOptions {
   memory?: UserMemoryService;
   parentAgent?: YoubanParentAgent;
   serviceFactories?: {
+    parentAgent?: () => YoubanParentAgent;
     planner?: () => TripPlanner;
   };
 }
@@ -101,6 +107,16 @@ function failedEvent(taskId: string, error: string): Record<string, unknown> {
     message: error,
     error,
   };
+}
+
+function piGenerationRuntimeDir(dataDir: string, settings: AppSettings): string {
+  const signature = JSON.stringify({
+    baseUrl: settings.openai_base_url.replace(/\/+$/, ""),
+    model: settings.openai_model,
+    apiStyle: settings.llm_api_style,
+  });
+  const generation = new Bun.CryptoHasher("sha256").update(signature).digest("hex").slice(0, 16);
+  return join(dataDir, "pi-runtime", "generations", generation);
 }
 
 function isContained(parent: string, child: string): boolean {
@@ -138,8 +154,15 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const conversations = new ConversationRepository(databasePath);
   const memory = options.memory ?? new HermesMemoryBridge({ dataDir: options.dataDir });
   const settings = getSettings();
-  let parentAgent = options.parentAgent ?? createDefaultParentAgent({
-    cwd: getRepoRoot(), dataDir: options.dataDir, tasks, memory,
+  const repoRoot = getRepoRoot();
+  const initialGenerationRuntimeDir = piGenerationRuntimeDir(options.dataDir, settings);
+  let parentAgent = options.parentAgent ?? options.serviceFactories?.parentAgent?.() ?? createDefaultParentAgent({
+    cwd: repoRoot,
+    dataDir: options.dataDir,
+    runtimeDir: initialGenerationRuntimeDir,
+    tasks,
+    memory,
+    settings,
   });
   const confirmationLedger = options.assistant?.ledger ?? new ConfirmationLedger();
   let assistant = options.assistant ?? new TripAssistant({
@@ -148,14 +171,18 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     parentAgent,
   });
   let planner: TripPlanner = options.planner ?? options.serviceFactories?.planner?.() ?? createDefaultTripPlanner({
-    cwd: getRepoRoot(),
+    cwd: repoRoot,
     dataDir: options.dataDir,
+    runtimeDir: initialGenerationRuntimeDir,
+    settings,
   });
   let chatService = options.chatService ?? createDefaultTripChatService({
-    cwd: getRepoRoot(),
+    cwd: repoRoot,
     dataDir: options.dataDir,
+    runtimeDir: initialGenerationRuntimeDir,
     parentAgent,
     memory,
+    settings,
   });
   let poiSearch = options.poiSearch ?? new AmapResearchSources({ apiKey: settings.vite_amap_web_key });
   const planningAbort = new AbortController();
@@ -169,6 +196,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   let serviceGate = Promise.resolve();
   let settingsRefreshTail = Promise.resolve();
   let pendingSettingsRefreshes = 0;
+  let activeGenerationRuntimeDir = initialGenerationRuntimeDir;
   let closed = false;
   let closePromise: Promise<void> | undefined;
   let dispatchRewritten: (request: Request) => Response | Promise<Response>;
@@ -222,7 +250,23 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     }
   };
 
-  const applyRuntimeSettings = (input: Partial<RuntimeSettings>): Promise<ReturnType<typeof updateRuntimeSettings>> => {
+  const llmConfig = (value: AppSettings) => ({
+    apiKey: value.openai_api_key,
+    baseUrl: value.openai_base_url,
+    model: value.openai_model,
+    apiStyle: value.llm_api_style,
+    timeoutMs: value.llm_timeout * 1_000,
+  });
+
+  const removeGenerationRuntimeDir = (path: string): void => {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`候选服务运行目录清理失败: ${error}`);
+    }
+  };
+
+  const applyRuntimeSettings = (input: Partial<RuntimeSettings>): Promise<AppSettings> => {
     pendingSettingsRefreshes += 1;
     const operation = settingsRefreshTail.then(async () => {
       const previousGate = serviceGate;
@@ -232,34 +276,93 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       await previousGate;
       try {
         await Promise.allSettled([...activeServiceCalls]);
-        const updated = updateRuntimeSettings(input);
+        const prepared = prepareRuntimeSettings(input);
+        const candidateSettings = prepared.settings;
+        const candidateRuntimeDir = piGenerationRuntimeDir(options.dataDir, candidateSettings);
+        const candidateRuntimeDirExisted = existsSync(candidateRuntimeDir);
         const previousParent = parentAgent;
         const previousPlanner = planner;
         const previousChatService = chatService;
-        const nextParent = options.parentAgent ?? createDefaultParentAgent({
-          cwd: getRepoRoot(), dataDir: options.dataDir, tasks, memory,
-        });
-        const nextAssistant = options.assistant ?? new TripAssistant({
-          llm: getPiLlmClient(), ledger: confirmationLedger, parentAgent: nextParent,
-        });
-        const nextPlanner = options.planner ?? options.serviceFactories?.planner?.()
-          ?? createDefaultTripPlanner({ cwd: getRepoRoot(), dataDir: options.dataDir });
-        const nextChatService = options.chatService ?? createDefaultTripChatService({
-          cwd: getRepoRoot(), dataDir: options.dataDir, parentAgent: nextParent, memory,
-        });
-        const nextPoiSearch = options.poiSearch
-          ?? new AmapResearchSources({ apiKey: getSettings().vite_amap_web_key });
+        let nextParent: YoubanParentAgent | undefined;
+        let nextPlanner: TripPlanner | undefined;
+        let nextChatService: TripChatService | undefined;
+        let nextAssistant: TripAssistant | undefined;
+        let nextPoiSearch: PoiSearch | undefined;
+        try {
+          const candidateLlm = createPiLlmClient(llmConfig(candidateSettings));
+          nextParent = options.parentAgent ?? options.serviceFactories?.parentAgent?.()
+            ?? createDefaultParentAgent({
+              cwd: repoRoot,
+              dataDir: options.dataDir,
+              runtimeDir: candidateRuntimeDir,
+              tasks,
+              memory,
+              model: candidateLlm.model,
+              settings: candidateSettings,
+            });
+          nextAssistant = options.assistant ?? new TripAssistant({
+            llm: candidateLlm,
+            ledger: confirmationLedger,
+            parentAgent: nextParent,
+          });
+          nextPlanner = options.planner ?? options.serviceFactories?.planner?.()
+            ?? createDefaultTripPlanner({
+              cwd: repoRoot,
+              dataDir: options.dataDir,
+              runtimeDir: candidateRuntimeDir,
+              model: candidateLlm.model,
+              settings: candidateSettings,
+            });
+          nextChatService = options.chatService ?? createDefaultTripChatService({
+            cwd: repoRoot,
+            dataDir: options.dataDir,
+            runtimeDir: candidateRuntimeDir,
+            parentAgent: nextParent,
+            memory,
+            llm: candidateLlm,
+            settings: candidateSettings,
+          });
+          nextPoiSearch = options.poiSearch
+            ?? new AmapResearchSources({ apiKey: candidateSettings.vite_amap_web_key });
+        } catch (error) {
+          await Promise.allSettled([
+            ...(!options.chatService && nextChatService ? [Promise.resolve(nextChatService.close())] : []),
+            ...(!options.planner && nextPlanner ? [Promise.resolve(nextPlanner.close?.())] : []),
+            ...(!options.parentAgent && nextParent ? [Promise.resolve(nextParent.close())] : []),
+          ]);
+          if (!candidateRuntimeDirExisted && candidateRuntimeDir !== activeGenerationRuntimeDir) {
+            removeGenerationRuntimeDir(candidateRuntimeDir);
+          }
+          throw error;
+        }
+
+        let updated: AppSettings;
+        try {
+          updated = prepared.commit();
+        } catch (error) {
+          await Promise.allSettled([
+            ...(!options.chatService ? [Promise.resolve(nextChatService.close())] : []),
+            ...(!options.planner ? [Promise.resolve(nextPlanner.close?.())] : []),
+            ...(!options.parentAgent ? [Promise.resolve(nextParent.close())] : []),
+          ]);
+          if (!candidateRuntimeDirExisted && candidateRuntimeDir !== activeGenerationRuntimeDir) {
+            removeGenerationRuntimeDir(candidateRuntimeDir);
+          }
+          throw error;
+        }
+
+        parentAgent = nextParent;
+        assistant = nextAssistant;
+        planner = nextPlanner;
+        chatService = nextChatService;
+        poiSearch = nextPoiSearch;
+        activeGenerationRuntimeDir = candidateRuntimeDir;
 
         await Promise.allSettled([
           ...(!options.parentAgent ? [Promise.resolve(previousParent.close())] : []),
           ...(!options.planner ? [Promise.resolve(previousPlanner.close?.())] : []),
           ...(!options.chatService ? [Promise.resolve(previousChatService.close())] : []),
         ]);
-        parentAgent = nextParent;
-        assistant = nextAssistant;
-        planner = nextPlanner;
-        chatService = nextChatService;
-        poiSearch = nextPoiSearch;
         return updated;
       } finally {
         releaseGate();

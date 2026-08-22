@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { AppSettings } from "../config/settings.ts";
 import { getSettings } from "../config/settings.ts";
 import type { SqliteTaskStore } from "../domain/task-store.ts";
 import type { UserMemoryService } from "../services/hermes-memory.ts";
@@ -12,9 +14,20 @@ export function createDefaultParentAgent(options: {
   dataDir: string;
   tasks: SqliteTaskStore;
   memory: UserMemoryService;
+  runtimeDir?: string;
+  model?: Model<Api>;
+  settings?: Pick<AppSettings,
+    | "openai_api_key"
+    | "openai_base_url"
+    | "openai_model"
+    | "llm_api_style"
+    | "llm_timeout"
+    | "pi_parent_session_limit"
+    | "pi_parent_session_idle_seconds"
+  >;
 }): PersistentPiParentAgent {
-  const settings = getSettings();
-  const runtimeDir = join(options.dataDir, "pi-runtime");
+  const settings = options.settings ?? getSettings();
+  const runtimeDir = options.runtimeDir ?? join(options.dataDir, "pi-runtime");
   writeRuntimeModelConfig(runtimeDir, {
     baseUrl: settings.openai_base_url,
     model: settings.openai_model,
@@ -23,7 +36,7 @@ export function createDefaultParentAgent(options: {
   return new PersistentPiParentAgent({
     cwd: options.cwd,
     runtimeDir,
-    model: getPiLlmClient().model,
+    model: options.model ?? getPiLlmClient().model,
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: settings.llm_timeout * 1_000,

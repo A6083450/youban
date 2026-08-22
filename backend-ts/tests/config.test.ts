@@ -12,6 +12,7 @@ import {
   _resetSettingsForTest,
   getSettings,
   onSettingsReset,
+  prepareRuntimeSettings,
   updateRuntimeSettings,
   validateConfig,
   type RuntimeSettings,
@@ -249,6 +250,19 @@ describe("settings: runtime 覆盖", () => {
 });
 
 describe("settings: updateRuntimeSettings", () => {
+  it("keeps a prepared candidate invisible until it is committed", () => {
+    const previous = getSettings().openai_model;
+    const prepared = prepareRuntimeSettings({ openai_model: "candidate-model" });
+
+    expect(prepared.settings.openai_model).toBe("candidate-model");
+    expect(getSettings().openai_model).toBe(previous);
+    expect(existsSync(join(caseDir, "runtime_settings.json"))).toBe(false);
+
+    expect(prepared.commit().openai_model).toBe("candidate-model");
+    expect(getSettings().openai_model).toBe("candidate-model");
+    expect(readJson(join(caseDir, "runtime_settings.json")).openai_model).toBe("candidate-model");
+  });
+
   it("过滤非法键与错误类型，原子持久化，触发监听器", () => {
     let listenerCalls = 0;
     onSettingsReset(() => {

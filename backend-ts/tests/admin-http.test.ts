@@ -1,15 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  ParentAgentCompletion,
+  ParentAgentScope,
+  YoubanParentAgent,
+} from "../src/agents/persistent-parent-agent.ts";
+import type { StructuredAgentRequest } from "../src/agents/pi-trip-planner.ts";
 import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
-import { _resetSettingsForTest } from "../src/config/settings.ts";
+import { _resetSettingsForTest, getSettings } from "../src/config/settings.ts";
 import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 
 class NoopPlanner implements TripPlanner {
   async plan(request: TripPlanningRequest, _context: PlannerRunContext) { return { success: true, data: request }; }
+}
+
+class ClosableParent implements YoubanParentAgent {
+  closed = false;
+
+  async complete(_input: ParentAgentCompletion): Promise<string> { return ""; }
+  async delegate(_scope: ParentAgentScope, _request: StructuredAgentRequest): Promise<unknown> { return {}; }
+  async recordExchange(): Promise<void> {}
+  async close(): Promise<void> { this.closed = true; }
 }
 
 let previousDataDir: string | undefined;
@@ -105,5 +120,38 @@ describe("admin HTTP", () => {
     expect(runtime.assistant.ledger.validate(pendingToken, draft)).toEqual({ valid: true, reason: "ok" });
     const persisted = JSON.parse(readFileSync(join(dataDir, "runtime_settings.json"), "utf8"));
     expect(persisted).toEqual({ openai_model: "admin-model" });
+  });
+
+  it("keeps the active settings and services when a replacement generation cannot be built", async () => {
+    await runtime.close();
+    const initialPlanner = new NoopPlanner();
+    const initialParent = new ClosableParent();
+    const candidateParent = new ClosableParent();
+    const parents = [initialParent, candidateParent];
+    let plannerBuilds = 0;
+    runtime = createHttpRuntime({
+      dataDir,
+      serviceFactories: {
+        parentAgent: () => parents.shift()!,
+        planner() {
+          plannerBuilds += 1;
+          if (plannerBuilds === 1) return initialPlanner;
+          throw new Error("candidate planner failed");
+        },
+      },
+    });
+    const previousModel = getSettings().openai_model;
+
+    const response = await call("PUT", "/api/admin/settings", {
+      openai_model: "must-not-commit",
+    }, "admin@123");
+
+    expect(response.status).toBe(500);
+    expect(getSettings().openai_model).toBe(previousModel);
+    expect(runtime.parentAgent).toBe(initialParent);
+    expect(runtime.planner).toBe(initialPlanner);
+    expect(initialParent.closed).toBe(false);
+    expect(candidateParent.closed).toBe(true);
+    expect(existsSync(join(dataDir, "runtime_settings.json"))).toBe(false);
   });
 });

@@ -23,13 +23,14 @@ interface DefaultTripPlannerSettings {
 interface DefaultTripPlannerOptions {
   cwd: string;
   dataDir: string;
+  runtimeDir?: string;
   model?: Model<Api>;
   settings?: DefaultTripPlannerSettings;
 }
 
 export function createDefaultTripPlanner(options: DefaultTripPlannerOptions): PiTripPlanner {
   const settings = options.settings ?? getSettings();
-  const runtimeDir = join(options.dataDir, "pi-runtime");
+  const runtimeDir = options.runtimeDir ?? join(options.dataDir, "pi-runtime");
   writeRuntimeModelConfig(runtimeDir, {
     baseUrl: settings.openai_base_url,
     model: settings.openai_model,
