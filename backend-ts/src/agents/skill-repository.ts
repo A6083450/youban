@@ -88,6 +88,10 @@ function toVersion(row: SkillVersionRow): SkillVersion {
 export class SkillCatalogRepository {
   constructor(private readonly database: YoubanDatabase) {}
 
+  transaction<T>(operation: () => T): T {
+    return this.database.raw.transaction(operation)();
+  }
+
   list(options: { archived?: boolean } = {}): ManagedSkill[] {
     const rows = this.database.raw.query(
       `SELECT * FROM managed_skills
@@ -171,7 +175,15 @@ export class SkillCatalogRepository {
     return this.get(skillId)!;
   }
 
-  createCustomSkill(input: CandidateWrite): ManagedSkill {
+  createCustomSkill(
+    input: CandidateWrite,
+    source: {
+      source?: "upload" | "git";
+      repositoryUrl?: string;
+      sourceRef?: string;
+      sourceSubdirectory?: string;
+    } = {},
+  ): ManagedSkill {
     const name = nameFromContent(input.content);
     if (!name) throw new Error("custom skill name is required");
     let skillId = "";
@@ -181,9 +193,20 @@ export class SkillCatalogRepository {
       skillId = nextId();
       this.database.raw.query(`
         INSERT INTO managed_skills (
-          id, name, description, kind, source, enabled, generation, created_at, updated_at
-        ) VALUES (?, ?, ?, 'custom', 'upload', 0, 0, ?, ?)
-      `).run(skillId, name, input.description, createdAt, createdAt);
+          id, name, description, kind, source, repository_url, source_ref,
+          source_subdirectory, enabled, generation, created_at, updated_at
+        ) VALUES (?, ?, ?, 'custom', ?, ?, ?, ?, 0, 0, ?, ?)
+      `).run(
+        skillId,
+        name,
+        input.description,
+        source.source ?? "upload",
+        source.repositoryUrl ?? null,
+        source.sourceRef ?? null,
+        source.sourceSubdirectory ?? null,
+        createdAt,
+        createdAt,
+      );
       const versionId = this.insertVersion(skillId, 1, "candidate", input, name);
       this.database.raw.query(
         "UPDATE managed_skills SET candidate_version_id = ? WHERE id = ?",
@@ -438,7 +461,4 @@ export class SkillCatalogRepository {
     return this.database.raw.query("SELECT * FROM skill_versions WHERE id = ?").get(versionId) as SkillVersionRow | undefined;
   }
 
-  private transaction<T>(operation: () => T): T {
-    return this.database.raw.transaction(operation)();
-  }
 }

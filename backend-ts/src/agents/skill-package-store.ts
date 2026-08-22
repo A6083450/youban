@@ -5,9 +5,12 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -179,6 +182,61 @@ export class SkillPackageStore {
     return target;
   }
 
+  restoreCommittedPackageToStaging(packagePath: string, stagingDir: string): void {
+    const resolvedStaging = resolve(stagingDir);
+    if (dirname(resolvedStaging) !== this.stagingRoot || !resolvedStaging.startsWith(join(this.stagingRoot, "stage-"))) {
+      throw new Error("staging directory is not owned by this package store");
+    }
+    const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
+    renameSync(source, resolvedStaging);
+    this.removeEmptyPackageParents(dirname(source), this.packagesRoot);
+  }
+
+  createEditedStaging(packagePath: string, skillContent: Uint8Array): string {
+    const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
+    const stagingDir = this.createStagingDirectory();
+    const copyDirectory = (directory: string, prefix: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (relativePath === "SKILL.md") continue;
+        const sourcePath = join(directory, entry.name);
+        if (entry.isSymbolicLink()) throw new Error("package contains an unsafe symbolic link");
+        if (entry.isDirectory()) {
+          this.createDirectory(stagingDir, relativePath);
+          copyDirectory(sourcePath, relativePath);
+          continue;
+        }
+        if (!entry.isFile()) throw new Error("package contains a non-regular file");
+        this.writeFile(stagingDir, relativePath, readFileSync(sourcePath));
+      }
+    };
+    try {
+      copyDirectory(source, "");
+      this.writeFile(stagingDir, "SKILL.md", skillContent);
+      return stagingDir;
+    } catch (error) {
+      this.cleanupStaging(stagingDir);
+      throw error;
+    }
+  }
+
+  listFinalPackages(): string[] {
+    const packages: string[] = [];
+    const visit = (directory: string, prefix: string): void => {
+      const entries = readdirSync(directory, { withFileTypes: true });
+      if (entries.some((entry) => entry.isFile() && entry.name === "SKILL.md")) {
+        packages.push(prefix);
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        visit(join(directory, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name);
+      }
+    };
+    visit(this.packagesRoot, "");
+    return packages.sort();
+  }
+
   archivePackage(packagePath: string, archivePath: string): string {
     const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
     const target = this.preparePackageTarget(this.archiveRoot, archivePath);
@@ -225,6 +283,15 @@ export class SkillPackageStore {
     assertOwnedDirectory(target, "package directory");
     assertRealContained(root, target);
     return target;
+  }
+
+  private removeEmptyPackageParents(directory: string, root: string): void {
+    let current = directory;
+    while (current !== root) {
+      if (readdirSync(current).length !== 0) return;
+      rmdirSync(current);
+      current = dirname(current);
+    }
   }
 
   private assertStagingDirectory(stagingDir: string): void {
