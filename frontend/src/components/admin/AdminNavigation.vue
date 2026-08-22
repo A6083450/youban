@@ -52,6 +52,8 @@ const sectionIcons = {
 .admin-navigation-items {
   position: sticky;
   top: 20px;
+  width: 100%;
+  align-self: flex-start;
   flex-direction: column;
   display: flex;
   gap: 4px;
@@ -113,7 +115,6 @@ const sectionIcons = {
   .admin-navigation-items {
     position: static;
     display: grid;
-    width: 100%;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0;
     padding: 0;
