@@ -1,5 +1,14 @@
 import axios from 'axios'
 import type {
+  AdminError,
+  AdminSkillCheckUpdateResponse,
+  AdminSkillCandidateRequest,
+  AdminSkillConfigurationRequest,
+  AdminSkillDetailResponse,
+  AdminSkillGitInstallRequest,
+  AdminSkillListFilters,
+  AdminSkillListResponse,
+  AdminSkillMutationResponse,
   AdminTripItem,
   BackendRuntimeSettings,
   BudgetItemInput,
@@ -197,6 +206,9 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(
   (config) => {
     config.baseURL = getRuntimeApiBaseUrl()
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      config.headers.delete('Content-Type')
+    }
     const user = getStoredUser()
     if (user?.user_id) {
       config.headers['X-User-Id'] = user.user_id
@@ -259,14 +271,30 @@ export const hasAdminSession = (): boolean => Boolean(getAdminToken())
 
 const adminAuthHeaders = () => ({ 'X-Admin-Token': getAdminToken() })
 
-const toAdminError = (error: any, fallback: string): Error => {
-  const err = new Error(error.response?.data?.detail || error.message || fallback)
-  ;(err as any).unauthorized = error.response?.status === 401
-  return err
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+const toAdminError = (error: unknown, fallback: string): AdminError => {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : null
+  const data = response && isRecord(response.data) ? response.data : null
+  const status = response && typeof response.status === 'number' && Number.isInteger(response.status)
+    ? response.status
+    : null
+  const detail = data && typeof data.detail === 'string' && data.detail.trim()
+    ? data.detail
+    : fallback
+  const code = data && typeof data.code === 'string' && data.code.trim()
+    ? data.code
+    : null
+  return Object.assign(new Error(detail), {
+    unauthorized: status === 401,
+    status,
+    code,
+  })
 }
 
-export const isAdminAuthError = (error: unknown): boolean =>
-  Boolean(error && (error as any).unauthorized)
+export const isAdminAuthError = (error: unknown): error is AdminError =>
+  Boolean(isRecord(error) && error.unauthorized === true)
 
 export async function adminLogin(password: string): Promise<void> {
   try {
@@ -367,6 +395,135 @@ export async function adminDeleteTrip(taskId: string): Promise<void> {
     console.error('后台删除计划失败:', error)
     throw toAdminError(error, '删除计划失败')
   }
+}
+
+const adminSkillPath = (skillId: string): string =>
+  `/api/admin/skills/${encodeURIComponent(skillId)}`
+
+const optionalText = (value: string | undefined): string | undefined => {
+  const normalized = value?.trim()
+  return normalized || undefined
+}
+
+const configurationBody = (
+  configuration: Readonly<AdminSkillConfigurationRequest>,
+): { enabled: boolean; agent_ids: AdminSkillConfigurationRequest['agent_ids'][number][] } => ({
+  enabled: configuration.enabled,
+  agent_ids: [...configuration.agent_ids],
+})
+
+async function adminSkillRequest<T>(operation: () => Promise<T>, fallback: string): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    throw toAdminError(error, fallback)
+  }
+}
+
+export async function adminListSkills(
+  filters: Readonly<AdminSkillListFilters> = {},
+): Promise<AdminSkillListResponse> {
+  const search = new URLSearchParams()
+  const query = optionalText(filters.query)
+  if (query) search.set('query', query)
+  if (filters.source) search.set('source', filters.source)
+  if (filters.state) search.set('state', filters.state)
+  if (filters.archived) search.set('archived', 'true')
+  const suffix = search.size ? `?${search.toString()}` : ''
+  return adminSkillRequest(async () => {
+    const response = await apiClient.get<AdminSkillListResponse>(`/api/admin/skills${suffix}`)
+    return response.data
+  }, '读取技能列表失败')
+}
+
+export async function adminGetSkill(skillId: string): Promise<AdminSkillDetailResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.get<AdminSkillDetailResponse>(adminSkillPath(skillId))
+    return response.data
+  }, '读取技能详情失败')
+}
+
+export async function adminUploadSkill(file: File): Promise<AdminSkillMutationResponse> {
+  const form = new FormData()
+  form.set('file', file)
+  return adminSkillRequest(async () => {
+    const response = await apiClient.post<AdminSkillMutationResponse>('/api/admin/skills/upload', form)
+    return response.data
+  }, '上传技能失败')
+}
+
+export async function adminInstallGitSkill(
+  input: Readonly<AdminSkillGitInstallRequest>,
+): Promise<AdminSkillMutationResponse> {
+  const ref = optionalText(input.ref)
+  const subdirectory = optionalText(input.subdirectory)
+  const body: AdminSkillGitInstallRequest = {
+    repository_url: input.repository_url.trim(),
+    ...(ref ? { ref } : {}),
+    ...(subdirectory ? { subdirectory } : {}),
+  }
+  return adminSkillRequest(async () => {
+    const response = await apiClient.post<AdminSkillMutationResponse>('/api/admin/skills/git', body)
+    return response.data
+  }, '安装 Git 技能失败')
+}
+
+export async function adminCheckSkillUpdate(skillId: string): Promise<AdminSkillCheckUpdateResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.post<AdminSkillCheckUpdateResponse>(`${adminSkillPath(skillId)}/check-update`)
+    return response.data
+  }, '检查技能更新失败')
+}
+
+export async function adminSaveSkillCandidate(
+  skillId: string,
+  content: string,
+): Promise<AdminSkillMutationResponse> {
+  const body: AdminSkillCandidateRequest = { content }
+  return adminSkillRequest(async () => {
+    const response = await apiClient.put<AdminSkillMutationResponse>(`${adminSkillPath(skillId)}/candidate`, body)
+    return response.data
+  }, '保存候选版本失败')
+}
+
+export async function adminActivateSkill(
+  skillId: string,
+  configuration: Readonly<AdminSkillConfigurationRequest>,
+): Promise<AdminSkillMutationResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.post<AdminSkillMutationResponse>(
+      `${adminSkillPath(skillId)}/activate`,
+      configurationBody(configuration),
+    )
+    return response.data
+  }, '激活技能失败')
+}
+
+export async function adminConfigureSkill(
+  skillId: string,
+  configuration: Readonly<AdminSkillConfigurationRequest>,
+): Promise<AdminSkillMutationResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.put<AdminSkillMutationResponse>(
+      `${adminSkillPath(skillId)}/configuration`,
+      configurationBody(configuration),
+    )
+    return response.data
+  }, '保存技能配置失败')
+}
+
+export async function adminArchiveSkill(skillId: string): Promise<AdminSkillMutationResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.delete<AdminSkillMutationResponse>(adminSkillPath(skillId))
+    return response.data
+  }, '归档技能失败')
+}
+
+export async function adminRestoreSkill(skillId: string): Promise<AdminSkillMutationResponse> {
+  return adminSkillRequest(async () => {
+    const response = await apiClient.post<AdminSkillMutationResponse>(`${adminSkillPath(skillId)}/restore`)
+    return response.data
+  }, '恢复技能失败')
 }
 
 /**

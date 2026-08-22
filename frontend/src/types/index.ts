@@ -275,6 +275,106 @@ export interface AdminTripItem extends TripHistoryItem {
   nickname?: string
 }
 
+export type AdminSkillAgentId =
+  | 'parent-assistant'
+  | 'destination-researcher'
+  | 'segment-planner'
+  | 'summary'
+  | 'itinerary-reviewer'
+  | 'plan-editor'
+
+export type AdminSkillKind = 'builtin' | 'custom'
+export type AdminSkillSource = 'builtin' | 'upload' | 'git'
+export type AdminSkillState = 'candidate' | 'enabled' | 'disabled' | 'archived'
+export type AdminSkillVersionState = 'candidate' | 'active' | 'superseded' | 'archived'
+
+export interface AdminSkillVersion {
+  id: string
+  skill_id: string
+  version_number: number
+  state: AdminSkillVersionState
+  content: string
+  name: string
+  description: string
+  sha256: string
+  source_commit: string | null
+  created_at: string
+  activated_at: string | null
+}
+
+export interface AdminSkillSummary {
+  id: string
+  name: string
+  description: string
+  kind: AdminSkillKind
+  source: AdminSkillSource
+  state: AdminSkillState
+  enabled: boolean
+  agent_ids: AdminSkillAgentId[]
+  active_version_id: string | null
+  candidate_version_id: string | null
+  repository_url: string | null
+  source_ref: string | null
+  source_subdirectory: string | null
+  generation: number
+  archived_at: string | null
+}
+
+export interface AdminSkillDetail extends AdminSkillSummary {
+  active_version: AdminSkillVersion | null
+  candidate_version: AdminSkillVersion | null
+  versions: AdminSkillVersion[]
+}
+
+export interface AdminSkillCapabilities {
+  git_available: boolean
+  private_git_credentials_available: boolean
+}
+
+export interface AdminSkillListFilters {
+  archived?: boolean
+  query?: string
+  source?: AdminSkillSource
+  state?: AdminSkillState
+}
+
+export interface AdminSkillGitInstallRequest {
+  repository_url: string
+  ref?: string
+  subdirectory?: string
+}
+
+export interface AdminSkillCandidateRequest {
+  content: string
+}
+
+export interface AdminSkillConfigurationRequest {
+  enabled: boolean
+  agent_ids: readonly AdminSkillAgentId[]
+}
+
+export interface AdminSkillListResponse {
+  items: AdminSkillSummary[]
+  capabilities: AdminSkillCapabilities
+}
+
+export interface AdminSkillDetailResponse {
+  skill: AdminSkillDetail
+}
+
+export type AdminSkillMutationResponse = AdminSkillDetailResponse
+
+export interface AdminSkillCheckUpdateResponse {
+  changed: boolean
+  skill: AdminSkillDetail
+}
+
+export interface AdminError extends Error {
+  readonly unauthorized: boolean
+  readonly status: number | null
+  readonly code: string | null
+}
+
 export type TripTaskStatus = 'processing' | 'completed' | 'failed'
 
 export type TripTaskStage =
