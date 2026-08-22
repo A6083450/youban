@@ -1,7 +1,11 @@
 import { isUtf8 } from "node:buffer";
 import { type Entry, fromBuffer, type ZipFile } from "yauzl";
 import { SkillValidationError, validateSkillDocument } from "./skill-document.ts";
-import { type SkillPackageStore, type StagedSkillPackage } from "./skill-package-store.ts";
+import {
+  normalizeSkillPackagePath,
+  type SkillPackageStore,
+  type StagedSkillPackage,
+} from "./skill-package-store.ts";
 
 const MAX_REGULAR_FILES = 100;
 const MAX_UNCOMPRESSED_BYTES = 10 * 1024 * 1024;
@@ -34,30 +38,27 @@ function zipError(code: SkillZipImportErrorCode, message: string, cause?: unknow
 function decodePath(entry: Entry): string {
   if (!isUtf8(entry.fileNameRaw)) zipError("invalid_zip_entry", "ZIP entry filename is not valid UTF-8");
   const rawName = entry.fileNameRaw.toString("utf8");
-  if (!rawName || rawName.includes("\0") || rawName.includes("\\") || rawName.startsWith("/") || /^[A-Za-z]:\//.test(rawName)) {
+  try {
+    return normalizeSkillPackagePath(rawName);
+  } catch {
     zipError("invalid_zip_entry", "ZIP entry filename is not a safe relative path");
   }
-  const parts = rawName.split("/");
-  if (parts.some((part) => part === "." || part === "..")) {
-    zipError("invalid_zip_entry", "ZIP entry filename contains a traversal segment");
-  }
-  const normalized = parts.filter(Boolean).join("/");
-  if (!normalized) zipError("invalid_zip_entry", "ZIP entry filename is empty");
-  return normalized;
 }
 
 function entryIsDirectory(entry: Entry, archivePath: string): boolean {
-  const creator = entry.versionMadeBy >>> 8;
   const unixMode = entry.externalFileAttributes >>> 16;
   const fileType = unixMode & 0o170000;
   const pathSaysDirectory = entry.fileNameRaw.toString("utf8").endsWith("/");
 
-  if (creator === 3 && fileType !== 0 && fileType !== 0o100000 && fileType !== 0o040000) {
+  if (entry.extraFields.some((field) => field.id === 0x000d)) {
+    zipError("invalid_zip_entry", `ZIP entry uses an unsupported Unix link encoding: ${archivePath}`);
+  }
+  if (fileType !== 0 && fileType !== 0o100000 && fileType !== 0o040000) {
     zipError("invalid_zip_entry", `ZIP entry is not a regular file or directory: ${archivePath}`);
   }
-  if (creator === 3 && fileType === 0o040000) return true;
+  if (fileType === 0o040000) return true;
   if (pathSaysDirectory) {
-    if (creator === 3 && fileType === 0o100000) {
+    if (fileType === 0o100000) {
       zipError("invalid_zip_entry", `ZIP entry type conflicts with directory path: ${archivePath}`);
     }
     return true;
@@ -200,6 +201,9 @@ export class ZipSkillImporter {
         }
         normalizedNames.add(archivePath);
         const directory = entryIsDirectory(entry, archivePath);
+        if (directory && (entry.uncompressedSize !== 0 || entry.compressedSize !== 0)) {
+          zipError("invalid_zip_entry", `ZIP directory entry must not carry data: ${archivePath}`);
+        }
         if (!directory) {
           regularFileCount += 1;
           declaredBytes += entry.uncompressedSize;

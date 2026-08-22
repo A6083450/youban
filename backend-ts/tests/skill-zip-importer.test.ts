@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { deflateRawSync } from "node:zlib";
@@ -10,14 +10,13 @@ import { createZipFixture, type ZipFixtureEntry } from "./helpers/zip-fixture.ts
 const validSkill = "---\nname: museum-guide\ndescription: A practical museum visit guide.\n---\n\n# Museum guide\n";
 const temporaryRoots: string[] = [];
 
-function createImporter(): { importer: ZipSkillImporter; root: string; outsideRoot: string } {
+function createImporter(): { importer: ZipSkillImporter; root: string; escapePath: string } {
   const root = mkdtempSync(join(tmpdir(), "youban-skill-package-"));
-  const outsideRoot = mkdtempSync(join(tmpdir(), "youban-skill-outside-"));
-  temporaryRoots.push(root, outsideRoot);
+  temporaryRoots.push(root);
   return {
     importer: new ZipSkillImporter(new SkillPackageStore(root)),
     root,
-    outsideRoot,
+    escapePath: join(root, "staging", "escape"),
   };
 }
 
@@ -34,10 +33,10 @@ describe("ZipSkillImporter", () => {
     ["parent traversal", [{ name: "../escape/SKILL.md", content: validSkill }]],
     ["absolute path", [{ name: "/tmp/SKILL.md", content: validSkill }]],
     ["symlink", [{ name: "skill/SKILL.md", content: "target", mode: 0o120777 }]],
-  ] satisfies readonly [string, readonly ZipFixtureEntry[]][])("rejects %s without writing outside staging", async (_label, entries) => {
-    const { importer, outsideRoot } = createImporter();
+  ] satisfies readonly [string, readonly ZipFixtureEntry[]][])("rejects %s without escaping its generated staging directory", async (_label, entries) => {
+    const { importer, escapePath } = createImporter();
     await expectZipCode(importer.stage(createZipFixture(entries)), "invalid_zip_entry");
-    expect(readdirSync(outsideRoot)).toEqual([]);
+    expect(existsSync(escapePath)).toBe(false);
   });
 
   it("accepts one root folder and returns an inert staged package", async () => {
@@ -91,6 +90,61 @@ describe("ZipSkillImporter", () => {
       { name: "SKILL.md", content: validSkill },
       { name: "device", content: "", mode: 0o060600 },
     ])), "invalid_zip_entry");
+    await expectZipCode(importer.stage(createZipFixture([
+      { name: "SKILL.md", content: validSkill },
+      { name: "link", content: "target", mode: 0o120777, creator: 19 },
+    ])), "invalid_zip_entry");
+    await expectZipCode(importer.stage(createZipFixture([
+      { name: "SKILL.md", content: validSkill },
+      { name: "hard-link", content: "target", extraFields: [{ id: 0x000d, data: Buffer.alloc(13) }] },
+    ])), "invalid_zip_entry");
+  });
+
+  it("rejects directories carrying declared data", async () => {
+    const { importer } = createImporter();
+    await expectZipCode(importer.stage(createZipFixture([
+      { name: "SKILL.md", content: validSkill },
+      {
+        name: "payload/",
+        content: "x",
+        mode: 0o040700,
+        compressionMethod: 8,
+        declaredUncompressedSize: 10 * 1024 * 1024 + 1,
+      },
+    ])), "invalid_zip_entry");
+  });
+
+  it.each(["C:skill/SKILL.md", "SKILL.md:payload", "CON/SKILL.md", "docs/name. /SKILL.md", "docs/name /SKILL.md"])(
+    "rejects non-portable Windows path %s",
+    async (name) => {
+      const { importer } = createImporter();
+      await expectZipCode(importer.stage(createZipFixture([{ name, content: validSkill }])), "invalid_zip_entry");
+    },
+  );
+
+  it("rejects symlinked store roots before changing their target permissions", () => {
+    const parent = mkdtempSync(join(tmpdir(), "youban-skill-store-parent-"));
+    temporaryRoots.push(parent);
+    const target = join(parent, "target");
+    mkdirSync(target, { mode: 0o755 });
+    chmodSync(target, 0o755);
+    const linkedRoot = join(parent, "linked-root");
+    symlinkSync(target, linkedRoot, "dir");
+
+    expect(() => new SkillPackageStore(linkedRoot)).toThrow("package root is not a directory");
+    expect(statSync(target).mode & 0o777).toBe(0o755);
+  });
+
+  it("rejects symlinked staging components before writing through them", () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-skill-store-component-"));
+    const outside = mkdtempSync(join(tmpdir(), "youban-skill-store-outside-"));
+    temporaryRoots.push(root, outside);
+    const store = new SkillPackageStore(root);
+    const stagingDir = store.createStagingDirectory();
+    symlinkSync(outside, join(stagingDir, "scripts"), "dir");
+
+    expect(() => store.writeFile(stagingDir, "scripts/run.sh", Buffer.from("exit 99"))).toThrow();
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("rejects duplicate normalized paths and invalid UTF-8 skill content", async () => {

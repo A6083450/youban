@@ -2,6 +2,8 @@ export interface ZipFixtureEntry {
   name: string | Buffer;
   content?: string | Buffer;
   mode?: number;
+  creator?: number;
+  extraFields?: readonly { id: number; data: Buffer }[];
   encrypted?: boolean;
   compressionMethod?: 0 | 8;
   compressedContent?: Buffer;
@@ -24,6 +26,16 @@ function writeUInt32(buffer: Buffer, value: number, offset: number): void {
   buffer.writeUInt32LE(value >>> 0, offset);
 }
 
+function encodeExtraFields(fields: readonly { id: number; data: Buffer }[]): Buffer {
+  return Buffer.concat(fields.map(({ id, data }) => {
+    const field = Buffer.alloc(4 + data.length);
+    field.writeUInt16LE(id, 0);
+    field.writeUInt16LE(data.length, 2);
+    data.copy(field, 4);
+    return field;
+  }));
+}
+
 export function createZipFixture(entries: readonly ZipFixtureEntry[]): Buffer {
   const localRecords: Buffer[] = [];
   const centralRecords: Buffer[] = [];
@@ -39,11 +51,12 @@ export function createZipFixture(entries: readonly ZipFixtureEntry[]): Buffer {
       ? Buffer.concat([Buffer.alloc(12), compressedPayload])
       : compressedPayload;
     const compressionMethod = entry.compressionMethod ?? 0;
+    const extraFields = encodeExtraFields(entry.extraFields ?? []);
     const compressedSize = entry.declaredCompressedSize ?? compressedContent.length;
     const uncompressedSize = entry.declaredUncompressedSize ?? content.length;
     const flags = (entry.encrypted ? 0x1 : 0) | 0x800;
     const crc = crc32(content);
-    const local = Buffer.alloc(30 + name.length + compressedContent.length);
+    const local = Buffer.alloc(30 + name.length + extraFields.length + compressedContent.length);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(flags, 6);
@@ -52,14 +65,15 @@ export function createZipFixture(entries: readonly ZipFixtureEntry[]): Buffer {
     writeUInt32(local, compressedSize, 18);
     writeUInt32(local, uncompressedSize, 22);
     local.writeUInt16LE(name.length, 26);
-    local.writeUInt16LE(0, 28);
+    local.writeUInt16LE(extraFields.length, 28);
     name.copy(local, 30);
-    compressedContent.copy(local, 30 + name.length);
+    extraFields.copy(local, 30 + name.length);
+    compressedContent.copy(local, 30 + name.length + extraFields.length);
     localRecords.push(local);
 
-    const central = Buffer.alloc(46 + name.length);
+    const central = Buffer.alloc(46 + name.length + extraFields.length);
     central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE((3 << 8) | 63, 4);
+    central.writeUInt16LE(((entry.creator ?? 3) << 8) | 63, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(compressionMethod, 10);
@@ -67,11 +81,12 @@ export function createZipFixture(entries: readonly ZipFixtureEntry[]): Buffer {
     writeUInt32(central, compressedSize, 20);
     writeUInt32(central, uncompressedSize, 24);
     central.writeUInt16LE(name.length, 28);
-    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(extraFields.length, 30);
     central.writeUInt16LE(0, 32);
     writeUInt32(central, (entry.mode ?? 0o100644) << 16, 38);
     writeUInt32(central, offset, 42);
     name.copy(central, 46);
+    extraFields.copy(central, 46 + name.length);
     centralRecords.push(central);
     offset += local.length;
   }
