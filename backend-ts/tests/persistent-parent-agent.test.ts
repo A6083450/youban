@@ -7,6 +7,48 @@ import { Type } from "typebox";
 import { PersistentPiParentAgent, type ParentAgentScope } from "../src/agents/persistent-parent-agent.ts";
 import { createMockPiModel } from "./helpers/mock-pi-model.ts";
 import { createYoubanAgentSession } from "../src/agents/session-host.ts";
+import type {
+  SkillAgentId,
+  SkillCatalogSnapshot,
+  SkillPrompt,
+} from "../src/agents/skill-types.ts";
+
+function prompt(marker: string): SkillPrompt {
+  return {
+    id: `skill:${marker}`,
+    name: marker,
+    content: marker,
+    versionId: `version:${marker}`,
+  };
+}
+
+function snapshot(
+  generation = 101,
+  assignments: Partial<Record<SkillAgentId, readonly SkillPrompt[]>> = {},
+): SkillCatalogSnapshot {
+  return {
+    generation,
+    assignments: {
+      "parent-assistant": assignments["parent-assistant"] ?? [],
+      "destination-researcher": assignments["destination-researcher"] ?? [],
+      "segment-planner": assignments["segment-planner"] ?? [],
+      summary: assignments.summary ?? [],
+      "itinerary-reviewer": assignments["itinerary-reviewer"] ?? [],
+      "plan-editor": assignments["plan-editor"] ?? [],
+    },
+  };
+}
+
+function builtinSnapshot(): SkillCatalogSnapshot {
+  return snapshot(101, {
+    "parent-assistant": [prompt("budget-control"), prompt("family-accessibility"), prompt("plan-editing"), prompt("trip-planning")],
+    "destination-researcher": [prompt("family-accessibility"), prompt("trip-planning")],
+    "segment-planner": [prompt("budget-control"), prompt("family-accessibility"), prompt("trip-planning")],
+    summary: [prompt("trip-planning")],
+    "itinerary-reviewer": [prompt("budget-control"), prompt("family-accessibility"), prompt("trip-planning")],
+    "plan-editor": [prompt("budget-control"), prompt("family-accessibility"), prompt("plan-editing")],
+  });
+}
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = performance.now() + timeoutMs;
@@ -27,6 +69,9 @@ describe("persistent Pi parent agent", () => {
       runtimeDir,
       model: mock.model,
       subagentModel: "youban-mock/mock-model",
+      skillSnapshot: snapshot(301, {
+        "parent-assistant": [prompt("persistent-parent-marker")],
+      }),
       toolsForScope: () => [defineTool({
         name: "get_trip_context",
         label: "Trip context",
@@ -48,7 +93,7 @@ describe("persistent Pi parent agent", () => {
       expect(deltas.join("")).toBe("parent-answer");
       const inspected = await parent.inspect(scope);
       expect(inspected.tools.sort()).toEqual(["get_trip_context", "subagent"]);
-      expect(inspected.systemPrompt).toContain('<skill name="trip-planning">');
+      expect(inspected.systemPrompt).toContain("persistent-parent-marker");
       expect(inspected.sessionFile && existsSync(inspected.sessionFile)).toBeTrue();
       const originalSessionFile = inspected.sessionFile;
       expect(await parent.delegate(scope, {
@@ -87,6 +132,7 @@ describe("persistent Pi parent agent", () => {
       runtimeDir,
       model: mock.model,
       subagentModel: "youban-mock/mock-model",
+      skillSnapshot: builtinSnapshot(),
       sessionLimit: 2,
       sessionIdleMs: 100,
       sweepIntervalMs: 0,
@@ -126,6 +172,7 @@ describe("persistent Pi parent agent", () => {
       runtimeDir,
       model: mock.model,
       subagentModel: "youban-mock/mock-model",
+      skillSnapshot: builtinSnapshot(),
       sessionLimit: 1,
       sessionIdleMs: 60_000,
       sweepIntervalMs: 0,
@@ -172,6 +219,7 @@ describe("persistent Pi parent agent", () => {
       runtimeDir,
       model: mock.model,
       subagentModel: "youban-mock/mock-model",
+      skillSnapshot: builtinSnapshot(),
       sweepIntervalMs: 0,
       sessionFactory: async (options) => {
         attempts += 1;
@@ -200,6 +248,7 @@ describe("persistent Pi parent agent", () => {
       runtimeDir,
       model: mock.model,
       subagentModel: "youban-mock/mock-model",
+      skillSnapshot: builtinSnapshot(),
       sweepIntervalMs: 0,
     });
     const observed: string[] = [];

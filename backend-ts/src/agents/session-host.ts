@@ -14,12 +14,10 @@ import type {
   SubagentDelegationRequest,
   SubagentDelegationResponse,
 } from "pi-subagents/delegation";
+import { renderAssignedSkills } from "./skill-registry.ts";
+import type { SkillCatalogSnapshot } from "./skill-types.ts";
 import {
-  renderApprovedSkills,
-  type ApprovedSkillName,
-} from "./skill-registry.ts";
-import {
-  YOUBAN_SUBAGENT_DEFINITIONS,
+  createYoubanSubagentDefinitions,
   YOUBAN_SUBAGENT_NAMES,
 } from "./subagent-definitions.ts";
 
@@ -32,12 +30,24 @@ interface RuntimeLease {
 
 let activeRuntimeLease: RuntimeLease | undefined;
 
+const EMPTY_SKILL_CATALOG_SNAPSHOT: SkillCatalogSnapshot = {
+  generation: 0,
+  assignments: {
+    "parent-assistant": [],
+    "destination-researcher": [],
+    "segment-planner": [],
+    summary: [],
+    "itinerary-reviewer": [],
+    "plan-editor": [],
+  },
+};
+
 export interface CreateYoubanAgentSessionOptions {
   cwd: string;
   runtimeDir: string;
   model: Model<Api>;
   subagentModel?: string;
-  skillNames?: readonly ApprovedSkillName[];
+  skillSnapshot?: SkillCatalogSnapshot;
   tools?: readonly string[];
   customTools?: ToolDefinition[];
   sessionDir?: string;
@@ -47,6 +57,7 @@ export interface YoubanAgentSessionHost {
   session: AgentSession;
   resourceLoader: DefaultResourceLoader;
   extensionErrors: string[];
+  generation: number;
   delegate(request: SubagentDelegationRequest): Promise<SubagentDelegationResponse>;
   cancel(request: Pick<SubagentDelegationRequest, "requestId" | "ownerRunId" | "nodeId">): void;
   dispose(): void;
@@ -96,6 +107,7 @@ function acquireRuntimeLease(runtimeDirInput: string): () => void {
 export async function createYoubanAgentSession(
   options: CreateYoubanAgentSessionOptions,
 ): Promise<YoubanAgentSessionHost> {
+  const skillSnapshot = options.skillSnapshot ?? EMPTY_SKILL_CATALOG_SNAPSHOT;
   const releaseRuntime = acquireRuntimeLease(options.runtimeDir);
   let session: AgentSession | undefined;
 
@@ -128,7 +140,7 @@ export async function createYoubanAgentSession(
         {
           name: "pi-subagents",
           factory(pi) {
-            for (const agent of YOUBAN_SUBAGENT_DEFINITIONS) {
+            for (const agent of createYoubanSubagentDefinitions(skillSnapshot)) {
               registerAgent({
                 pi,
                 name: agent.name,
@@ -149,7 +161,7 @@ export async function createYoubanAgentSession(
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
-      appendSystemPrompt: [renderApprovedSkills(options.skillNames ?? [])].filter(Boolean),
+      appendSystemPrompt: [renderAssignedSkills(skillSnapshot, "parent-assistant")].filter(Boolean),
       skillsOverride: () => ({ skills: [], diagnostics: [] }),
     });
     await resourceLoader.reload();
@@ -233,6 +245,7 @@ export async function createYoubanAgentSession(
       extensionErrors: result.extensionsResult.errors.map(
         (error) => `${error.path}: ${error.error}`,
       ),
+      generation: skillSnapshot.generation,
       delegate,
       cancel(request) {
         eventBus.emit(delegation.SUBAGENT_DELEGATION_CANCEL_EVENT, request);

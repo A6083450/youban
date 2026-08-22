@@ -5,7 +5,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { StructuredAgentRequest } from "./pi-trip-planner.ts";
 import { acquirePiRuntimeApiKey } from "./pi-subagent-runner.ts";
 import { createYoubanAgentSession, type YoubanAgentSessionHost } from "./session-host.ts";
-import { APPROVED_SKILL_NAMES } from "./skill-registry.ts";
+import type { SkillCatalogSnapshot } from "./skill-types.ts";
 
 export interface ParentAgentScope {
   key: string;
@@ -48,6 +48,7 @@ interface PersistentParentAgentOptions {
   sessionIdleMs?: number;
   sweepIntervalMs?: number;
   now?: () => number;
+  skillSnapshot?: SkillCatalogSnapshot;
   sessionFactory?: typeof createYoubanAgentSession;
   toolsForScope?: (scope: ParentAgentScope) => ToolDefinition[];
 }
@@ -148,7 +149,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
         runtimeDir: this.options.runtimeDir,
         model: this.options.model,
         subagentModel: this.options.subagentModel,
-        skillNames: APPROVED_SKILL_NAMES,
+        skillSnapshot: this.options.skillSnapshot,
         tools: ["subagent", ...customTools.map((tool) => tool.name)],
         customTools,
         sessionDir: join(this.options.runtimeDir, "sessions", id),
