@@ -30,7 +30,8 @@
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
     "pi-hermes-memory": "0.9.6",
-    "pi-subagents": "0.53.0"
+    "pi-subagents": "0.53.0",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
