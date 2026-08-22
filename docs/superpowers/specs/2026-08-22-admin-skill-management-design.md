@@ -151,7 +151,7 @@ ZIP uploads are limited to:
 
 Reject absolute paths, parent traversal, duplicate normalized paths, symbolic links, hard links, device entries, encrypted entries, and archives without exactly one selected `SKILL.md`. A package may place the Skill at its root or one containing directory; ambiguous multi-Skill archives are rejected in this release.
 
-Extraction happens in a new staging directory. The validated package is moved atomically to its immutable version directory only after the candidate database transaction succeeds. Failed staging directories are removed.
+Extraction happens in a new staging directory located on the same filesystem as the immutable package root. Candidate creation uses one synchronous critical section: atomically rename the validated staging directory to its final version path, write the candidate rows inside a SQLite transaction, and commit. If the database transaction fails, compensation renames the directory back before cleanup; if the initial rename fails, no database write begins. Failed staging directories are removed.
 
 ### Git
 
