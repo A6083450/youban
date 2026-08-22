@@ -9,6 +9,7 @@ import {
   reconcileBuiltinSkills,
   renderAssignedSkills,
 } from "../src/agents/skill-registry.ts";
+import { SkillValidationError } from "../src/agents/skill-document.ts";
 import { SkillCatalogRepository } from "../src/agents/skill-repository.ts";
 import type { SkillAgentId } from "../src/agents/skill-types.ts";
 import { YoubanDatabase } from "../src/domain/database.ts";
@@ -78,6 +79,33 @@ describe("repository-owned built-in skills", () => {
       expect(() => loadBuiltinSkillDefinitions(registryRoot)).toThrow("resolves outside registry");
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid UTF-8 byte sequence before loading a built-in skill", () => {
+    const registryRoot = mkdtempSync(join(tmpdir(), "youban-skills-"));
+    try {
+      for (const name of APPROVED_SKILL_NAMES) {
+        const skillDirectory = join(registryRoot, name);
+        mkdirSync(skillDirectory, { recursive: true });
+        writeFileSync(
+          join(skillDirectory, "SKILL.md"),
+          `---\nname: ${name}\ndescription: Test skill for registry validation.\n---\n\n# ${name}\n`,
+        );
+      }
+      writeFileSync(
+        join(registryRoot, "trip-planning", "SKILL.md"),
+        Buffer.from([0xff, 0xfe, 0xfd]),
+      );
+
+      expect(() => loadBuiltinSkillDefinitions(registryRoot)).toThrowError(
+        expect.objectContaining({
+          code: "invalid_skill_encoding",
+          constructor: SkillValidationError,
+        }),
+      );
+    } finally {
+      rmSync(registryRoot, { recursive: true, force: true });
     }
   });
 

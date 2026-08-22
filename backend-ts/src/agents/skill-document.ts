@@ -34,6 +34,13 @@ function normalizeLineEndings(content: string): string {
   return content.replace(/\r\n?/g, "\n");
 }
 
+const YAML_PARSE_OPTIONS = {
+  customTags: [],
+  prettyErrors: false,
+  strict: true,
+  uniqueKeys: true,
+};
+
 function containsUnsafeYamlNode(node: unknown): boolean {
   if (!isNode(node)) return false;
   if (isAlias(node) || node.anchor || (node.tag !== undefined && !node.tag.startsWith("tag:yaml.org,2002:"))) {
@@ -51,16 +58,19 @@ function containsUnsafeYamlNode(node: unknown): boolean {
 function parseFrontmatter(content: string): { name: string; description: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
   if (!match) validationError("invalid_skill_frontmatter", "skill document must begin with YAML frontmatter");
-  if (/^---\n(?:[A-Za-z0-9_-]+:)/.test(content.slice(match[0].length))) {
-    validationError("invalid_skill_frontmatter", "skill document frontmatter must not contain extra YAML documents");
+  const trailingDocument = content.slice(match[0].length).match(/^(?:[ \t]*\n)*---\n([\s\S]*)$/);
+  if (trailingDocument) {
+    const documents = parseAllDocuments(trailingDocument[1], YAML_PARSE_OPTIONS);
+    if (
+      documents.length > 0 &&
+      documents.every((document) => document.errors.length === 0 && document.warnings.length === 0) &&
+      documents.some((document) => document.contents !== null)
+    ) {
+      validationError("invalid_skill_frontmatter", "skill document frontmatter must not contain extra YAML documents");
+    }
   }
 
-  const documents = parseAllDocuments(match[1], {
-    customTags: [],
-    prettyErrors: false,
-    strict: true,
-    uniqueKeys: true,
-  });
+  const documents = parseAllDocuments(match[1], YAML_PARSE_OPTIONS);
   if (
     documents.length !== 1 ||
     documents[0].errors.length > 0 ||
@@ -98,10 +108,10 @@ export function validateSkillDocument(
   if (Buffer.from(content, "utf8").toString("utf8") !== content) {
     validationError("invalid_skill_encoding", "skill document must be valid UTF-8 text");
   }
-  const normalizedContent = normalizeLineEndings(content);
-  if (Buffer.byteLength(normalizedContent, "utf8") > MAX_SKILL_DOCUMENT_BYTES) {
+  if (Buffer.byteLength(content, "utf8") > MAX_SKILL_DOCUMENT_BYTES) {
     validationError("skill_document_too_large", "skill document must not exceed 256 KiB");
   }
+  const normalizedContent = normalizeLineEndings(content);
   const { name, description } = parseFrontmatter(normalizedContent);
   if (expectedName !== undefined && name !== expectedName) {
     validationError("skill_name_mismatch", "skill frontmatter name does not match the installed name");

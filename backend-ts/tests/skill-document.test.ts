@@ -41,6 +41,7 @@ describe("validateSkillDocument", () => {
     expectValidationCode("---\nname: &name museum-guide\ndescription: A guide.\n---\n", "invalid_skill_frontmatter");
     expectValidationCode("---\nname: !custom museum-guide\ndescription: A guide.\n---\n", "invalid_skill_frontmatter");
     expectValidationCode("---\nname: museum-guide\ndescription: A guide.\n---\n---\nname: other\n", "invalid_skill_frontmatter");
+    expectValidationCode("---\nname: museum-guide\ndescription: A guide.\n---\n---\n# extra YAML document\nname: other\n", "invalid_skill_frontmatter");
   });
 
   it("rejects names outside the stable slug format", () => {
@@ -61,6 +62,13 @@ describe("validateSkillDocument", () => {
 
   it("rejects documents larger than 256 KiB by UTF-8 byte length", () => {
     expectValidationCode(skill("museum-guide", "A guide.", "x".repeat(262_145)), "skill_document_too_large");
+  });
+
+  it("rejects a CRLF source over 256 KiB before line-ending normalization", () => {
+    expectValidationCode(
+      "---\r\nname: museum-guide\r\ndescription: A guide.\r\n---\r\n\r\n" + "x\r\n".repeat(100_000),
+      "skill_document_too_large",
+    );
   });
 
   it("exposes typed validation failures", () => {

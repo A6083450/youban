@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { validateSkillDocument } from "./skill-document.ts";
+import { SkillValidationError, validateSkillDocument } from "./skill-document.ts";
 import { SkillCatalogRepository } from "./skill-repository.ts";
 import {
   SKILL_AGENT_IDS,
@@ -39,6 +39,15 @@ function defaultAgentIdsFor(name: ApprovedSkillName): SkillAgentId[] {
   return SKILL_AGENT_IDS.filter((agentId) => BUILTIN_SKILL_ASSIGNMENTS[agentId].includes(name));
 }
 
+function readUtf8SkillDocument(filePath: string): string {
+  const bytes = readFileSync(filePath);
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new SkillValidationError("invalid_skill_encoding", "skill document must be valid UTF-8 text");
+  }
+}
+
 export function loadBuiltinSkillDefinitions(
   skillsDir = DEFAULT_SKILLS_DIR,
 ): ReconciledBuiltinSkill[] {
@@ -49,7 +58,7 @@ export function loadBuiltinSkillDefinitions(
     if (!isInsideDirectory(filePath, root)) {
       throw new Error(`Built-in skill resolves outside registry: ${name}`);
     }
-    const document = validateSkillDocument(readFileSync(filePath, "utf8"), name);
+    const document = validateSkillDocument(readUtf8SkillDocument(filePath), name);
     return {
       ...document,
       packageRelativePath: join("skills", relativePath),
