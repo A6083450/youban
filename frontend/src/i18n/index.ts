@@ -1,18 +1,10 @@
 import { createI18n } from 'vue-i18n'
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES, messages, type AppLocale } from './messages'
+import { DEFAULT_LOCALE, messages, type AppLocale } from './messages'
+import { normalizeLocale } from './locale'
 
 export type { AppLocale } from './messages'
 
 const LOCALE_STORAGE_KEY = 'tripstar-locale'
-
-const normalizeLocale = (locale: string): AppLocale => {
-  if (SUPPORTED_LOCALES.includes(locale as AppLocale)) {
-    return locale as AppLocale
-  }
-
-  const matched = SUPPORTED_LOCALES.find((item) => locale.startsWith(item.split('-')[0]))
-  return matched ?? DEFAULT_LOCALE
-}
 
 const resolveInitialLocale = (): AppLocale => {
   if (typeof window === 'undefined') {
