@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Bun-1.4-black?logo=bun&logoColor=white" alt="Bun">
   <img src="https://img.shields.io/badge/Vue.js-3-4FC08D?logo=vue.js&logoColor=white" alt="Vue.js">
-  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Elysia-1.4-7C3AED" alt="Elysia">
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License">
 </p>
 
@@ -33,7 +33,7 @@
 
 | 特性 | 描述 |
 |------|------|
-| 🧠 **AI 智能规划** | 基于 LangGraph 多 Agent 协作，理解复杂旅行需求 |
+| 🧠 **AI 智能规划** | Pi SDK 与 `pi-subagents` 真实子 Agent 协作，确定性编排守住状态和权限边界 |
 | 💬 **自然语言交互** | 像聊天一样描述行程，AI 实时响应调整 |
 | 🧭 **旅行蓝图** | 按阶段呈现路线主题、规划逻辑、节奏与代表体验 |
 | 🗓️ **自适应日程** | 按行程长度自动选择日/周/月分组，完整展示每日时间线 |
@@ -140,8 +140,8 @@
 
 ### 💰 可审计预算
 - **人均与合计切换** - 预算台账统一保存合计金额，页面可随时切换人均口径
-- **酒店间夜估算** - FlyAI 每间房每晚搜索起价 × 房间数 × 晚数 ÷ 人数
-- **真实来源降级** - FlyAI 无报价时保留高德真实酒店，金额显示待填写，不由 LLM 补造
+- **酒店预算边界** - 只接受可信上游明确提供的金额，不由 LLM 推测酒店价格
+- **真实来源降级** - 保留高德可信酒店 POI；没有报价时金额显示待填写
 - **用户 DIY** - 用户可新增、修改、删除和恢复预算条目，手动价格优先于自动同步
 
 ### 🔖 行程管理
@@ -189,18 +189,14 @@
 
 | 技术 | 版本 | 说明 |
 |------|------|------|
-| [FastAPI](https://fastapi.tiangolo.com/) | 0.115+ | 高性能 Python Web 框架 |
-| [LangGraph](https://langchain-ai.github.io/langgraph/) | 1.0+ | LLM Agent 编排框架 |
-| [LangChain](https://langchain.com/) | - | LLM 应用开发框架 |
-| [Mem0](https://mem0.ai/) | 2.0+ | AI 记忆层，持久化用户偏好 |
-| [Pydantic](https://docs.pydantic.dev/) | 2.0+ | 数据验证和设置管理 |
-| [Uvicorn](https://www.uvicorn.org/) | 0.32+ | ASGI 服务器 |
-| [Gunicorn](https://gunicorn.org/) | 23.0+ | WSGI HTTP 服务器（生产） |
-| [httpx](https://www.python-httpx.org/) | 0.27+ | 异步 HTTP 客户端 |
-| [Loguru](https://github.com/Delgan/loguru) | 0.7+ | 日志库 |
-| [FlyAI Skill](https://github.com/alibaba-flyai/flyai-skill) | 1.0.15 | 酒店真实库存、搜索起价与预订来源 |
+| [Bun](https://bun.sh/) | 1.4 | TypeScript 运行时、测试、SQLite 与性能分析 |
+| [Elysia](https://elysiajs.com/) | 1.4+ | Bun 原生 HTTP、SSE、WebSocket 与 TypeBox 校验 |
+| [Pi SDK](https://github.com/badlogic/pi-mono) | 0.84.2 | 模型、Agent 会话与扩展宿主 |
+| `pi-subagents` | 0.53.0 | 真实子 Agent、结构化输出、并行与取消 |
+| `pi-hermes-memory` | 0.9.6 | 用户偏好记忆与隔离存储 |
+| [Drizzle ORM](https://orm.drizzle.team/) | 0.45+ | `bun:sqlite` 类型安全持久化 |
 
-酒店链路采用“研究 Agent → 受控 FlyAI Skill/CLI → 确定性报价后端”。Agent 只能选择受控候选 ID；酒店身份、坐标和价格不能由 LLM 生成。每次工具调用会写入 `data/tool_audit/`，高德只负责位置补全和无报价降级。
+酒店和景点链路只使用高德可信 POI。Agent 只能选择服务端分配的候选 ID；身份、坐标和价格不能由 LLM 生成，没有真实报价时保留待填写状态。
 
 ### 系统架构图
 
@@ -219,7 +215,7 @@
                           │ HTTP/WebSocket
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   后端 (FastAPI)                             │
+│                 后端 (Bun 1.4 + Elysia)                     │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │                    API 路由层                        │   │
 │  │  /api/trip  /api/chat  /api/poi  /api/map  /admin  │   │
@@ -233,8 +229,8 @@
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │              AI Agent 层 (LangGraph)                 │   │
-│  │  行程规划 Agent │ 对话 Agent │ 推荐 Agent            │   │
+│  │            Pi Agent + 确定性编排层                    │   │
+│  │  持久父 Agent │ pi-subagents │ 分段规划与检查点       │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────┬───────────────────────────────────┘
                           │
@@ -242,7 +238,7 @@
           ▼               ▼               ▼
     ┌──────────┐   ┌──────────┐   ┌──────────┐
     │ LLM API  │   │ 地图 API │   │ 数据存储  │
-    │ (OpenAI) │   │ (高德/   │   │ (本地文件)│
+    │ (OpenAI) │   │ (高德/   │   │ (SQLite)  │
     │          │   │ Google)  │   │          │
     └──────────┘   └──────────┘   └──────────┘
 ```
@@ -253,9 +249,7 @@
 
 ### 环境要求
 
-- Python 3.10+
-- Node.js 18+
-- npm 或 pnpm
+- Bun 1.4+
 - LLM API Key（OpenAI 或兼容 API）
 - 高德地图 API Key（可选，国内地图服务）
 
@@ -277,36 +271,22 @@ cp .env.example .env
 编辑 `.env` 文件，配置以下必要参数：
 
 ```env
-# LLM API 配置（必填）
-LLM_API_KEY=your_api_key_here
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL_ID=gpt-4
+# LLM API 配置（必填；LLM_* 别名仍兼容）
+OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4
 
 # 高德地图 API（必填，用于国内地图服务）
 VITE_AMAP_WEB_JS_KEY=your_amap_web_js_key
 VITE_AMAP_WEB_KEY=your_amap_web_key
-
-# FlyAI（Key 可选，不配置也可使用基础查询）
-FLYAI_ENABLED=true
-FLYAI_API_KEY=
 ```
 
 ### 3. 启动后端
 
 ```bash
-cd backend
-
-# 安装 uv 包管理器（如未安装）
-pip install uv
-
-# 安装依赖
-uv sync
-
-# 安装固定版本的 FlyAI CLI
-npm install
-
-# 启动开发服务器
-uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
+cd backend-ts
+bun install --frozen-lockfile
+bun run dev
 ```
 
 ### 4. 启动前端
@@ -315,10 +295,10 @@ uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
 cd frontend
 
 # 安装依赖
-npm install
+bun install --frozen-lockfile
 
 # 启动开发服务器
-npm run dev
+bun run dev
 ```
 
 访问 http://localhost:5173 即可使用。
@@ -326,60 +306,36 @@ npm run dev
 ### 5. 运行验证
 
 ```bash
-# 后端模型、Agent、聊天编辑与 API 回归测试
-cd backend
-uv run python -m unittest \
-  app.models.schemas_test \
-  app.services.chat_service_test \
-  app.agents.langgraph_planner_test \
-  app.api.routes.trip_conversation_endpoint_test
+# 后端模型、真实子 Agent、HTTP/WS 与迁移回归测试
+cd backend-ts
+bun run test
+bun run typecheck
+bun run audit:python-tests
 
 # 前端类型检查、构建、工具测试与端到端测试
 cd ../frontend
-npm run build
-node --test src/utils/*.test.mjs
-npx playwright test
+bun run test
+bun run build
+bun run test:e2e
 ```
 
 ---
 
 ## 🐳 Docker 部署
 
-### 使用 Docker Compose（推荐）
+TypeScript 镜像使用并行保留的 `Dockerfile.ts`；本地开发和测试直接运行 Bun，无需容器。
 
 ```bash
-# 配置环境变量
-export LLM_API_KEY=your_api_key
-export LLM_BASE_URL=https://api.openai.com/v1
-export LLM_MODEL_ID=gpt-4
-export VITE_AMAP_WEB_JS_KEY=your_key
-export VITE_AMAP_WEB_KEY=your_key
-
-# 启动服务
-docker-compose up -d
-```
-
-访问 http://localhost:7860 即可使用。
-
-### 单独构建 Docker 镜像
-
-```bash
-docker build -t youban-trip-planner \
+docker build -f Dockerfile.ts -t youban-trip-planner-ts \
   --build-arg VITE_AMAP_WEB_JS_KEY=your_key \
   --build-arg VITE_AMAP_WEB_KEY=your_key .
 
 docker run -p 7860:7860 \
-  -e LLM_API_KEY=your_key \
-  -e LLM_BASE_URL=https://api.openai.com/v1 \
-  -e LLM_MODEL_ID=gpt-4 \
-  youban-trip-planner
-```
-
-### 开发环境 Docker
-
-```bash
-# 使用开发环境配置（支持热重载）
-docker-compose -f docker-compose.dev.yaml up
+  -e OPENAI_API_KEY=your_key \
+  -e OPENAI_BASE_URL=https://api.openai.com/v1 \
+  -e OPENAI_MODEL=gpt-4 \
+  -v "$PWD/data:/app/data" \
+  youban-trip-planner-ts
 ```
 
 ---
@@ -409,26 +365,18 @@ youban/
 │   │   ├── utils/              # 工具函数
 │   │   └── i18n/               # 国际化配置
 │   └── package.json
-├── backend/                     # 后端项目
-│   ├── app/
-│   │   ├── agents/             # LangGraph Agent
-│   │   │   ├── trip_planner_agent.py  # 行程规划 Agent
-│   │   │   └── plan_parser.py         # 行程解析器
-│   │   ├── api/                # FastAPI 路由
-│   │   │   └── routes/                # API 端点
-│   │   │       ├── trip.py            # 行程相关
-│   │   │       ├── chat.py            # 聊天相关
-│   │   │       ├── poi.py             # POI 搜索
-│   │   │       ├── map.py             # 地图服务
-│   │   │       └── admin.py           # 管理接口
-│   │   ├── models/             # 数据模型
-│   │   ├── services/           # 业务逻辑
-│   │   │   ├── llm_service.py         # LLM 服务
-│   │   │   ├── amap_service.py        # 高德地图
-│   │   │   ├── google_map_service.py  # Google Maps
-│   │   │   └── memory_service.py      # 记忆服务
-│   │   └── config.py           # 配置管理
-│   └── pyproject.toml
+├── backend-ts/                  # Bun 1.4 / Elysia 后端
+│   ├── src/
+│   │   ├── agents/             # Pi 父 Agent、真实子 Agent 与白名单 Skills
+│   │   ├── config/             # 环境变量与原子运行时配置
+│   │   ├── domain/             # SQLite、任务状态和确定性业务规则
+│   │   ├── http/               # Elysia HTTP、SSE、WebSocket 与 SPA 托管
+│   │   ├── runtime/            # 内存压力与优雅关停
+│   │   └── services/           # 高德与 Hermes 适配层
+│   ├── scripts/                # JSON/SQLite 迁移、回滚导出、基准与冒烟
+│   ├── tests/                  # Bun 单元、契约和真实 Pi 插件测试
+│   └── package.json
+├── backend/                     # Python 旧后端，切换观察期内仅作回滚参考
 ├── data/                        # 数据存储目录
 │   ├── conversations/          # 对话历史
 │   ├── images/                 # 图片缓存
@@ -437,12 +385,8 @@ youban/
 ├── imgs/                        # 截图资源
 │   ├── pc/                     # PC 端截图
 │   └── mobile/                 # 移动端截图
-├── Dockerfile                  # 生产环境镜像
-├── Dockerfile.dev              # 开发环境镜像
-├── docker-compose.yaml         # 生产环境编排
-├── docker-compose.dev.yaml     # 开发环境编排
-├── start.sh                    # 生产启动脚本
-└── start-dev.sh                # 开发启动脚本
+├── Dockerfile.ts               # Bun/TypeScript 候选生产镜像
+└── Dockerfile                  # Python 回滚镜像（观察期保留）
 ```
 
 ---
@@ -453,9 +397,10 @@ youban/
 
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
-| `LLM_API_KEY` | LLM API 密钥 | - |
-| `LLM_BASE_URL` | API 基础 URL | `https://api.openai.com/v1` |
-| `LLM_MODEL_ID` | 模型 ID | `gpt-4` |
+| `OPENAI_API_KEY` | LLM API 密钥；兼容 `LLM_API_KEY` | - |
+| `OPENAI_BASE_URL` | API 基础 URL；兼容 `LLM_BASE_URL` | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | 模型 ID；兼容 `LLM_MODEL_ID` | `gpt-4` |
+| `LLM_API_STYLE` | Pi 模型 API 风格 | `responses` |
 
 ### 地图配置
 
@@ -464,16 +409,6 @@ youban/
 | `VITE_AMAP_WEB_JS_KEY` | 高德地图 Web JS API Key |
 | `VITE_AMAP_WEB_KEY` | 高德地图 Web 服务 Key |
 | `GOOGLE_MAPS_API_KEY` | Google Maps API Key（可选） |
-
-### FlyAI 酒店搜索
-
-| 环境变量 | 说明 | 默认值 |
-|---------|------|--------|
-| `FLYAI_ENABLED` | 是否启用 FlyAI 酒店搜索 | `true` |
-| `FLYAI_API_KEY` | FlyAI 增强结果 Key（可选） | - |
-| `FLYAI_CLI_PATH` | 自定义 `flyai` 可执行文件路径 | 项目本地 CLI |
-| `FLYAI_TIMEOUT_SECONDS` | 单次查询超时 | `8` |
-| `FLYAI_CACHE_TTL_SECONDS` | 酒店查询缓存秒数 | `3600` |
 
 ### 服务配置
 
@@ -498,13 +433,14 @@ youban/
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/trip/plan` | POST | 生成行程规划 |
-| `/api/trip/stream` | POST | 流式生成行程 |
+| `/api/trip/parse/stream` | POST | 流式理解旅行需求 |
+| `/api/trip/ws/{task_id}` | WebSocket | 订阅规划进度和最终结果 |
 | `/api/trip/share/{task_id}` | POST | 计划拥有者生成或复用分享码 |
 | `/api/trip/share/{share_code}` | GET | 凭分享码读取只读最终行程 |
-| `/api/chat` | POST | 对话接口 |
+| `/api/chat/ask` | POST | 针对已有计划问答 |
+| `/api/chat/edit/stream` | POST | 流式修改已有计划 |
 | `/api/poi/search` | GET | POI 搜索 |
-| `/api/map/route` | GET | 路线规划 |
-| `/api/settings` | GET/PUT | 系统配置 |
+| `/api/admin/settings` | GET/PUT | 管理员运行时配置 |
 
 ---
 
@@ -521,8 +457,8 @@ youban/
 ### 开发规范
 
 - 前端代码遵循 Vue 3 Composition API 规范
-- 后端代码遵循 PEP 8 规范
-- 提交信息使用中文，格式：`类型: 描述`
+- 后端代码遵循 TypeScript 严格类型和 Bun 测试约束
+- 提交信息遵循 Conventional Commits
 
 ---
 
