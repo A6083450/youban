@@ -191,10 +191,13 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   complete(input: ParentAgentCompletion): Promise<string> {
     return this.serialized(input.scope, async (host) => {
       if (input.signal?.aborted) throw abortError(input.signal);
+      let deltaTail = Promise.resolve();
       const unsubscribe = host.session.subscribe((event) => {
         if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
         const delta = event.assistantMessageEvent.delta;
-        if (delta) void input.onDelta?.(delta);
+        if (delta && input.onDelta) {
+          deltaTail = deltaTail.then(() => input.onDelta!(delta)).then(() => undefined);
+        }
       });
       const abort = () => { void host.session.abort(); };
       input.signal?.addEventListener("abort", abort, { once: true });
@@ -202,10 +205,12 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
         if (input.signal?.aborted) throw abortError(input.signal);
         await host.session.prompt(input.prompt, { expandPromptTemplates: false });
         if (input.signal?.aborted) throw abortError(input.signal);
+        await deltaTail;
         return host.session.getLastAssistantText()?.trim() ?? "";
       } finally {
         input.signal?.removeEventListener("abort", abort);
         unsubscribe();
+        await deltaTail.catch(() => {});
       }
     });
   }

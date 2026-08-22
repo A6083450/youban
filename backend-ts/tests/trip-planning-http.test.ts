@@ -52,6 +52,28 @@ class FakePlanner implements TripPlanner {
   }
 }
 
+class BlockingPlanner implements TripPlanner {
+  started = false;
+  closed = false;
+  private releaseRun!: () => void;
+  private readonly runGate = new Promise<void>((resolve) => { this.releaseRun = resolve; });
+
+  async plan(request: TripPlanningRequest): Promise<Record<string, unknown>> {
+    this.started = true;
+    await this.runGate;
+    return {
+      success: true,
+      data: {
+        ...request,
+        days: [{ date: request.start_date, day_index: 0, city: request.city, attractions: [] }],
+      },
+    };
+  }
+
+  release(): void { this.releaseRun(); }
+  close(): void { this.closed = true; }
+}
+
 function makeRuntime(planner = new FakePlanner()): { runtime: HttpRuntime; planner: FakePlanner } {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-plan-http-"));
   tempDirs.push(dataDir);
@@ -82,6 +104,50 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("trip planning HTTP lifecycle", () => {
+  it("drains the active service generation before applying runtime settings", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-plan-refresh-"));
+    tempDirs.push(dataDir);
+    const first = new BlockingPlanner();
+    const second = new FakePlanner();
+    const factories: TripPlanner[] = [first, second];
+    const runtime = createHttpRuntime({
+      dataDir,
+      serviceFactories: { planner: () => factories.shift()! },
+    });
+    runtimes.push(runtime);
+    const planToken = runtime.assistant.ledger.register(DRAFT, 0.95).token;
+    const pendingToken = runtime.assistant.ledger.register({ city: "北京" }, 0.95).token;
+
+    const created = await request(runtime.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      execution_token: planToken,
+    });
+    expect(created.status).toBe(200);
+    await waitFor(() => first.started);
+
+    let updateSettled = false;
+    const update = runtime.app.handle(new Request("http://localhost/api/admin/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-admin-token": "admin@123" },
+      body: JSON.stringify({ openai_model: "next-model" }),
+    })).then((response) => {
+      updateSettled = true;
+      return response;
+    });
+    await Bun.sleep(20);
+    expect(updateSettled).toBe(false);
+    expect(first.closed).toBe(false);
+
+    first.release();
+    expect((await update).status).toBe(200);
+    expect(first.closed).toBe(true);
+    expect(runtime.planner).toBe(second);
+    expect(runtime.assistant.ledger.validate(pendingToken, { city: "北京" })).toEqual({
+      valid: true,
+      reason: "ok",
+    });
+  });
+
   it("consumes a confirmation exactly once and completes in the background", async () => {
     const { runtime, planner } = makeRuntime();
     const token = runtime.assistant.ledger.register(DRAFT, 0.95).token;

@@ -190,4 +190,33 @@ describe("persistent Pi parent agent", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("waits for asynchronous delta handlers before completing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-parent-delta-"));
+    const runtimeDir = join(root, "runtime");
+    const mock = createMockPiModel(runtimeDir, { text: "ordered-delta" });
+    const parent = new PersistentPiParentAgent({
+      cwd: root,
+      runtimeDir,
+      model: mock.model,
+      subagentModel: "youban-mock/mock-model",
+      sweepIntervalMs: 0,
+    });
+    const observed: string[] = [];
+    try {
+      expect(await parent.complete({
+        scope: { key: "user:delta", userId: "delta" },
+        prompt: "stream",
+        async onDelta(text) {
+          await Bun.sleep(20);
+          observed.push(text);
+        },
+      })).toBe("ordered-delta");
+      expect(observed.join("")).toBe("ordered-delta");
+    } finally {
+      await parent.close();
+      mock.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

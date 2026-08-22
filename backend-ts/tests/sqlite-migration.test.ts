@@ -125,5 +125,10 @@ describe("JSON to SQLite migration", () => {
     expect(JSON.parse(readFileSync(join(outputDir, "users.json"), "utf8"))).toEqual({
       users: [expect.objectContaining({ user_id: "user-1", nickname: "Neo" })],
     });
+    expect(JSON.parse(readFileSync(join(outputDir, "conversations", "task-1.json"), "utf8"))).toEqual({
+      plan_id: "task-1",
+      user_id: "user-1",
+      messages: [{ role: "user", content: "去北京" }],
+    });
   });
 });

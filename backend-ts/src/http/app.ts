@@ -86,6 +86,9 @@ export interface HttpRuntimeOptions {
   poiSearch?: PoiSearch;
   memory?: UserMemoryService;
   parentAgent?: YoubanParentAgent;
+  serviceFactories?: {
+    planner?: () => TripPlanner;
+  };
 }
 
 function failedEvent(taskId: string, error: string): Record<string, unknown> {
@@ -138,12 +141,13 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   let parentAgent = options.parentAgent ?? createDefaultParentAgent({
     cwd: getRepoRoot(), dataDir: options.dataDir, tasks, memory,
   });
+  const confirmationLedger = options.assistant?.ledger ?? new ConfirmationLedger();
   let assistant = options.assistant ?? new TripAssistant({
     llm: getPiLlmClient(),
-    ledger: new ConfirmationLedger(),
+    ledger: confirmationLedger,
     parentAgent,
   });
-  let planner: TripPlanner = options.planner ?? createDefaultTripPlanner({
+  let planner: TripPlanner = options.planner ?? options.serviceFactories?.planner?.() ?? createDefaultTripPlanner({
     cwd: getRepoRoot(),
     dataDir: options.dataDir,
   });
@@ -159,8 +163,14 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const adminPasswordFile = join(options.dataDir, "admin_password.txt");
   const frontendDist = options.frontendDist;
   const unsubscribers = new Map<string, () => void>();
+  const webSockets = new Map<string, { close(code?: number, reason?: string): void }>();
   const activeRuns = new Set<Promise<void>>();
+  const activeServiceCalls = new Set<Promise<unknown>>();
+  let serviceGate = Promise.resolve();
+  let settingsRefreshTail = Promise.resolve();
+  let pendingSettingsRefreshes = 0;
   let closed = false;
+  let closePromise: Promise<void> | undefined;
   let dispatchRewritten: (request: Request) => Response | Promise<Response>;
 
   mkdirSync(options.dataDir, { recursive: true });
@@ -195,23 +205,71 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     };
   };
 
-  const refreshDefaultServices = (): void => {
-    if (!options.parentAgent) {
-      void parentAgent.close();
-      parentAgent = createDefaultParentAgent({ cwd: getRepoRoot(), dataDir: options.dataDir, tasks, memory });
+  const withServices = async <T>(run: (services: {
+    assistant: TripAssistant;
+    planner: TripPlanner;
+    chatService: TripChatService;
+  }) => Promise<T>): Promise<T> => {
+    await serviceGate;
+    if (closed) throw new Error("HTTP runtime is closed");
+    const services = { assistant, planner, chatService };
+    const operation = Promise.resolve().then(() => run(services));
+    activeServiceCalls.add(operation);
+    try {
+      return await operation;
+    } finally {
+      activeServiceCalls.delete(operation);
     }
-    if (!options.assistant) {
-      assistant = new TripAssistant({ llm: getPiLlmClient(), ledger: new ConfirmationLedger(), parentAgent });
-    }
-    if (!options.planner) {
-      void planner.close?.();
-      planner = createDefaultTripPlanner({ cwd: getRepoRoot(), dataDir: options.dataDir });
-    }
-    if (!options.chatService) {
-      void chatService.close();
-      chatService = createDefaultTripChatService({ cwd: getRepoRoot(), dataDir: options.dataDir, parentAgent, memory });
-    }
-    if (!options.poiSearch) poiSearch = new AmapResearchSources({ apiKey: getSettings().vite_amap_web_key });
+  };
+
+  const applyRuntimeSettings = (input: Partial<RuntimeSettings>): Promise<ReturnType<typeof updateRuntimeSettings>> => {
+    pendingSettingsRefreshes += 1;
+    const operation = settingsRefreshTail.then(async () => {
+      const previousGate = serviceGate;
+      let releaseGate!: () => void;
+      const blocked = new Promise<void>((resolve) => { releaseGate = resolve; });
+      serviceGate = previousGate.then(() => blocked);
+      await previousGate;
+      try {
+        await Promise.allSettled([...activeServiceCalls]);
+        const updated = updateRuntimeSettings(input);
+        const previousParent = parentAgent;
+        const previousPlanner = planner;
+        const previousChatService = chatService;
+        const nextParent = options.parentAgent ?? createDefaultParentAgent({
+          cwd: getRepoRoot(), dataDir: options.dataDir, tasks, memory,
+        });
+        const nextAssistant = options.assistant ?? new TripAssistant({
+          llm: getPiLlmClient(), ledger: confirmationLedger, parentAgent: nextParent,
+        });
+        const nextPlanner = options.planner ?? options.serviceFactories?.planner?.()
+          ?? createDefaultTripPlanner({ cwd: getRepoRoot(), dataDir: options.dataDir });
+        const nextChatService = options.chatService ?? createDefaultTripChatService({
+          cwd: getRepoRoot(), dataDir: options.dataDir, parentAgent: nextParent, memory,
+        });
+        const nextPoiSearch = options.poiSearch
+          ?? new AmapResearchSources({ apiKey: getSettings().vite_amap_web_key });
+
+        await Promise.allSettled([
+          ...(!options.parentAgent ? [Promise.resolve(previousParent.close())] : []),
+          ...(!options.planner ? [Promise.resolve(previousPlanner.close?.())] : []),
+          ...(!options.chatService ? [Promise.resolve(previousChatService.close())] : []),
+        ]);
+        parentAgent = nextParent;
+        assistant = nextAssistant;
+        planner = nextPlanner;
+        chatService = nextChatService;
+        poiSearch = nextPoiSearch;
+        return updated;
+      } finally {
+        releaseGate();
+      }
+    });
+    settingsRefreshTail = operation.then(
+      () => { pendingSettingsRefreshes -= 1; },
+      () => { pendingSettingsRefreshes -= 1; },
+    );
+    return operation;
   };
 
   const planningResponse = (taskId: string, message: string) => ({
@@ -302,28 +360,32 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const initial = tasks.get(taskId);
       if (!initial?.request_payload) throw new Error("原始行程请求不可重试");
       const checkpoint = normalizeCheckpoint(initial.checkpoint);
-      const result = await planner.plan(initial.request_payload as TripPlanningRequest, {
-        checkpoint,
-        signal: planningAbort.signal,
-        onCheckpoint(nextCheckpoint) {
-          const current = tasks.get(taskId);
-          if (!current || closed) throw new Error("任务不存在");
-          tasks.save({ ...current, checkpoint: structuredClone(nextCheckpoint) as unknown as Record<string, unknown> }, {
-            immediate: true,
-          });
+      const result = await withServices(({ planner: activePlanner }) => activePlanner.plan(
+        initial.request_payload as TripPlanningRequest,
+        {
+          checkpoint,
+          signal: planningAbort.signal,
+          onCheckpoint(nextCheckpoint) {
+            const current = tasks.get(taskId);
+            if (!current || closed) throw new Error("任务不存在");
+            tasks.save({
+              ...current,
+              checkpoint: structuredClone(nextCheckpoint) as unknown as Record<string, unknown>,
+            }, { immediate: true });
+          },
+          onProgress(update) {
+            const current = tasks.get(taskId);
+            if (!current || closed) throw new Error("任务不存在");
+            tasks.save({
+              ...current,
+              stage: update.stage,
+              progress: Math.max(current.progress, Math.min(99, Math.max(0, update.progress))),
+              message: update.message,
+              details: update.details ?? current.details,
+            });
+          },
         },
-        onProgress(update) {
-          const current = tasks.get(taskId);
-          if (!current || closed) throw new Error("任务不存在");
-          tasks.save({
-            ...current,
-            stage: update.stage,
-            progress: Math.max(current.progress, Math.min(99, Math.max(0, update.progress))),
-            message: update.message,
-            details: update.details ?? current.details,
-          });
-        },
-      });
+      ));
       const current = tasks.get(taskId);
       if (!current || closed) return;
       tasks.save({
@@ -395,14 +457,14 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         throw new RevisionConflictError("行程版本已变化，请刷新后重试");
       }
     }
-    const output = await chatService.edit({
+    const output = await withServices(({ chatService: activeChatService }) => activeChatService.edit({
       message: body.message,
       trip_plan: plan,
       history: body.history,
       revision: body.revision,
       user_id: userId.trim(),
       plan_id: body.plan_id,
-    }, signal);
+    }, signal));
     if (task && body.plan_id) {
       const latest = tasks.get(body.plan_id);
       const latestResult = latest?.result;
@@ -525,10 +587,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
       return { success: true, message: "ok", data: getSettings() };
     })
-    .put("/api/admin/settings", ({ body, headers, status }) => {
+    .put("/api/admin/settings", async ({ body, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
-      const updated = updateRuntimeSettings(body as Partial<RuntimeSettings>);
-      refreshDefaultServices();
+      const updated = await applyRuntimeSettings(body as Partial<RuntimeSettings>);
       return { success: true, message: "配置已保存并立即生效", data: updated };
     }, {
       body: t.Record(t.String(), t.Unknown()),
@@ -575,10 +636,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       query: t.Object({ limit: t.Optional(t.String()) }),
       response: TripHistoryResponseSchema,
     })
-    .post("/api/trip/parse", ({ body, headers, request }) => assistant.parse(body, {
+    .post("/api/trip/parse", ({ body, headers, request }) => withServices(({ assistant: activeAssistant }) => activeAssistant.parse(body, {
       signal: request.signal,
       scope: parentScope(headers),
-    }), {
+    })), {
       body: t.Object({
         text: t.String({ maxLength: 500 }),
         language: t.Optional(t.String()),
@@ -590,7 +651,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/parse/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta, signal) => assistant.parse(body, { onDelta, signal, scope: parentScope(headers) }),
+      (onDelta, signal) => withServices(({ assistant: activeAssistant }) =>
+        activeAssistant.parse(body, { onDelta, signal, scope: parentScope(headers) })
+      ),
       [request.signal, planningAbort.signal],
     ), {
       body: t.Object({
@@ -603,10 +666,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         }))),
       }),
     })
-    .post("/api/trip/confirm-reply", ({ body, headers, request }) => assistant.confirm(body, {
+    .post("/api/trip/confirm-reply", ({ body, headers, request }) => withServices(({ assistant: activeAssistant }) => activeAssistant.confirm(body, {
       signal: request.signal,
       scope: parentScope(headers),
-    }), {
+    })), {
       body: t.Object({
         text: t.String({ maxLength: 500 }),
         draft: t.Optional(t.Record(t.String(), t.Unknown())),
@@ -619,7 +682,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/confirm-reply/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta, signal) => assistant.confirm(body, { onDelta, signal, scope: parentScope(headers) }),
+      (onDelta, signal) => withServices(({ assistant: activeAssistant }) =>
+        activeAssistant.confirm(body, { onDelta, signal, scope: parentScope(headers) })
+      ),
       [request.signal, planningAbort.signal],
     ), {
       body: t.Object({
@@ -642,7 +707,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       } catch (error) {
         return status(422, { detail: error instanceof Error ? error.message : String(error) });
       }
-      const consumed = assistant.ledger.consume(body.execution_token, signedPayload);
+      const consumed = confirmationLedger.consume(body.execution_token, signedPayload);
       if (!consumed.valid) {
         if (consumed.reason === "already_consumed") return status(409, { detail: "该确认已执行，请勿重复提交" });
         if (consumed.reason === "expired") return status(401, { detail: "确认已过期，请在对话中重新确认" });
@@ -1050,10 +1115,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }
       return { success: true, removed_images: removeTripData(task) };
     })
-    .post("/api/chat/ask", ({ body, headers, request }) => chatService.ask({
-      ...body,
-      user_id: (headers["x-user-id"] ?? "").trim(),
-    }, request.signal), {
+    .post("/api/chat/ask", ({ body, headers, request }) => withServices(({ chatService: activeChatService }) =>
+      activeChatService.ask({
+        ...body,
+        user_id: (headers["x-user-id"] ?? "").trim(),
+      }, request.signal)
+    ), {
       body: t.Object({
         message: t.String({ minLength: 1, maxLength: 2_000 }),
         trip_plan: t.Record(t.String(), t.Unknown()),
@@ -1120,6 +1187,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .ws("/api/trip/ws/:taskId", {
       open(ws) {
+        if (closed) {
+          ws.close(1012, "服务正在关闭");
+          return;
+        }
         const taskId = String(ws.data.params.taskId);
         const task = tasks.get(taskId);
         if (!task) {
@@ -1150,10 +1221,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           }
         });
         unsubscribers.set(ws.id, unsubscribe);
+        webSockets.set(ws.id, ws);
       },
       close(ws) {
         unsubscribers.get(ws.id)?.();
         unsubscribers.delete(ws.id);
+        webSockets.delete(ws.id);
       },
     })
     .get("/", () => {
@@ -1189,6 +1262,16 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
 
   dispatchRewritten = app.handle.bind(app);
 
+  const beginShutdown = (): void => {
+    if (closed) return;
+    closed = true;
+    planningAbort.abort(new Error("服务正在关闭"));
+    for (const socket of webSockets.values()) socket.close(1012, "服务正在关闭");
+    webSockets.clear();
+    for (const unsubscribe of unsubscribers.values()) unsubscribe();
+    unsubscribers.clear();
+  };
+
   return {
     app,
     dataDir: options.dataDir,
@@ -1207,13 +1290,13 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         evicted: 0,
       });
     },
+    beginShutdown,
     close() {
-      if (closed) return Promise.resolve();
-      closed = true;
-      planningAbort.abort();
-      for (const unsubscribe of unsubscribers.values()) unsubscribe();
-      unsubscribers.clear();
+      if (closePromise) return closePromise;
+      beginShutdown();
       const closeResources = async () => {
+        if (pendingSettingsRefreshes > 0) await settingsRefreshTail;
+        if (activeServiceCalls.size > 0) await Promise.allSettled([...activeServiceCalls]);
         tasks.close();
         users.close();
         conversations.close();
@@ -1223,8 +1306,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           ...(!options.parentAgent ? [Promise.resolve(parentAgent.close())] : []),
         ]);
       };
-      if (activeRuns.size === 0) return closeResources();
-      return Promise.allSettled([...activeRuns]).then(closeResources);
+      closePromise = activeRuns.size === 0
+        ? closeResources()
+        : Promise.allSettled([...activeRuns]).then(closeResources);
+      return closePromise;
     },
   };
 }

@@ -28,12 +28,16 @@ export function exportSqliteToJson(options: ExportOptions): {
     }
 
     const conversationRows = db.query(
-      "SELECT plan_id, payload FROM conversations ORDER BY plan_id",
-    ).all() as Array<{ plan_id: string; payload: string }>;
+      "SELECT plan_id, user_id, payload FROM conversations ORDER BY plan_id",
+    ).all() as Array<{ plan_id: string; user_id: string; payload: string }>;
     for (const row of conversationRows) {
+      const payload: unknown = JSON.parse(row.payload);
+      const messages = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).messages
+        : payload;
       writeFileSync(
         join(conversationsDir, `${row.plan_id}.json`),
-        `${JSON.stringify(JSON.parse(row.payload), null, 2)}\n`,
+        `${JSON.stringify({ plan_id: row.plan_id, user_id: row.user_id, messages }, null, 2)}\n`,
       );
     }
 

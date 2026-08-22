@@ -31,7 +31,7 @@ export function installMemoryPressureHandler(
 
 export async function shutdownServer(
   server: { stop(force?: boolean): unknown | Promise<unknown> },
-  runtime: { close(): Promise<void> },
+  runtime: { beginShutdown?(): unknown | Promise<unknown>; close(): Promise<void> },
   options: { timeoutMs?: number; exit?: (code: number) => never; logger?: LifecycleLogger } = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -39,6 +39,11 @@ export async function shutdownServer(
   const logger = options.logger ?? console;
   const graceful = (async () => {
     const errors: unknown[] = [];
+    try {
+      await runtime.beginShutdown?.();
+    } catch (error) {
+      errors.push(error);
+    }
     try {
       await server.stop(false);
     } catch (error) {
