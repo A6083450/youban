@@ -100,34 +100,48 @@
       <div class="sidebar-tools">
         <SidebarShareCodeTool />
 
-        <div class="sidebar-footer">
-          <div class="lang-switch" role="group" :aria-label="t('app.language.label')">
-            <button
-              v-for="opt in localeOptions"
-              :key="opt.value"
-              type="button"
-              class="lang-switch-btn"
-              :class="{ active: locale === opt.value }"
-              :aria-pressed="locale === opt.value"
-              @click="switchLocale(opt.value)"
-            >
-              {{ t(opt.labelKey) }}
-            </button>
+        <section class="sidebar-preferences" :aria-label="t('app.preferences.label')">
+          <div class="sidebar-preferences__title">{{ t('app.preferences.label') }}</div>
+
+          <div class="preference-group">
+            <span class="preference-group__label">{{ t('app.language.label') }}</span>
+            <div class="preference-segment" role="group" :aria-label="t('app.language.label')">
+              <button
+                v-for="option in VISIBLE_LOCALE_OPTIONS"
+                :key="option.value"
+                type="button"
+                class="preference-option"
+                :class="{ active: locale === option.value }"
+                :aria-pressed="locale === option.value"
+                @click="switchLocale(option.value)"
+              >
+                {{ t(option.labelKey) }}
+              </button>
+            </div>
           </div>
-          <div class="skin-switch" role="group" :aria-label="t('app.skin.label')">
-            <button
-              v-for="option in skinOptions"
-              :key="option.value"
-              type="button"
-              class="skin-switch-btn"
-              :class="{ active: skin === option.value }"
-              :aria-pressed="skin === option.value"
-              @click="applySkin(option.value)"
-            >
-              {{ t(option.labelKey) }}
-            </button>
+
+          <div class="preference-group">
+            <span class="preference-group__label">{{ t('app.skin.label') }}</span>
+            <div class="preference-segment" role="group" :aria-label="t('app.skin.label')">
+              <button
+                v-for="option in VISIBLE_SKIN_OPTIONS"
+                :key="option.value"
+                type="button"
+                class="preference-option"
+                :class="{ active: skin === option.value }"
+                :aria-pressed="skin === option.value"
+                @click="applySkin(option.value)"
+              >
+                <span
+                  class="preference-swatch"
+                  :class="`preference-swatch--${option.swatch}`"
+                  aria-hidden="true"
+                ></span>
+                {{ t(option.labelKey) }}
+              </button>
+            </div>
           </div>
-        </div>
+        </section>
 
         <div class="sidebar-user">
           <UserBadge />
@@ -156,6 +170,7 @@ import { message } from 'ant-design-vue'
 import { LoadingOutlined, PlayCircleOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import { setAppLocale, type AppLocale } from '@/i18n'
+import { normalizeLocale } from '@/i18n/locale'
 import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
@@ -164,7 +179,8 @@ import SidebarShareCodeTool from '@/components/SidebarShareCodeTool.vue'
 import YoubanSplash from '@/splash/YoubanSplash.vue'
 import { AUTH_UPDATED_EVENT } from '@/stores/auth'
 import { ACTIVE_TRIP_TASK_UPDATED_EVENT, readActiveTripTask } from '@/stores/activeTripTask'
-import { applySkin, skin, type AppSkin } from '@/stores/skin'
+import { applySkin, skin } from '@/stores/skin'
+import { VISIBLE_LOCALE_OPTIONS, VISIBLE_SKIN_OPTIONS } from '@/stores/preference-options'
 import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
 import type { TripHistoryItem } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
@@ -182,18 +198,6 @@ const isOngoing = (item: TripHistoryItem): boolean => {
   return item.start_date <= today && item.end_date >= today
 }
 
-// 语言切换选项（标签始终显示各语言原生名）
-const localeOptions = [
-  { value: 'zh-CN', labelKey: 'app.language.zh' },
-  { value: 'ja-JP', labelKey: 'app.language.ja' },
-  { value: 'en-US', labelKey: 'app.language.en' },
-] as const
-
-const skinOptions: ReadonlyArray<{ value: AppSkin; labelKey: string }> = [
-  { value: 'default', labelKey: 'app.skin.default' },
-  { value: 'google', labelKey: 'app.skin.google' },
-]
-
 const antTheme = computed(() => ({
   token: {
     colorPrimary: skin.value === 'google' ? '#1a73e8' : '#d97757',
@@ -205,7 +209,7 @@ const antTheme = computed(() => ({
   },
 }))
 
-const switchLocale = (value: string) => {
+const switchLocale = (value: AppLocale) => {
   locale.value = value
 }
 
@@ -224,7 +228,7 @@ const activeTripTask = ref<ActiveTripTaskRecord | null>(null)
 watch(
   locale,
   (nextLocale) => {
-    setAppLocale(nextLocale as AppLocale)
+    setAppLocale(normalizeLocale(nextLocale))
     document.title = t('app.title')
   },
   { immediate: true }
@@ -344,34 +348,6 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.skin-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  margin-top: 8px;
-  padding: 3px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface-soft);
-}
-
-.skin-switch-btn {
-  min-height: 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.skin-switch-btn.active {
-  background: var(--surface-elevated);
-  color: var(--accent-primary);
-  box-shadow: 0 1px 3px rgba(32, 33, 36, 0.16);
-}
-
 /* ─── 固定左侧栏（Codex 式会话列表） ─── */
 .sidebar {
   width: var(--desktop-sidebar-width);
@@ -394,7 +370,7 @@ onUnmounted(() => {
   color: #3D3229;
   font-size: 20px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-decoration: none;
 }
 
@@ -432,7 +408,7 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 600;
   color: rgba(61, 50, 41, 0.45);
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .sidebar-list {
@@ -592,55 +568,96 @@ onUnmounted(() => {
 
 .sidebar-tools {
   flex-shrink: 0;
-  border-top: 1px solid rgba(61, 50, 41, 0.08);
-  background: #fff;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-elevated);
 }
 
-.sidebar-footer {
-  display: flex;
+.sidebar-preferences {
+  padding: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-preferences__title {
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+.preference-group + .preference-group {
+  margin-top: 10px;
+}
+
+.preference-group__label {
+  display: block;
+  margin: 0 0 5px 2px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.preference-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.preference-option {
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px 8px;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.preference-option:hover {
+  color: var(--text-primary);
+}
+
+.preference-option.active {
+  background: var(--surface-elevated);
+  color: var(--accent-strong);
+  box-shadow: 0 1px 3px rgba(32, 33, 36, 0.16);
+}
+
+.preference-swatch {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+}
+
+.preference-swatch--warm {
+  background: linear-gradient(135deg, #faf7f2 0 48%, #d97757 52% 100%);
+}
+
+.preference-swatch--clear {
+  background: linear-gradient(135deg, #f8fafd 0 48%, #1a73e8 52% 100%);
 }
 
 /* 侧栏底部用户区 */
 .sidebar-user {
   padding: 0 12px 12px;
-}
-
-/* 分段式语言切换 */
-.lang-switch {
-  flex: 1;
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  background: rgba(61, 50, 41, 0.06);
-  border-radius: 10px;
-}
-
-.lang-switch-btn {
-  flex: 1;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  padding: 5px 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: rgba(61, 50, 41, 0.55);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-
-.lang-switch-btn:hover {
-  color: #3D3229;
-}
-
-.lang-switch-btn.active {
-  background: #fff;
-  color: #3D3229;
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(61, 50, 41, 0.12);
 }
 
 /* ─── 主内容区 ─── */
