@@ -725,17 +725,24 @@ describe("GitSkillImporter remote update checks", () => {
   it("uses the peeled commit for an annotated tag update", async () => {
     const tagObject = COMMIT_40;
     const peeledCommit = COMMIT_64;
+    let resolutionDirectory: string | undefined;
     const runner = new FakeGitRunner((invocation) => {
-      if (invocation.args[0] !== "ls-remote") return { exitCode: 0, stdout: "", stderr: "" };
-      return {
-        exitCode: 0,
-        stdout: [
-          `${tagObject}\trefs/tags/release-v2`,
-          `${peeledCommit}\trefs/tags/release-v2^{}`,
-          "",
-        ].join("\n"),
-        stderr: "",
-      };
+      if (invocation.args[0] === "ls-remote") {
+        return {
+          exitCode: 0,
+          stdout: [
+            `${tagObject}\trefs/tags/release-v2`,
+            `${peeledCommit}\trefs/tags/release-v2^{}`,
+            "",
+          ].join("\n"),
+          stderr: "",
+        };
+      }
+      if (invocation.args[0] === "init") resolutionDirectory = invocation.cwd;
+      if (invocation.args[0] === "rev-parse") {
+        return { exitCode: 0, stdout: `${peeledCommit}\n`, stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
     });
     const { importer } = createImporter(runner);
 
@@ -746,20 +753,110 @@ describe("GitSkillImporter remote update checks", () => {
     });
 
     expect(result).toEqual({ commit: peeledCommit, changed: true });
+    expect(runner.invocations.map(({ args }) => args[0])).toEqual([
+      "ls-remote",
+      "init",
+      "fetch",
+      "rev-parse",
+    ]);
+    expect(runner.invocations[2].args).toEqual([
+      "fetch",
+      "--depth=1",
+      "--no-tags",
+      "https://git.example.com/org/repo.git",
+      "refs/tags/release-v2",
+    ]);
+    expect(runner.invocations[3].args).toEqual(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
+    expect(resolutionDirectory).toBeDefined();
+    expect(existsSync(resolutionDirectory!)).toBe(false);
   });
 
-  it("rejects an unpeeled-only tag object as a remote commit", async () => {
-    const runner = new FakeGitRunner(() => ({
-      exitCode: 0,
-      stdout: `${COMMIT_40}\trefs/tags/release-v2\n`,
-      stderr: "",
-    }));
+  it("accepts a valid lightweight tag after resolving it as a commit", async () => {
+    process.env.YOUBAN_SKILL_GIT_TOKEN = "private-secret";
+    process.env.YOUBAN_SKILL_GIT_TOKEN_HOST = "git.example.com";
+    const runner = new FakeGitRunner((invocation) => {
+      if (invocation.args[0] === "ls-remote") {
+        return {
+          exitCode: 0,
+          stdout: `${COMMIT_40}\trefs/tags/release-v2\n`,
+          stderr: "",
+        };
+      }
+      if (invocation.args[0] === "rev-parse") {
+        return { exitCode: 0, stdout: `${COMMIT_40}\n`, stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const { importer, root } = createImporter(runner);
+
+    const result = await importer.resolveRemote({
+      repositoryUrl: "https://git.example.com/org/repo.git",
+      ref: "refs/tags/release-v2",
+    });
+
+    expect(result).toEqual({ commit: COMMIT_40, changed: true });
+    expect(runner.invocations[2].args.at(-1)).toBe("refs/tags/release-v2");
+    expect(runner.invocations[2].authorizationHeaderKeys).toHaveLength(1);
+    expect(runner.invocations[2].envKeys.some(
+      (key) => runner.invocations[2].env[key]?.endsWith(".curloptResolve"),
+    )).toBe(true);
+    expect(JSON.stringify(runner.invocations)).not.toContain("private-secret");
+    expect(readdirSync(join(root, "staging"))).toEqual([]);
+  });
+
+  it("rejects a tag whose peeled target is not a commit", async () => {
+    const blobObject = COMMIT_64;
+    const runner = new FakeGitRunner((invocation) => {
+      if (invocation.args[0] === "ls-remote") {
+        return {
+          exitCode: 0,
+          stdout: [
+            `${COMMIT_40}\trefs/tags/release-v2`,
+            `${blobObject}\trefs/tags/release-v2^{}`,
+            "",
+          ].join("\n"),
+          stderr: "",
+        };
+      }
+      if (invocation.args[0] === "rev-parse") {
+        return { exitCode: 128, stdout: "", stderr: "fatal: expected commit type" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
     const { importer } = createImporter(runner);
 
     await expectGitCode(importer.resolveRemote({
       repositoryUrl: "https://git.example.com/org/repo.git",
       ref: "refs/tags/release-v2",
     }), "invalid_git_commit");
+    expect(runner.invocations.map(({ args }) => args[0])).toEqual([
+      "ls-remote",
+      "init",
+      "fetch",
+      "rev-parse",
+    ]);
+  });
+
+  it("cleans temporary tag resolution after a failed object inspection", async () => {
+    let resolutionDirectory: string | undefined;
+    const runner = new FakeGitRunner((invocation) => {
+      if (invocation.args[0] === "ls-remote") {
+        return { exitCode: 0, stdout: `${COMMIT_40}\trefs/tags/release-v2\n`, stderr: "" };
+      }
+      if (invocation.args[0] === "init") resolutionDirectory = invocation.cwd;
+      if (invocation.args[0] === "rev-parse") {
+        return { exitCode: 128, stdout: "", stderr: "fatal: expected commit type" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const { importer } = createImporter(runner);
+
+    await expectGitCode(importer.resolveRemote({
+      repositoryUrl: "https://git.example.com/org/repo.git",
+      ref: "refs/tags/release-v2",
+    }), "invalid_git_commit");
+    expect(resolutionDirectory).toBeDefined();
+    expect(existsSync(resolutionDirectory!)).toBe(false);
   });
 
   it("rejects an unrelated advertised ref instead of using a fuzzy fallback", async () => {

@@ -672,20 +672,59 @@ export class GitSkillImporter {
       const branchReference = ref?.startsWith("refs/heads/") ? ref : ref && !ref.startsWith("refs/")
         ? `refs/heads/${ref}`
         : undefined;
-      const resolved = !ref
-        ? byReference.get("HEAD")
-          : ref.startsWith("refs/tags/")
-          ? byReference.get(`${ref}^{}`)
+      const advertisedTag = tagReference && (
+        byReference.has(tagReference) || byReference.has(`${tagReference}^{}`)
+      );
+      if (ref?.startsWith("refs/tags/") || (branchReference && !byReference.has(branchReference) && advertisedTag)) {
+        if (!tagReference || !advertisedTag) {
+          gitError("invalid_git_commit", "Git remote did not advertise the requested complete commit SHA");
+        }
+        commit = await this.resolveTagCommit(repositoryUrl, tagReference, pinnedAddresses);
+      } else {
+        const resolved = !ref
+          ? byReference.get("HEAD")
           : branchReference
-            ? byReference.get(branchReference) ?? byReference.get(`${tagReference}^{}`)
+            ? byReference.get(branchReference)
             : byReference.get(ref);
-      if (!resolved) gitError("invalid_git_commit", "Git remote did not advertise the requested complete commit SHA");
-      commit = validateCommit(resolved);
+        if (!resolved) gitError("invalid_git_commit", "Git remote did not advertise the requested complete commit SHA");
+        commit = validateCommit(resolved);
+      }
     }
     return {
       commit,
       changed: commit !== request.activeCommit && commit !== request.candidateCommit,
     };
+  }
+
+  private async resolveTagCommit(
+    repositoryUrl: URL,
+    tagReference: string,
+    pinnedAddresses: readonly GitHostAddress[],
+  ): Promise<string> {
+    const resolutionDirectory = mkdtempSync(join(tmpdir(), "youban-skill-git-resolve-"));
+    try {
+      await this.runGit(["init", "--bare"], resolutionDirectory);
+      await this.runGit(
+        ["fetch", "--depth=1", "--no-tags", repositoryUrl.href, tagReference],
+        resolutionDirectory,
+        remoteEnvironment(repositoryUrl, pinnedAddresses),
+      );
+      let result: GitResult;
+      try {
+        result = await this.runGit(
+          ["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
+          resolutionDirectory,
+        );
+      } catch (error) {
+        if (error instanceof SkillGitImportError && error.code === "git_failed") {
+          gitError("invalid_git_commit", "Git tag does not resolve to a complete commit SHA");
+        }
+        throw error;
+      }
+      return validateCommit(result.stdout.trim());
+    } finally {
+      rmSync(resolutionDirectory, { recursive: true, force: true });
+    }
   }
 
   private async runGit(
