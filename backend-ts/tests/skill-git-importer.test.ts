@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+  chmodSync,
+  closeSync,
   existsSync,
+  ftruncateSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -29,6 +33,19 @@ const savedGitToken = process.env.YOUBAN_SKILL_GIT_TOKEN;
 const savedGitTokenHost = process.env.YOUBAN_SKILL_GIT_TOKEN_HOST;
 const savedGitAskPass = process.env.GIT_ASKPASS;
 const savedGitConfigParameters = process.env.GIT_CONFIG_PARAMETERS;
+const guardedAmbientNames = [
+  "GIT_TEMPLATE_DIR",
+  "GIT_EXEC_PATH",
+  "GIT_TRACE",
+  "GIT_TRACE_CURL",
+  "GIT_TRACE_CURL_NO_DATA",
+  "GIT_TRACE_REDACT",
+  "GIT_SSH_COMMAND",
+  "UNRELATED_PRIVATE_ENV",
+] as const;
+const savedGuardedAmbient = Object.fromEntries(
+  guardedAmbientNames.map((name) => [name, process.env[name]]),
+);
 
 function temporaryRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -77,14 +94,22 @@ function successfulFake(options: {
   });
 }
 
-function createImporter(runner = successfulFake()): {
+function createImporter(
+  runner = successfulFake(),
+  resolveHostname: (
+    hostname: string,
+  ) => Promise<readonly { address: string; family: 4 | 6 }[]> = async () => [
+    { address: "93.184.216.34", family: 4 },
+  ],
+): {
   importer: GitSkillImporter;
   runner: FakeGitRunner;
   root: string;
 } {
   const root = temporaryRoot("youban-skill-git-");
+  const store = new SkillPackageStore(root);
   return {
-    importer: new GitSkillImporter(new SkillPackageStore(root), runner),
+    importer: new GitSkillImporter(store, runner, { resolveHostname }),
     runner,
     root,
   };
@@ -103,6 +128,11 @@ afterEach(() => {
   else process.env.GIT_ASKPASS = savedGitAskPass;
   if (savedGitConfigParameters === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
   else process.env.GIT_CONFIG_PARAMETERS = savedGitConfigParameters;
+  for (const name of guardedAmbientNames) {
+    const saved = savedGuardedAmbient[name];
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  }
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -140,6 +170,9 @@ describe("GitSkillImporter source and credential boundaries", () => {
 
     expect(exactHeaderSeen).toBe(true);
     expect(exactRunner.invocations[0].authorizationHeaderKeys).toEqual(["GIT_CONFIG_VALUE_0"]);
+    expect(exactRunner.invocations[0].env.GIT_CONFIG_KEY_0).toBe(
+      "http.https://git.example.com/.extraHeader",
+    );
     expect(exactRunner.invocations[0].env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(exactRunner.invocations[0].env.GIT_CONFIG_NOSYSTEM).toBe("1");
     expect(exactRunner.invocations[0].envKeys).toContain("GIT_CONFIG_GLOBAL");
@@ -185,9 +218,75 @@ describe("GitSkillImporter source and credential boundaries", () => {
 
     await expectGitCode(importer.stage({ repositoryUrl: "https://git.example.com/org/repo.git" }), "git_redirect");
     const invocation = runner.invocations[0];
-    const redirectKey = invocation.envKeys.find((key) => invocation.env[key] === "http.followRedirects");
+    const redirectKey = invocation.envKeys.find(
+      (key) => invocation.env[key] === "http.https://git.example.com/.followRedirects",
+    );
     expect(redirectKey).toBeDefined();
     expect(JSON.stringify(runner.invocations)).not.toContain("private-secret");
+  });
+
+  it.each([
+    "https://localhost/repo.git",
+    "https://LOCALHOST./repo.git",
+    "https://service.local/repo.git",
+    "https://printer/repo.git",
+    "https://127.1/repo.git",
+    "https://10.0.0.1/repo.git",
+    "https://169.254.1.1/repo.git",
+    "https://172.16.0.1/repo.git",
+    "https://192.168.1.1/repo.git",
+    "https://[::1]/repo.git",
+    "https://[fc00::1]/repo.git",
+    "https://[fe80::1]/repo.git",
+  ])("rejects non-public local target %s before Git execution", async (repositoryUrl) => {
+    const runner = successfulFake();
+    const { importer } = createImporter(runner);
+
+    await expectGitCode(importer.stage({ repositoryUrl }), "invalid_git_host");
+    expect(runner.invocations).toHaveLength(0);
+  });
+
+  it.each([
+    [[{ address: "127.0.0.1", family: 4 as const }]],
+    [[
+      { address: "93.184.216.34", family: 4 as const },
+      { address: "192.168.1.10", family: 4 as const },
+    ]],
+  ])("rejects DNS answers containing non-public addresses", async (addresses) => {
+    const runner = successfulFake();
+    const { importer } = createImporter(runner, async () => addresses);
+
+    await expectGitCode(
+      importer.stage({ repositoryUrl: "https://git.public-example.com/org/repo.git" }),
+      "invalid_git_host",
+    );
+    expect(runner.invocations).toHaveLength(0);
+  });
+
+  it("pins validated public DNS answers for a canonical IDNA host", async () => {
+    const runner = successfulFake();
+    const resolvedHosts: string[] = [];
+    const { importer } = createImporter(runner, async (hostname) => {
+      resolvedHosts.push(hostname);
+      return [
+        { address: "93.184.216.34", family: 4 },
+        { address: "2606:4700::1111", family: 6 },
+      ];
+    });
+
+    const staged = await importer.stage({
+      repositoryUrl: "https://b\u00fccher.example.com/org/repo.git",
+    });
+
+    expect(resolvedHosts).toEqual(["xn--bcher-kva.example.com"]);
+    const invocation = runner.invocations[0];
+    const resolveKey = invocation.envKeys.find((key) => invocation.env[key]?.endsWith(".curloptResolve"));
+    expect(resolveKey).toBeDefined();
+    expect(invocation.env[resolveKey!.replace("KEY", "VALUE")]).toBe(
+      "+xn--bcher-kva.example.com:443:93.184.216.34,[2606:4700::1111]",
+    );
+    expect(staged.sanitizedSource).toBe("https://xn--bcher-kva.example.com/org/repo.git");
+    staged.cleanup();
   });
 });
 
@@ -320,6 +419,45 @@ describe("BunGitRunner process boundaries", () => {
     expect(helpers.stdout).toBe("\n");
   });
 
+  it("passes only allowlisted ambient and invocation environment to the child", async () => {
+    const root = temporaryRoot("youban-git-env-allowlist-");
+    const script = join(root, "env-allowlist.ts");
+    writeFileSync(script, [
+      "process.stdout.write(JSON.stringify({",
+      "  template: Boolean(process.env.GIT_TEMPLATE_DIR),",
+      "  execPath: Boolean(process.env.GIT_EXEC_PATH),",
+      "  traces: Object.keys(process.env).some((key) => key.startsWith('GIT_TRACE')),",
+      "  sshCommand: Boolean(process.env.GIT_SSH_COMMAND),",
+      "  unrelated: Boolean(process.env.UNRELATED_PRIVATE_ENV),",
+      "  configKey: process.env.GIT_CONFIG_KEY_0,",
+      "  configValue: Boolean(process.env.GIT_CONFIG_VALUE_0),",
+      "}));",
+    ].join("\n"));
+    for (const name of guardedAmbientNames) process.env[name] = "ambient-private-value";
+    const runner = new BunGitRunner({ executable: process.execPath });
+
+    const result = await runner.run({
+      args: [script],
+      env: {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "http.https://git.example.com/.extraHeader",
+        GIT_CONFIG_VALUE_0: "Authorization: Bearer private-secret",
+      },
+      timeoutMs: 1_000,
+    });
+
+    expect(JSON.parse(result.stdout)).toEqual({
+      template: false,
+      execPath: false,
+      traces: false,
+      sshCommand: false,
+      unrelated: false,
+      configKey: "http.https://git.example.com/.extraHeader",
+      configValue: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("private-secret");
+  });
+
   it("terminates a grandchild retaining output pipes within the timeout boundary", async () => {
     const root = temporaryRoot("youban-git-process-tree-");
     const marker = join(root, "grandchild-terminated");
@@ -368,19 +506,44 @@ describe("GitSkillImporter staging", () => {
     staged.cleanup();
   });
 
-  it.each([
-    ["refs/heads/release-v2", "release-v2"],
-    ["refs/tags/release-v2", "release-v2"],
-  ])("uses --branch for full branch or tag ref %s", async (ref, branchArgument) => {
+  it.each(["refs/heads/release-v2", "refs/tags/release-v2"])(
+    "fetches full ref %s exactly without branch/tag ambiguity",
+    async (ref) => {
     const { importer, runner } = createImporter();
     const staged = await importer.stage({
       repositoryUrl: "https://git.example.com/org/repo.git",
       ref,
     });
 
-    expect(runner.invocations[0].args).toContain("--branch");
-    expect(runner.invocations[0].args.at(runner.invocations[0].args.indexOf("--branch") + 1)).toBe(branchArgument);
+    expect(runner.invocations[0].args).toContain("--no-checkout");
+    expect(runner.invocations[0].args).not.toContain("--branch");
+    expect(runner.invocations[1].args).toEqual(["fetch", "--depth=1", "origin", ref]);
+    expect(runner.invocations[2].args).toEqual(["checkout", "--detach", "FETCH_HEAD"]);
     staged.cleanup();
+  });
+
+  it.each([
+    "main:evil",
+    "+refs/heads/main",
+    "refs/heads/*",
+    "refs/heads/a..b",
+    "refs/heads/a^b",
+    "refs/heads/a~b",
+    "refs/heads/a?b",
+    "refs/heads/[a",
+    "refs/heads/a.lock",
+    "refs/heads/.hidden",
+    "refs/heads/a/",
+    "refs/heads/a//b",
+    "@{upstream}",
+  ])("rejects invalid or refspec-style ref %s before Git execution", async (ref) => {
+    const { importer, runner } = createImporter();
+
+    await expectGitCode(importer.stage({
+      repositoryUrl: "https://git.example.com/org/repo.git",
+      ref,
+    }), "invalid_git_ref");
+    expect(runner.invocations).toHaveLength(0);
   });
 
   it("fetches a custom ref explicitly instead of passing it to clone --branch", async () => {
@@ -495,6 +658,31 @@ describe("GitSkillImporter staging", () => {
     expect(readdirSync(join(root, "staging"))).toEqual([]);
   });
 
+  it("rejects an oversized regular file from metadata before attempting to read it", async () => {
+    const runner = new FakeGitRunner((invocation) => {
+      if (invocation.args[0] === "clone") {
+        const destination = invocation.args.at(-1)!;
+        createCheckout(destination, { "SKILL.md": VALID_SKILL });
+        const oversized = join(destination, "oversized.bin");
+        const descriptor = openSync(oversized, "w");
+        ftruncateSync(descriptor, 10 * 1024 * 1024 + 1);
+        closeSync(descriptor);
+        chmodSync(oversized, 0o000);
+      }
+      if (invocation.args[0] === "rev-parse") {
+        return { exitCode: 0, stdout: `${COMMIT_40}\n`, stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const { importer, root } = createImporter(runner);
+
+    await expectGitCode(
+      importer.stage({ repositoryUrl: "https://git.example.com/org/repo.git" }),
+      "skill_package_too_large",
+    );
+    expect(readdirSync(join(root, "staging"))).toEqual([]);
+  });
+
   it.each(["short", `${COMMIT_40}00`])("rejects an invalid resolved commit %s", async (commit) => {
     const { importer } = createImporter(successfulFake({ commit }));
     await expectGitCode(importer.stage({ repositoryUrl: "https://git.example.com/org/repo.git" }), "invalid_git_commit");
@@ -558,6 +746,20 @@ describe("GitSkillImporter remote update checks", () => {
     });
 
     expect(result).toEqual({ commit: peeledCommit, changed: true });
+  });
+
+  it("rejects an unpeeled-only tag object as a remote commit", async () => {
+    const runner = new FakeGitRunner(() => ({
+      exitCode: 0,
+      stdout: `${COMMIT_40}\trefs/tags/release-v2\n`,
+      stderr: "",
+    }));
+    const { importer } = createImporter(runner);
+
+    await expectGitCode(importer.resolveRemote({
+      repositoryUrl: "https://git.example.com/org/repo.git",
+      ref: "refs/tags/release-v2",
+    }), "invalid_git_commit");
   });
 
   it("rejects an unrelated advertised ref instead of using a fuzzy fallback", async () => {

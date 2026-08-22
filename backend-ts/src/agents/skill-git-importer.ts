@@ -1,13 +1,19 @@
 import { isUtf8 } from "node:buffer";
+import { lookup } from "node:dns/promises";
 import {
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
+import { isIP } from "node:net";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { SkillValidationError, validateSkillDocument } from "./skill-document.ts";
 import {
@@ -57,6 +63,7 @@ export interface ResolvedGitRemote {
 
 export type SkillGitImportErrorCode =
   | "invalid_git_url"
+  | "invalid_git_host"
   | "invalid_git_ref"
   | "invalid_git_subdirectory"
   | "invalid_git_commit"
@@ -78,6 +85,15 @@ export class SkillGitImportError extends Error {
 interface BunGitRunnerOptions {
   executable?: string;
   maxOutputBytes?: number;
+}
+
+export interface GitHostAddress {
+  address: string;
+  family: 4 | 6;
+}
+
+export interface GitSkillImporterOptions {
+  resolveHostname?: (hostname: string) => Promise<readonly GitHostAddress[]>;
 }
 
 function gitError(code: SkillGitImportErrorCode, message: string): never {
@@ -146,20 +162,20 @@ export class BunGitRunner implements GitRunner {
   }
 
   async run(invocation: GitInvocation): Promise<GitResult> {
-    const childEnv: Record<string, string | undefined> = { ...process.env };
-    for (const key of Object.keys(childEnv)) {
-      if (
-        key === "GIT_CONFIG_PARAMETERS" || key === "GIT_CONFIG_COUNT" ||
-        key === "GIT_CONFIG_SYSTEM" || key === "GIT_CONFIG_GLOBAL" || key === "GIT_CONFIG_NOSYSTEM" ||
-        /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)
-      ) delete childEnv[key];
+    const childEnv: Record<string, string | undefined> = {};
+    for (const key of [
+      "PATH", "PATHEXT", "SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR",
+      "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+    ]) {
+      if (process.env[key] !== undefined) childEnv[key] = process.env[key];
     }
-    Object.assign(childEnv, invocation.env);
-    delete childEnv.GIT_CONFIG_PARAMETERS;
-    delete childEnv.YOUBAN_SKILL_GIT_TOKEN;
-    delete childEnv.YOUBAN_SKILL_GIT_TOKEN_HOST;
-    delete childEnv.GIT_ASKPASS;
-    delete childEnv.SSH_ASKPASS;
+    for (const [key, value] of Object.entries(invocation.env ?? {})) {
+      if (
+        key === "GIT_CONFIG_COUNT" || key === "GIT_CONFIG_NOSYSTEM" || key === "GIT_CONFIG_GLOBAL" ||
+        key === "GIT_TERMINAL_PROMPT" || key === "GCM_INTERACTIVE" ||
+        /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)
+      ) childEnv[key] = value;
+    }
 
     let child!: ReturnType<typeof Bun.spawn>;
     try {
@@ -288,15 +304,26 @@ function normalizeConfiguredHost(configuredHost: string | undefined): string | u
   }
 }
 
-function remoteEnvironment(repositoryUrl: URL): Readonly<Record<string, string>> {
+function remoteEnvironment(
+  repositoryUrl: URL,
+  pinnedAddresses: readonly GitHostAddress[],
+): Readonly<Record<string, string>> {
   const entries: Array<readonly [string, string]> = [];
   const token = process.env.YOUBAN_SKILL_GIT_TOKEN;
   const tokenHost = normalizeConfiguredHost(process.env.YOUBAN_SKILL_GIT_TOKEN_HOST);
+  const originScope = `${repositoryUrl.origin}/`;
   if (token && tokenHost === repositoryUrl.host) {
-    entries.push(["http.extraHeader", `Authorization: Bearer ${token}`]);
+    entries.push([`http.${originScope}.extraHeader`, `Authorization: Bearer ${token}`]);
   }
-  entries.push(["http.followRedirects", "false"]);
+  entries.push([`http.${originScope}.followRedirects`, "false"]);
   entries.push(["credential.helper", ""]);
+  const hostname = repositoryUrl.hostname.replace(/^\[|\]$/g, "");
+  const port = repositoryUrl.port || "443";
+  const addresses = pinnedAddresses.map(({ address, family }) => family === 6 ? `[${address}]` : address);
+  entries.push([
+    `http.${originScope}.curloptResolve`,
+    `+${hostname}:${port}:${addresses.join(",")}`,
+  ]);
 
   const env: Record<string, string> = {
     GIT_CONFIG_COUNT: String(entries.length),
@@ -312,9 +339,109 @@ function remoteEnvironment(repositoryUrl: URL): Readonly<Record<string, string>>
   return env;
 }
 
+function ipv4Parts(address: string): readonly number[] | undefined {
+  if (isIP(address) !== 4) return undefined;
+  const parts = address.split(".").map(Number);
+  return parts.length === 4 ? parts : undefined;
+}
+
+function ipv6Groups(address: string): readonly number[] | undefined {
+  if (isIP(address) !== 6 || address.includes("%")) return undefined;
+  const halves = address.toLowerCase().split("::");
+  if (halves.length > 2) return undefined;
+  const parseHalf = (value: string): number[] | undefined => {
+    if (!value) return [];
+    const groups: number[] = [];
+    for (const part of value.split(":")) {
+      if (part.includes(".")) {
+        const ipv4 = ipv4Parts(part);
+        if (!ipv4) return undefined;
+        groups.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(part)) return undefined;
+        groups.push(Number.parseInt(part, 16));
+      }
+    }
+    return groups;
+  };
+  const left = parseHalf(halves[0]);
+  const right = parseHalf(halves[1] ?? "");
+  if (!left || !right) return undefined;
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return undefined;
+  return [...left, ...Array.from({ length: missing }, () => 0), ...right];
+}
+
+function isPublicAddress(address: string): boolean {
+  const ipv4 = ipv4Parts(address);
+  if (ipv4) {
+    const [a, b] = ipv4;
+    return !(
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && (b === 0 || b === 168)) ||
+      (a === 198 && (b === 18 || b === 19 || b === 51)) ||
+      (a === 203 && b === 0)
+    );
+  }
+  const ipv6 = ipv6Groups(address);
+  if (!ipv6) return false;
+  const [first, second] = ipv6;
+  if (first < 0x2000 || first > 0x3fff) return false;
+  if (first === 0x2001 && second <= 0x01ff) return false;
+  if (first === 0x2001 && second === 0x0db8) return false;
+  if (first === 0x2002) return false;
+  if (first === 0x3fff && second <= 0x0fff) return false;
+  return true;
+}
+
+function canonicalHostname(repositoryUrl: URL): string {
+  return repositoryUrl.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+}
+
+async function validateAndResolveHost(
+  repositoryUrl: URL,
+  resolveHostname: (hostname: string) => Promise<readonly GitHostAddress[]>,
+): Promise<readonly GitHostAddress[]> {
+  const hostname = canonicalHostname(repositoryUrl);
+  if (
+    hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") || hostname.endsWith(".lan") || hostname.endsWith(".home") ||
+    hostname.endsWith(".home.arpa") || (!hostname.includes(".") && isIP(hostname) === 0)
+  ) gitError("invalid_git_host", "Git repository host must resolve only to public addresses");
+
+  let addresses: readonly GitHostAddress[];
+  const literalFamily = isIP(hostname);
+  if (literalFamily) {
+    addresses = [{ address: hostname, family: literalFamily as 4 | 6 }];
+  } else {
+    try {
+      addresses = await resolveHostname(hostname);
+    } catch {
+      gitError("invalid_git_host", "Git repository host could not be safely resolved");
+    }
+  }
+  const unique = [...new Map(addresses.map((item) => [`${item.family}:${item.address}`, item])).values()];
+  if (
+    unique.length === 0 ||
+    unique.some(({ address, family }) => isIP(address) !== family || !isPublicAddress(address))
+  ) gitError("invalid_git_host", "Git repository host must resolve only to public addresses");
+  return unique;
+}
+
 function validateRef(ref: string | undefined): string | undefined {
   if (ref === undefined) return undefined;
-  if (!ref || ref !== ref.trim() || ref.startsWith("-") || /[\0\r\n]/.test(ref)) {
+  const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+  const invalidComponent = fullRef.split("/").some(
+    (component) => !component || component.startsWith(".") || component.endsWith(".lock"),
+  );
+  if (
+    !ref || ref !== ref.trim() || ref.startsWith("-") || ref.startsWith("+") || ref === "@" ||
+    /[\x00-\x20\x7f~^:?*[\\]/.test(ref) || ref.includes("..") || ref.includes("@{") ||
+    ref.endsWith(".") || ref.endsWith("/") || invalidComponent
+  ) {
     gitError("invalid_git_ref", "Git ref is invalid");
   }
   if (containsConfiguredToken(ref)) gitError("invalid_git_ref", "Git ref must not contain configured credentials");
@@ -386,11 +513,38 @@ function collectRegularFiles(root: string): PackageEntry[] {
         continue;
       }
       if (!stat.isFile()) gitError("invalid_git_package", "Git skill package contains a non-regular file");
-      const content = readFileSync(absolutePath);
-      totalBytes += content.length;
-      if (files.length >= MAX_REGULAR_FILES || totalBytes > MAX_PACKAGE_BYTES) {
+      if (
+        files.length >= MAX_REGULAR_FILES || stat.size < 0 ||
+        stat.size > MAX_PACKAGE_BYTES - totalBytes
+      ) {
         gitError("skill_package_too_large", "Git skill package exceeds the package limits");
       }
+      let descriptor: number;
+      try {
+        descriptor = openSync(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      } catch {
+        gitError("invalid_git_package", "Git skill package file could not be opened safely");
+      }
+      let content: Buffer;
+      try {
+        const beforeRead = fstatSync(descriptor);
+        if (
+          !beforeRead.isFile() || beforeRead.dev !== stat.dev || beforeRead.ino !== stat.ino ||
+          beforeRead.size !== stat.size
+        ) gitError("invalid_git_package", "Git skill package file changed during staging");
+        if (beforeRead.size > MAX_PACKAGE_BYTES - totalBytes) {
+          gitError("skill_package_too_large", "Git skill package exceeds the package limits");
+        }
+        content = readFileSync(descriptor);
+        const afterRead = fstatSync(descriptor);
+        if (
+          afterRead.dev !== beforeRead.dev || afterRead.ino !== beforeRead.ino ||
+          afterRead.size !== beforeRead.size || content.length !== beforeRead.size
+        ) gitError("invalid_git_package", "Git skill package file changed during staging");
+      } finally {
+        closeSync(descriptor);
+      }
+      totalBytes += content.length;
       files.push({ path: packagePath, content });
     }
   };
@@ -415,28 +569,27 @@ type GitRefAcquisition =
 function classifyRefAcquisition(ref: string | undefined): GitRefAcquisition {
   if (!ref) return { kind: "default" };
   if (COMMIT_PATTERN.test(ref)) return { kind: "explicit", fetchRef: ref };
-  if (ref.startsWith("refs/heads/")) {
-    const branchArgument = ref.slice("refs/heads/".length);
-    if (!branchArgument) gitError("invalid_git_ref", "Git branch ref is invalid");
-    return { kind: "branch-or-tag", branchArgument };
-  }
-  if (ref.startsWith("refs/tags/")) {
-    const branchArgument = ref.slice("refs/tags/".length);
-    if (!branchArgument) gitError("invalid_git_ref", "Git tag ref is invalid");
-    return { kind: "branch-or-tag", branchArgument };
-  }
   if (ref.startsWith("refs/")) return { kind: "explicit", fetchRef: ref };
   return { kind: "branch-or-tag", branchArgument: ref };
 }
 
 export class GitSkillImporter {
+  private readonly resolveHostname: (hostname: string) => Promise<readonly GitHostAddress[]>;
+
   constructor(
     private readonly store: SkillPackageStore,
     private readonly runner: GitRunner = new BunGitRunner(),
-  ) {}
+    options: GitSkillImporterOptions = {},
+  ) {
+    this.resolveHostname = options.resolveHostname ?? (async (hostname) => {
+      const addresses = await lookup(hostname, { all: true, verbatim: true });
+      return addresses.map(({ address, family }) => ({ address, family: family as 4 | 6 }));
+    });
+  }
 
   async stage(request: GitSkillInstallRequest): Promise<StagedSkillPackage> {
     const repositoryUrl = normalizeRepositoryUrl(request.repositoryUrl);
+    const pinnedAddresses = await validateAndResolveHost(repositoryUrl, this.resolveHostname);
     const ref = validateRef(request.ref);
     const subdirectory = validateSubdirectory(request.subdirectory);
     const acquisition = classifyRefAcquisition(ref);
@@ -448,13 +601,13 @@ export class GitSkillImporter {
       if (acquisition.kind === "branch-or-tag") cloneArgs.push("--branch", acquisition.branchArgument);
       if (acquisition.kind === "explicit") cloneArgs.push("--no-checkout");
       cloneArgs.push(repositoryUrl.href, cloneDir);
-      await this.runGit(cloneArgs, undefined, remoteEnvironment(repositoryUrl));
+      await this.runGit(cloneArgs, undefined, remoteEnvironment(repositoryUrl, pinnedAddresses));
 
       if (acquisition.kind === "explicit") {
         await this.runGit(
           ["fetch", "--depth=1", "origin", acquisition.fetchRef],
           cloneDir,
-          remoteEnvironment(repositoryUrl),
+          remoteEnvironment(repositoryUrl, pinnedAddresses),
         );
         await this.runGit(["checkout", "--detach", "FETCH_HEAD"], cloneDir);
       }
@@ -498,6 +651,7 @@ export class GitSkillImporter {
 
   async resolveRemote(request: GitSkillRemoteRequest): Promise<ResolvedGitRemote> {
     const repositoryUrl = normalizeRepositoryUrl(request.repositoryUrl);
+    const pinnedAddresses = await validateAndResolveHost(repositoryUrl, this.resolveHostname);
     const ref = validateRef(request.ref);
     validateSubdirectory(request.subdirectory);
     let commit: string;
@@ -507,7 +661,7 @@ export class GitSkillImporter {
       const result = await this.runGit(
         ["ls-remote", repositoryUrl.href, ...remotePatterns(ref)],
         undefined,
-        remoteEnvironment(repositoryUrl),
+        remoteEnvironment(repositoryUrl, pinnedAddresses),
       );
       const advertised = result.stdout
         .split("\n")
@@ -520,10 +674,10 @@ export class GitSkillImporter {
         : undefined;
       const resolved = !ref
         ? byReference.get("HEAD")
-        : ref.startsWith("refs/tags/")
-          ? byReference.get(`${ref}^{}`) ?? byReference.get(ref)
+          : ref.startsWith("refs/tags/")
+          ? byReference.get(`${ref}^{}`)
           : branchReference
-            ? byReference.get(branchReference) ?? byReference.get(`${tagReference}^{}`) ?? byReference.get(tagReference!)
+            ? byReference.get(branchReference) ?? byReference.get(`${tagReference}^{}`)
             : byReference.get(ref);
       if (!resolved) gitError("invalid_git_commit", "Git remote did not advertise the requested complete commit SHA");
       commit = validateCommit(resolved);

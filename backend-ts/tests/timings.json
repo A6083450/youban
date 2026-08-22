@@ -4,7 +4,7 @@
     "tests/hermes-memory-bridge.test.ts": 2031,
     "tests/session-host.test.ts": 1801,
     "tests/persistent-parent-agent.test.ts": 1263,
-    "tests/skill-git-importer.test.ts": 727,
+    "tests/skill-git-importer.test.ts": 721,
     "tests/pi-subagent-runner.test.ts": 610,
     "tests/trip-planning-http.test.ts": 421,
     "tests/hermes-compatibility.test.ts": 325,
