@@ -6,6 +6,15 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PersistentPiParentAgent, type ParentAgentScope } from "../src/agents/persistent-parent-agent.ts";
 import { createMockPiModel } from "./helpers/mock-pi-model.ts";
+import { createYoubanAgentSession } from "../src/agents/session-host.ts";
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("timed out waiting for condition");
+    await Bun.sleep(5);
+  }
+}
 
 describe("persistent Pi parent agent", () => {
   it("persists one scoped transcript, preloads skills, exposes business tools, and delegates a real child", async () => {
@@ -60,6 +69,121 @@ describe("persistent Pi parent agent", () => {
       parent = create();
       expect((await parent.inspect(scope)).sessionFile).toBe(originalSessionFile);
       expect(await parent.complete({ scope, prompt: "continue" })).toBe("parent-answer");
+    } finally {
+      await parent.close();
+      mock.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("reclaims only idle sessions and restores their persisted transcript", async () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-parent-pool-"));
+    const runtimeDir = join(root, "runtime");
+    const mock = createMockPiModel(runtimeDir, { text: "pool-answer" });
+    const scope: ParentAgentScope = { key: "user:idle", userId: "idle" };
+    let now = 1_000;
+    const parent = new PersistentPiParentAgent({
+      cwd: root,
+      runtimeDir,
+      model: mock.model,
+      subagentModel: "youban-mock/mock-model",
+      sessionLimit: 2,
+      sessionIdleMs: 100,
+      sweepIntervalMs: 0,
+      now: () => now,
+    });
+    try {
+      await parent.complete({ scope, prompt: "first" });
+      const sessionFile = (await parent.inspect(scope)).sessionFile;
+      now += 101;
+
+      expect(await parent.releaseIdleResources("ttl")).toEqual({
+        persistent: 0,
+        temporary: 0,
+        busy: 0,
+        evicted: 1,
+      });
+      expect((await parent.inspect(scope)).sessionFile).toBe(sessionFile);
+      expect(await parent.releaseIdleResources("memory-pressure")).toEqual({
+        persistent: 0,
+        temporary: 0,
+        busy: 0,
+        evicted: 1,
+      });
+    } finally {
+      await parent.close();
+      mock.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("uses one temporary scoped session while the persistent pool is busy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-parent-temporary-"));
+    const runtimeDir = join(root, "runtime");
+    const mock = createMockPiModel(runtimeDir, { text: "delayed", delayMs: 150 });
+    const parent = new PersistentPiParentAgent({
+      cwd: root,
+      runtimeDir,
+      model: mock.model,
+      subagentModel: "youban-mock/mock-model",
+      sessionLimit: 1,
+      sessionIdleMs: 60_000,
+      sweepIntervalMs: 0,
+    });
+    const firstScope: ParentAgentScope = { key: "user:first", userId: "first" };
+    const temporaryScope: ParentAgentScope = { key: "user:temporary", userId: "temporary" };
+    try {
+      const first = parent.complete({ scope: firstScope, prompt: "hold persistent" });
+      await waitUntil(() => mock.requests.length === 1);
+      const temporaryA = parent.complete({ scope: temporaryScope, prompt: "temporary a" });
+      const temporaryB = parent.complete({ scope: temporaryScope, prompt: "temporary b" });
+      await waitUntil(() => mock.requests.length === 2);
+
+      expect(await parent.releaseIdleResources("memory-pressure")).toEqual({
+        persistent: 1,
+        temporary: 1,
+        busy: 2,
+        evicted: 0,
+      });
+
+      await Promise.all([first, temporaryA, temporaryB]);
+      expect(mock.maxActiveRequests).toBe(2);
+      expect(await parent.releaseIdleResources("memory-pressure")).toEqual({
+        persistent: 0,
+        temporary: 0,
+        busy: 0,
+        evicted: 1,
+      });
+    } finally {
+      await parent.close();
+      await parent.close();
+      mock.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("removes a failed session creation so the same scope can retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "youban-parent-retry-"));
+    const runtimeDir = join(root, "runtime");
+    const mock = createMockPiModel(runtimeDir, { text: "retry-answer" });
+    let attempts = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: root,
+      runtimeDir,
+      model: mock.model,
+      subagentModel: "youban-mock/mock-model",
+      sweepIntervalMs: 0,
+      sessionFactory: async (options) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("session init failed");
+        return createYoubanAgentSession(options);
+      },
+    });
+    const scope: ParentAgentScope = { key: "user:retry", userId: "retry" };
+    try {
+      await expect(parent.inspect(scope)).rejects.toThrow("session init failed");
+      expect((await parent.inspect(scope)).sessionFile).toBeString();
+      expect(attempts).toBe(2);
     } finally {
       await parent.close();
       mock.stop();
