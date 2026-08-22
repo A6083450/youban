@@ -31,12 +31,16 @@
     "elysia": "^1.4.29",
     "pi-hermes-memory": "0.9.6",
     "pi-subagents": "0.53.0",
-    "yaml": "2.9.0"
+    "yaml": "2.9.0",
+    "yauzl": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
+    "@types/yauzl": "3.4.0",
+    "@types/yazl": "3.3.1",
     "bun-types": "^1.4.0",
     "drizzle-kit": "^0.31.10",
-    "typescript": "^5.7"
+    "typescript": "^5.7",
+    "yazl": "3.3.1"
   }
 }
