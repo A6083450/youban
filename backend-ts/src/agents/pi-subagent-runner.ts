@@ -3,9 +3,15 @@ import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { BROWSER_USER_AGENT } from "./llm/providers.ts";
 import type { StructuredAgentRequest, StructuredAgentRunner } from "./pi-trip-planner.ts";
-import { createYoubanAgentSession, type YoubanAgentSessionHost } from "./session-host.ts";
+import {
+  createYoubanAgentSession,
+  type CreateYoubanAgentSessionOptions,
+  type YoubanAgentSessionHost,
+} from "./session-host.ts";
 import { createBuiltinSkillCatalogSnapshot } from "./skill-registry.ts";
 import type { SkillCatalogSnapshot } from "./skill-types.ts";
+import type { SkillCatalogProvider } from "./skill-management-service.ts";
+import { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
 
 export const PI_RUNTIME_API_KEY_ENV = "YOUBAN_PI_RUNTIME_API_KEY";
 
@@ -77,106 +83,300 @@ export function writeRuntimeModelConfig(
   return path;
 }
 
-interface PiSubagentRunnerOptions {
+export interface PiSubagentRunnerOptions {
   cwd: string;
   runtimeDir: string;
   model: Model<Api>;
   subagentModel: string;
   apiKey?: string;
   timeoutMs?: number;
+  skillCatalog?: SkillCatalogProvider;
   skillSnapshot?: SkillCatalogSnapshot;
-  hostFactory?: () => Promise<YoubanAgentSessionHost>;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
+  hostFactory?: (options: CreateYoubanAgentSessionOptions) => Promise<YoubanAgentSessionHost>;
+}
+
+interface RunnerHostState {
+  host: YoubanAgentSessionHost;
+  generation: number;
+}
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("旅行规划已取消");
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortError(signal));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export class PiSubagentRunner implements StructuredAgentRunner {
-  private hostPromise: Promise<YoubanAgentSessionHost> | undefined;
+  private hostState: RunnerHostState | undefined;
+  private hostCreation: Promise<RunnerHostState> | undefined;
+  private rotationPromise: Promise<void> | undefined;
+  private rotationRetryGeneration: number | undefined;
+  private activeRuns = 0;
+  private readonly idleWaiters = new Set<() => void>();
   private releaseApiKey: (() => void) | undefined;
   private closed = false;
-  private readonly skillSnapshot: SkillCatalogSnapshot;
+  private closePromise: Promise<void> | undefined;
+  private readonly skillCatalog: SkillCatalogProvider;
+  private readonly skillRuntimeDiagnostics: SkillRuntimeDiagnostics;
 
   constructor(private readonly options: PiSubagentRunnerOptions) {
-    this.skillSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
+    const fixedSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
+    this.skillCatalog = options.skillCatalog ?? {
+      snapshot: () => fixedSnapshot,
+      subscribe: () => () => {},
+    };
+    this.skillRuntimeDiagnostics = options.skillRuntimeDiagnostics ?? new SkillRuntimeDiagnostics();
   }
 
-  private host(): Promise<YoubanAgentSessionHost> {
-    if (this.closed) return Promise.reject(new Error("Pi subagent runner is closed"));
-    if (!this.hostPromise) {
-      if (this.options.apiKey !== undefined) this.releaseApiKey = acquirePiRuntimeApiKey(this.options.apiKey);
-      this.hostPromise = this.options.hostFactory?.() ?? createYoubanAgentSession({
-        cwd: this.options.cwd,
-        runtimeDir: this.options.runtimeDir,
-        model: this.options.model,
-        subagentModel: this.options.subagentModel,
-        skillSnapshot: this.skillSnapshot,
-        tools: ["subagent"],
-      }).catch((error) => {
-        this.releaseApiKey?.();
-        this.releaseApiKey = undefined;
-        throw error;
-      });
+  private assertOpen(): void {
+    if (this.closed) throw new Error("Pi subagent runner is closed");
+  }
+
+  private sessionOptions(skillSnapshot: SkillCatalogSnapshot): CreateYoubanAgentSessionOptions {
+    return {
+      cwd: this.options.cwd,
+      runtimeDir: this.options.runtimeDir,
+      model: this.options.model,
+      subagentModel: this.options.subagentModel,
+      skillSnapshot,
+      tools: ["subagent"],
+    };
+  }
+
+  private async createHost(skillSnapshot: SkillCatalogSnapshot): Promise<RunnerHostState> {
+    if (!this.releaseApiKey && this.options.apiKey !== undefined) {
+      this.releaseApiKey = acquirePiRuntimeApiKey(this.options.apiKey);
     }
-    return this.hostPromise;
+    try {
+      const sessionOptions = this.sessionOptions(skillSnapshot);
+      const host = await (
+        this.options.hostFactory?.(sessionOptions) ?? createYoubanAgentSession(sessionOptions)
+      );
+      return { host, generation: skillSnapshot.generation };
+    } catch (error) {
+      this.releaseApiKey?.();
+      this.releaseApiKey = undefined;
+      throw error;
+    }
+  }
+
+  private async ensureHost(skillSnapshot: SkillCatalogSnapshot): Promise<RunnerHostState> {
+    if (this.hostState) return this.hostState;
+    if (!this.hostCreation) {
+      const isRotationRetry = this.rotationRetryGeneration === skillSnapshot.generation;
+      const creation = this.createHost(skillSnapshot)
+        .then((state) => {
+          this.hostState = state;
+          if (isRotationRetry) {
+            this.rotationRetryGeneration = undefined;
+            this.skillRuntimeDiagnostics.recordSuccess(
+              "pi-subagent-runner",
+              skillSnapshot.generation,
+            );
+          }
+          return state;
+        })
+        .catch((error) => {
+          if (isRotationRetry) {
+            this.skillRuntimeDiagnostics.recordFailure(
+              "pi-subagent-runner",
+              skillSnapshot.generation,
+              "structured_host_rotation_failed",
+            );
+          }
+          throw error;
+        });
+      this.hostCreation = creation;
+      void creation.finally(() => {
+        if (this.hostCreation === creation) this.hostCreation = undefined;
+      }).catch(() => {});
+    }
+    return this.hostCreation;
+  }
+
+  private waitForIdle(signal?: AbortSignal): Promise<void> {
+    if (this.activeRuns === 0) {
+      return signal?.aborted ? Promise.reject(abortError(signal)) : Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        this.idleWaiters.delete(idle);
+        signal?.removeEventListener("abort", abort);
+      };
+      const idle = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const abort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(abortError(signal!));
+      };
+      this.idleWaiters.add(idle);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+  }
+
+  private releaseRun(): void {
+    this.activeRuns -= 1;
+    if (this.activeRuns !== 0) return;
+    for (const waiter of [...this.idleWaiters]) waiter();
+  }
+
+  private disposeHost(): void {
+    const state = this.hostState;
+    if (!state) return;
+    this.hostState = undefined;
+    state.host.dispose();
+  }
+
+  private async rotate(skillSnapshot: SkillCatalogSnapshot): Promise<void> {
+    if (this.rotationPromise) return this.rotationPromise;
+    const rotation = (async () => {
+      if (this.hostState?.generation === skillSnapshot.generation) return;
+      this.disposeHost();
+      try {
+        const state = await this.createHost(skillSnapshot);
+        this.hostState = state;
+        this.rotationRetryGeneration = undefined;
+        this.skillRuntimeDiagnostics.recordSuccess(
+          "pi-subagent-runner",
+          skillSnapshot.generation,
+        );
+      } catch (error) {
+        this.rotationRetryGeneration = skillSnapshot.generation;
+        this.skillRuntimeDiagnostics.recordFailure(
+          "pi-subagent-runner",
+          skillSnapshot.generation,
+          "structured_host_rotation_failed",
+        );
+        throw error;
+      }
+    })();
+    this.rotationPromise = rotation;
+    try {
+      await rotation;
+    } finally {
+      if (this.rotationPromise === rotation) this.rotationPromise = undefined;
+    }
+  }
+
+  private async acquireHost(
+    skillSnapshot: SkillCatalogSnapshot,
+    signal: AbortSignal,
+  ): Promise<RunnerHostState> {
+    while (true) {
+      this.assertOpen();
+      if (signal.aborted) throw abortError(signal);
+      if (this.rotationPromise) {
+        await waitWithSignal(this.rotationPromise, signal);
+        continue;
+      }
+
+      const state = this.hostState ?? await waitWithSignal(this.ensureHost(skillSnapshot), signal);
+      this.assertOpen();
+      if (signal.aborted) throw abortError(signal);
+      if (state.generation === skillSnapshot.generation) {
+        this.activeRuns += 1;
+        return state;
+      }
+
+      await this.waitForIdle(signal);
+      this.assertOpen();
+      if (signal.aborted) throw abortError(signal);
+      if (this.activeRuns > 0) continue;
+      await waitWithSignal(this.rotate(skillSnapshot), signal);
+    }
   }
 
   async run(request: StructuredAgentRequest): Promise<unknown> {
-    if (request.signal.aborted) throw request.signal.reason ?? new Error("旅行规划已取消");
-    const host = await this.host();
-    if (request.signal.aborted) throw request.signal.reason ?? new Error("旅行规划已取消");
-    const identity = {
-      requestId: crypto.randomUUID(),
-      ownerRunId: crypto.randomUUID(),
-      nodeId: request.nodeId,
-    };
-    const cancel = () => host.cancel(identity);
-    request.signal.addEventListener("abort", cancel, { once: true });
+    if (request.signal.aborted) throw abortError(request.signal);
+    const skillSnapshot = this.skillCatalog.snapshot();
+    const state = await this.acquireHost(skillSnapshot, request.signal);
     try {
-      if (request.signal.aborted) {
-        cancel();
-        throw request.signal.reason ?? new Error("旅行规划已取消");
+      const identity = {
+        requestId: crypto.randomUUID(),
+        ownerRunId: crypto.randomUUID(),
+        nodeId: request.nodeId,
+      };
+      const cancel = () => state.host.cancel(identity);
+      request.signal.addEventListener("abort", cancel, { once: true });
+      try {
+        if (request.signal.aborted) {
+          cancel();
+          throw abortError(request.signal);
+        }
+        const response = await state.host.delegate({
+          ...identity,
+          agent: request.agent,
+          task: [
+            "Use only the following server-provided structured input.",
+            "Return one value matching the requested JSON schema.",
+            JSON.stringify(request.input),
+          ].join("\n\n"),
+          context: "fresh",
+          cwd: this.options.cwd,
+          thinking: "off",
+          timeoutMs: this.options.timeoutMs ?? 120_000,
+          turnBudget: { maxTurns: 1 },
+          toolBudget: {
+            hard: 0,
+            block: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+          },
+          skill: false,
+          artifacts: false,
+          result: { kind: "structured", schema: request.schema },
+        });
+        if (response.status !== "completed") {
+          throw new Error(response.error || `子 Agent ${request.agent} 执行失败: ${response.status}`);
+        }
+        if (response.result?.kind !== "structured") {
+          throw new Error(`子 Agent ${request.agent} 未返回结构化结果`);
+        }
+        return response.result.value;
+      } finally {
+        request.signal.removeEventListener("abort", cancel);
       }
-      const response = await host.delegate({
-        ...identity,
-        agent: request.agent,
-        task: [
-          "Use only the following server-provided structured input.",
-          "Return one value matching the requested JSON schema.",
-          JSON.stringify(request.input),
-        ].join("\n\n"),
-        context: "fresh",
-        cwd: this.options.cwd,
-        thinking: "off",
-        timeoutMs: this.options.timeoutMs ?? 120_000,
-        turnBudget: { maxTurns: 1 },
-        toolBudget: {
-          hard: 0,
-          block: ["read", "bash", "edit", "write", "grep", "find", "ls"],
-        },
-        skill: false,
-        artifacts: false,
-        result: { kind: "structured", schema: request.schema },
-      });
-      if (response.status !== "completed") {
-        throw new Error(response.error || `子 Agent ${request.agent} 执行失败: ${response.status}`);
-      }
-      if (response.result?.kind !== "structured") {
-        throw new Error(`子 Agent ${request.agent} 未返回结构化结果`);
-      }
-      return response.result.value;
     } finally {
-      request.signal.removeEventListener("abort", cancel);
+      this.releaseRun();
     }
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    try {
-      (await this.hostPromise)?.dispose();
-    } catch {
-      // Initialization failures have already released the runtime lease.
-    } finally {
+    this.closePromise = (async () => {
+      await this.waitForIdle();
+      await Promise.allSettled([
+        this.rotationPromise ?? Promise.resolve(),
+        this.hostCreation ?? Promise.resolve(),
+      ]);
+      this.disposeHost();
       this.releaseApiKey?.();
       this.releaseApiKey = undefined;
-    }
+    })();
+    return this.closePromise;
   }
 }

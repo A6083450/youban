@@ -3,8 +3,14 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSettings } from "../config/settings.ts";
 import { AmapResearchSources } from "../services/amap-research-sources.ts";
 import { getPiLlmClient } from "./llm/providers.ts";
-import { PiSubagentRunner, writeRuntimeModelConfig } from "./pi-subagent-runner.ts";
-import { PiTripPlanner } from "./pi-trip-planner.ts";
+import {
+  PiSubagentRunner,
+  type PiSubagentRunnerOptions,
+  writeRuntimeModelConfig,
+} from "./pi-subagent-runner.ts";
+import { PiTripPlanner, type StructuredAgentRunner } from "./pi-trip-planner.ts";
+import type { SkillCatalogProvider } from "./skill-management-service.ts";
+import type { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
 
 interface DefaultTripPlannerSettings {
   vite_amap_web_key: string;
@@ -20,11 +26,14 @@ interface DefaultTripPlannerSettings {
   trip_duplicate_repair_rounds: number;
 }
 
-interface DefaultTripPlannerOptions {
+export interface DefaultTripPlannerOptions {
   cwd: string;
   dataDir: string;
   runtimeDir?: string;
   model?: Model<Api>;
+  skillCatalog?: SkillCatalogProvider;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
+  runnerFactory?: (options: PiSubagentRunnerOptions) => StructuredAgentRunner;
   settings?: DefaultTripPlannerSettings;
 }
 
@@ -36,14 +45,17 @@ export function createDefaultTripPlanner(options: DefaultTripPlannerOptions): Pi
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
   });
-  const agents = new PiSubagentRunner({
+  const runnerOptions: PiSubagentRunnerOptions = {
     cwd: options.cwd,
     runtimeDir,
     model: options.model ?? getPiLlmClient().model,
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: (settings.trip_planner_timeout ?? settings.llm_timeout) * 1_000,
-  });
+    skillCatalog: options.skillCatalog,
+    skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
+  };
+  const agents = options.runnerFactory?.(runnerOptions) ?? new PiSubagentRunner(runnerOptions);
   return new PiTripPlanner({
     research: new AmapResearchSources({ apiKey: settings.vite_amap_web_key }),
     agents,

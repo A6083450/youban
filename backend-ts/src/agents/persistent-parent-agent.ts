@@ -4,9 +4,15 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { StructuredAgentRequest } from "./pi-trip-planner.ts";
 import { acquirePiRuntimeApiKey } from "./pi-subagent-runner.ts";
-import { createYoubanAgentSession, type YoubanAgentSessionHost } from "./session-host.ts";
+import {
+  createYoubanAgentSession,
+  type CreateYoubanAgentSessionOptions,
+  type YoubanAgentSessionHost,
+} from "./session-host.ts";
 import { createBuiltinSkillCatalogSnapshot } from "./skill-registry.ts";
 import type { SkillCatalogSnapshot } from "./skill-types.ts";
+import type { SkillCatalogProvider } from "./skill-management-service.ts";
+import { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
 
 export interface ParentAgentScope {
   key: string;
@@ -38,7 +44,7 @@ export interface ParentSessionPoolSnapshot {
   evicted: number;
 }
 
-interface PersistentParentAgentOptions {
+export interface PersistentParentAgentOptions {
   cwd: string;
   runtimeDir: string;
   model: Model<Api>;
@@ -49,13 +55,15 @@ interface PersistentParentAgentOptions {
   sessionIdleMs?: number;
   sweepIntervalMs?: number;
   now?: () => number;
+  skillCatalog?: SkillCatalogProvider;
   skillSnapshot?: SkillCatalogSnapshot;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   sessionFactory?: typeof createYoubanAgentSession;
   toolsForScope?: (scope: ParentAgentScope) => ToolDefinition[];
 }
 
 interface ParentSession {
-  host: YoubanAgentSessionHost;
+  host?: YoubanAgentSessionHost;
   tail: Promise<void>;
 }
 
@@ -65,6 +73,12 @@ interface ParentSessionEntry {
   lastUsedAt: number;
   queuedOperations: number;
   persistent: boolean;
+  generation: number;
+  hasRun: boolean;
+  sessionDir: string;
+  customTools: ToolDefinition[];
+  invalidated?: boolean;
+  rotationFailure?: unknown;
   disposing?: Promise<void>;
 }
 
@@ -78,11 +92,13 @@ function abortError(signal: AbortSignal): unknown {
 
 export class PersistentPiParentAgent implements YoubanParentAgent {
   private readonly sessions = new Map<string, ParentSessionEntry>();
+  private readonly failedRotations = new Map<string, number>();
   private readonly sessionLimit: number;
   private readonly sessionIdleMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: typeof createYoubanAgentSession;
-  private readonly skillSnapshot: SkillCatalogSnapshot;
+  private readonly skillCatalog: SkillCatalogProvider;
+  private readonly skillRuntimeDiagnostics: SkillRuntimeDiagnostics;
   private readonly sweepTimer?: ReturnType<typeof setInterval>;
   private releaseApiKey: (() => void) | undefined;
   private closed = false;
@@ -92,7 +108,12 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     this.sessionIdleMs = options.sessionIdleMs ?? 1_800_000;
     this.now = options.now ?? Date.now;
     this.sessionFactory = options.sessionFactory ?? createYoubanAgentSession;
-    this.skillSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
+    const fixedSnapshot = options.skillSnapshot ?? createBuiltinSkillCatalogSnapshot();
+    this.skillCatalog = options.skillCatalog ?? {
+      snapshot: () => fixedSnapshot,
+      subscribe: () => () => {},
+    };
+    this.skillRuntimeDiagnostics = options.skillRuntimeDiagnostics ?? new SkillRuntimeDiagnostics();
     const sweepIntervalMs = options.sweepIntervalMs ?? 60_000;
     if (sweepIntervalMs > 0) {
       this.sweepTimer = setInterval(() => {
@@ -109,11 +130,73 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       const session = await entry.pending.catch(() => undefined);
       if (!session) return;
       await session.tail.catch(() => {});
-      session.host.dispose();
+      this.disposeSessionHost(session);
     })().catch((error) => {
       console.warn(`父 Agent 会话释放失败: ${error}`);
     });
     return entry.disposing;
+  }
+
+  private disposeSessionHost(session: ParentSession): void {
+    const host = session.host;
+    if (!host) return;
+    session.host = undefined;
+    host.dispose();
+  }
+
+  private sessionOptions(
+    entry: Pick<ParentSessionEntry, "sessionDir" | "customTools">,
+    skillSnapshot: SkillCatalogSnapshot,
+  ): CreateYoubanAgentSessionOptions {
+    return {
+      cwd: this.options.cwd,
+      runtimeDir: this.options.runtimeDir,
+      model: this.options.model,
+      subagentModel: this.options.subagentModel,
+      skillSnapshot,
+      tools: ["subagent", ...entry.customTools.map((tool) => tool.name)],
+      customTools: entry.customTools,
+      sessionDir: entry.sessionDir,
+    };
+  }
+
+  private async hostForOperation(
+    entry: ParentSessionEntry,
+    session: ParentSession,
+  ): Promise<YoubanAgentSessionHost> {
+    if (entry.invalidated) throw entry.rotationFailure ?? new Error("Parent session rotation failed");
+    const current = session.host;
+    if (!current) throw new Error("Parent session host is unavailable");
+    if (!entry.hasRun) {
+      entry.hasRun = true;
+      return current;
+    }
+
+    const skillSnapshot = this.skillCatalog.snapshot();
+    if (skillSnapshot.generation === entry.generation) return current;
+
+    this.disposeSessionHost(session);
+    try {
+      const host = await this.sessionFactory(this.sessionOptions(entry, skillSnapshot));
+      session.host = host;
+      entry.generation = skillSnapshot.generation;
+      this.skillRuntimeDiagnostics.recordSuccess(
+        "persistent-parent-agent",
+        skillSnapshot.generation,
+      );
+      return host;
+    } catch (error) {
+      entry.invalidated = true;
+      entry.rotationFailure = error;
+      this.failedRotations.set(entry.id, skillSnapshot.generation);
+      if (this.sessions.get(entry.id) === entry) this.sessions.delete(entry.id);
+      this.skillRuntimeDiagnostics.recordFailure(
+        "persistent-parent-agent",
+        skillSnapshot.generation,
+        "parent_host_rotation_failed",
+      );
+      throw error;
+    }
   }
 
   private idleEntries(): ParentSessionEntry[] {
@@ -146,20 +229,29 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       this.releaseApiKey = acquirePiRuntimeApiKey(this.options.apiKey);
     }
     const customTools = this.options.toolsForScope?.(scope) ?? [];
+    const skillSnapshot = this.skillCatalog.snapshot();
     const entry = {} as ParentSessionEntry;
-    const pending = this.sessionFactory({
-        cwd: this.options.cwd,
-        runtimeDir: this.options.runtimeDir,
-        model: this.options.model,
-        subagentModel: this.options.subagentModel,
-        skillSnapshot: this.skillSnapshot,
-        tools: ["subagent", ...customTools.map((tool) => tool.name)],
-        customTools,
-        sessionDir: join(this.options.runtimeDir, "sessions", id),
+    const sessionDir = join(this.options.runtimeDir, "sessions", id);
+    const pending = this.sessionFactory(this.sessionOptions({ sessionDir, customTools }, skillSnapshot))
+      .then((host) => {
+        if (this.failedRotations.get(id) === skillSnapshot.generation) {
+          this.failedRotations.delete(id);
+          this.skillRuntimeDiagnostics.recordSuccess(
+            "persistent-parent-agent",
+            skillSnapshot.generation,
+          );
+        }
+        return { host, tail: Promise.resolve() };
       })
-      .then((host) => ({ host, tail: Promise.resolve() }))
       .catch((error) => {
         if (this.sessions.get(id) === entry) this.sessions.delete(id);
+        if (this.failedRotations.get(id) === skillSnapshot.generation) {
+          this.skillRuntimeDiagnostics.recordFailure(
+            "persistent-parent-agent",
+            skillSnapshot.generation,
+            "parent_host_rotation_failed",
+          );
+        }
         throw error;
       });
     const persistentCount = [...this.sessions.values()].filter((item) => item.persistent).length;
@@ -169,6 +261,10 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       lastUsedAt: this.now(),
       queuedOperations: 0,
       persistent: persistentCount < this.sessionLimit,
+      generation: skillSnapshot.generation,
+      hasRun: false,
+      sessionDir,
+      customTools,
     });
     this.sessions.set(id, entry);
     return entry;
@@ -183,7 +279,8 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       const previous = session.tail;
       session.tail = new Promise<void>((resolve) => { release = resolve; });
       await previous.catch(() => {});
-      return await run(session.host);
+      const host = await this.hostForOperation(entry, session);
+      return await run(host);
     } finally {
       release?.();
       entry.queuedOperations -= 1;

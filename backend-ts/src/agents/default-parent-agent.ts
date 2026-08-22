@@ -8,6 +8,8 @@ import { getPiLlmClient } from "./llm/providers.ts";
 import { createParentBusinessTools } from "./parent-business-tools.ts";
 import { PersistentPiParentAgent } from "./persistent-parent-agent.ts";
 import { writeRuntimeModelConfig } from "./pi-subagent-runner.ts";
+import type { SkillCatalogProvider } from "./skill-management-service.ts";
+import type { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
 
 export function createDefaultParentAgent(options: {
   cwd: string;
@@ -16,6 +18,8 @@ export function createDefaultParentAgent(options: {
   memory: UserMemoryService;
   runtimeDir?: string;
   model?: Model<Api>;
+  skillCatalog?: SkillCatalogProvider;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   settings?: Pick<AppSettings,
     | "openai_api_key"
     | "openai_base_url"
@@ -42,6 +46,8 @@ export function createDefaultParentAgent(options: {
     timeoutMs: settings.llm_timeout * 1_000,
     sessionLimit: settings.pi_parent_session_limit,
     sessionIdleMs: settings.pi_parent_session_idle_seconds * 1_000,
+    skillCatalog: options.skillCatalog,
+    skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
     toolsForScope: (scope) => createParentBusinessTools(scope, options),
   });
 }

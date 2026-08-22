@@ -6,7 +6,13 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PersistentPiParentAgent, type ParentAgentScope } from "../src/agents/persistent-parent-agent.ts";
 import { createMockPiModel } from "./helpers/mock-pi-model.ts";
-import { createYoubanAgentSession } from "../src/agents/session-host.ts";
+import {
+  createYoubanAgentSession,
+  type CreateYoubanAgentSessionOptions,
+  type YoubanAgentSessionHost,
+} from "../src/agents/session-host.ts";
+import type { SkillCatalogProvider } from "../src/agents/skill-management-service.ts";
+import { SkillRuntimeDiagnostics } from "../src/agents/skill-runtime-diagnostics.ts";
 import type {
   SkillAgentId,
   SkillCatalogSnapshot,
@@ -50,6 +56,78 @@ function builtinSnapshot(): SkillCatalogSnapshot {
   });
 }
 
+class TestSkillCatalog implements SkillCatalogProvider {
+  private current: SkillCatalogSnapshot;
+  private readonly listeners = new Set<(snapshot: SkillCatalogSnapshot) => void>();
+
+  constructor(initial: SkillCatalogSnapshot) {
+    this.current = initial;
+  }
+
+  snapshot(): SkillCatalogSnapshot {
+    return this.current;
+  }
+
+  subscribe(listener: (snapshot: SkillCatalogSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  publish(next: SkillCatalogSnapshot): void {
+    this.current = next;
+    for (const listener of this.listeners) listener(next);
+  }
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function controlledParentHost(options: {
+  generation: number;
+  sessionDir: string;
+  transcript: string[];
+  onPrompt?: (prompt: string) => Promise<void>;
+  onDispose: () => void;
+}): YoubanAgentSessionHost {
+  let lastAssistantText = "";
+  let disposed = false;
+  const session = {
+    sessionFile: join(options.sessionDir, "session.jsonl"),
+    systemPrompt: `generation:${options.generation}`,
+    subscribe() { return () => {}; },
+    async abort() {},
+    async prompt(value: string) {
+      await options.onPrompt?.(value);
+      options.transcript.push(value);
+      lastAssistantText = options.transcript.join("|");
+    },
+    getLastAssistantText() { return lastAssistantText; },
+    getActiveToolNames() { return ["subagent"]; },
+    async sendCustomMessage() {},
+  };
+  return {
+    session,
+    resourceLoader: {} as YoubanAgentSessionHost["resourceLoader"],
+    extensionErrors: [],
+    generation: options.generation,
+    async delegate() {
+      return { status: "completed", result: { kind: "structured", value: options.generation } };
+    },
+    cancel() {},
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      options.onDispose();
+    },
+  } as unknown as YoubanAgentSessionHost;
+}
+
 async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (!predicate()) {
@@ -59,6 +137,206 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<v
 }
 
 describe("persistent Pi parent agent", () => {
+  it("rotates an idle scope and preserves its persisted transcript directory", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const createdGenerations: number[] = [];
+    const disposedGenerations: number[] = [];
+    const sessionDirs: string[] = [];
+    const transcripts = new Map<string, string[]>();
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-idle-rotation",
+      runtimeDir: "/tmp/youban-parent-idle-rotation/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const sessionDir = options.sessionDir!;
+        createdGenerations.push(options.skillSnapshot.generation);
+        sessionDirs.push(sessionDir);
+        const transcript = transcripts.get(sessionDir) ?? [];
+        transcripts.set(sessionDir, transcript);
+        return controlledParentHost({
+          generation: options.skillSnapshot.generation,
+          sessionDir,
+          transcript,
+          onDispose: () => { disposedGenerations.push(options.skillSnapshot.generation); },
+        });
+      },
+    });
+    const scope = { key: "user:idle-rotation", userId: "idle-rotation" };
+    try {
+      await expect(parent.complete({ scope, prompt: "old" })).resolves.toBe("old");
+      catalog.publish(snapshot(2));
+      await expect(parent.complete({ scope, prompt: "new" })).resolves.toBe("old|new");
+
+      expect(createdGenerations).toEqual([1, 2]);
+      expect(disposedGenerations).toEqual([1]);
+      expect(sessionDirs).toHaveLength(2);
+      expect(sessionDirs[1]).toBe(sessionDirs[0]);
+    } finally {
+      await parent.close();
+    }
+  });
+
+  it("lets busy work finish before recreating the scope at the new generation", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const createdGenerations: number[] = [];
+    const disposedGenerations: number[] = [];
+    let activePrompts = 0;
+    let maxActivePrompts = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-busy-rotation",
+      runtimeDir: "/tmp/youban-parent-busy-rotation/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        return controlledParentHost({
+          generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onPrompt: async () => {
+            activePrompts += 1;
+            maxActivePrompts = Math.max(maxActivePrompts, activePrompts);
+            try {
+              if (generation === 1) {
+                firstStarted.resolve();
+                await releaseFirst.promise;
+              }
+            } finally {
+              activePrompts -= 1;
+            }
+          },
+          onDispose: () => { disposedGenerations.push(generation); },
+        });
+      },
+    });
+    const scope = { key: "user:busy-rotation", userId: "busy-rotation" };
+    try {
+      const first = parent.complete({ scope, prompt: "old" });
+      await firstStarted.promise;
+      catalog.publish(snapshot(2));
+      const second = parent.complete({ scope, prompt: "new" });
+      releaseFirst.resolve();
+
+      await expect(first).resolves.toBe("old");
+      await expect(second).resolves.toBe("new");
+      expect(createdGenerations).toEqual([1, 2]);
+      expect(disposedGenerations).toEqual([1]);
+      expect(maxActivePrompts).toBe(1);
+    } finally {
+      releaseFirst.resolve();
+      await parent.close();
+    }
+  });
+
+  it("removes a failed rotated scope so a later call retries recreation", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const diagnostics = new SkillRuntimeDiagnostics();
+    const createdGenerations: number[] = [];
+    let generationTwoAttempts = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-rotation-retry",
+      runtimeDir: "/tmp/youban-parent-rotation-retry/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillRuntimeDiagnostics: diagnostics,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        if (generation === 2 && ++generationTwoAttempts === 1) {
+          throw new Error("rotation failed at /private/runtime with credential=secret");
+        }
+        return controlledParentHost({
+          generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onDispose() {},
+        });
+      },
+    });
+    const scope = { key: "user:rotation-retry", userId: "rotation-retry" };
+    try {
+      await parent.complete({ scope, prompt: "old" });
+      catalog.publish(snapshot(2));
+      await expect(parent.complete({ scope, prompt: "sensitive prompt" })).rejects.toThrow("rotation failed");
+      expect(diagnostics.snapshot()).toEqual([{
+        component: "persistent-parent-agent",
+        generation: 2,
+        status: "failure",
+        errorCode: "parent_host_rotation_failed",
+      }]);
+      expect(JSON.stringify(diagnostics.snapshot())).not.toContain("/private/runtime");
+      expect(JSON.stringify(diagnostics.snapshot())).not.toContain("sensitive prompt");
+      expect(JSON.stringify(diagnostics.snapshot())).not.toContain("credential=secret");
+      await expect(parent.complete({ scope, prompt: "retry" })).resolves.toBe("retry");
+      expect(createdGenerations).toEqual([1, 2, 2]);
+      expect(diagnostics.snapshot()).toEqual([{
+        component: "persistent-parent-agent",
+        generation: 2,
+        status: "success",
+      }]);
+    } finally {
+      await parent.close();
+    }
+  });
+
+  it("cleans each host once when close waits for a pending rotation", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const rotationStarted = deferred();
+    const releaseRotation = deferred();
+    const disposeCounts = new Map<number, number>();
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-close-rotation",
+      runtimeDir: "/tmp/youban-parent-close-rotation/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const generation = options.skillSnapshot.generation;
+        if (generation === 2) {
+          rotationStarted.resolve();
+          await releaseRotation.promise;
+        }
+        return controlledParentHost({
+          generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onDispose: () => { disposeCounts.set(generation, (disposeCounts.get(generation) ?? 0) + 1); },
+        });
+      },
+    });
+    const scope = { key: "user:close-rotation", userId: "close-rotation" };
+    try {
+      await parent.complete({ scope, prompt: "old" });
+      catalog.publish(snapshot(2));
+      const rotated = parent.complete({ scope, prompt: "new" });
+      await waitUntil(() => disposeCounts.get(1) === 1, 200);
+      const closed = parent.close();
+      releaseRotation.resolve();
+
+      await expect(rotated).resolves.toBe("new");
+      await closed;
+      expect(Object.fromEntries(disposeCounts)).toEqual({ 1: 1, 2: 1 });
+    } finally {
+      releaseRotation.resolve();
+      await parent.close();
+    }
+  });
+
   it("uses the repository-owned built-in parent snapshot without a persisted catalog service", async () => {
     const root = mkdtempSync(join(tmpdir(), "youban-parent-default-snapshot-"));
     const runtimeDir = join(root, "runtime");

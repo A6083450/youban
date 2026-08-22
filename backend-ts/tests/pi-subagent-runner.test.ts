@@ -9,8 +9,260 @@ import {
   writeRuntimeModelConfig,
 } from "../src/agents/pi-subagent-runner.ts";
 import { createMockPiModel } from "./helpers/mock-pi-model.ts";
+import type { SkillCatalogProvider } from "../src/agents/skill-management-service.ts";
+import type { SkillCatalogSnapshot } from "../src/agents/skill-types.ts";
+import { SkillRuntimeDiagnostics } from "../src/agents/skill-runtime-diagnostics.ts";
+
+function skillSnapshot(generation: number): SkillCatalogSnapshot {
+  return {
+    generation,
+    assignments: {
+      "parent-assistant": [],
+      "destination-researcher": [],
+      "segment-planner": [],
+      summary: [],
+      "itinerary-reviewer": [],
+      "plan-editor": [],
+    },
+  };
+}
+
+class TestSkillCatalog implements SkillCatalogProvider {
+  constructor(private current: SkillCatalogSnapshot) {}
+  snapshot(): SkillCatalogSnapshot { return this.current; }
+  subscribe(): () => void { return () => {}; }
+  publish(next: SkillCatalogSnapshot): void { this.current = next; }
+}
+
+function request(nodeId: string, signal = new AbortController().signal) {
+  return {
+    agent: "segment-planner" as const,
+    nodeId,
+    input: { nodeId },
+    schema: { type: "string" },
+    signal,
+  };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("timed out waiting for condition");
+    await Bun.sleep(5);
+  }
+}
 
 describe("PiSubagentRunner", () => {
+  it("keeps same-generation structured runs parallel on one host", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const release = deferred();
+    const createdGenerations: number[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-parallel",
+      runtimeDir: "/tmp/youban-runner-parallel/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      hostFactory: async () => {
+        const generation = catalog.snapshot().generation;
+        createdGenerations.push(generation);
+        return {
+          generation,
+          async delegate() {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            try { await release.promise; } finally { active -= 1; }
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() {},
+        } as any;
+      },
+    });
+    try {
+      const first = runner.run(request("a"));
+      const second = runner.run(request("b"));
+      await waitUntil(() => maxActive === 2);
+      release.resolve();
+      await expect(Promise.all([first, second])).resolves.toEqual([1, 1]);
+      expect(maxActive).toBe(2);
+      expect(createdGenerations).toEqual([1]);
+    } finally {
+      release.resolve();
+      await runner.close();
+    }
+  });
+
+  it("waits for old structured work, rotates once, then resumes new-generation runs in parallel", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const oldStarted = deferred();
+    const releaseOld = deferred();
+    const createdGenerations: number[] = [];
+    const disposedGenerations: number[] = [];
+    const activeByGeneration = new Map<number, number>();
+    const maxActiveByGeneration = new Map<number, number>();
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-busy-rotation",
+      runtimeDir: "/tmp/youban-runner-busy-rotation/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      hostFactory: async () => {
+        const generation = catalog.snapshot().generation;
+        createdGenerations.push(generation);
+        return {
+          generation,
+          async delegate(delegation: { nodeId: string }) {
+            const active = (activeByGeneration.get(generation) ?? 0) + 1;
+            activeByGeneration.set(generation, active);
+            maxActiveByGeneration.set(generation, Math.max(maxActiveByGeneration.get(generation) ?? 0, active));
+            try {
+              if (delegation.nodeId === "old") {
+                oldStarted.resolve();
+                await releaseOld.promise;
+              } else {
+                await Bun.sleep(20);
+              }
+            } finally {
+              activeByGeneration.set(generation, (activeByGeneration.get(generation) ?? 1) - 1);
+            }
+            return {
+              status: "completed",
+              result: { kind: "structured", value: `${generation}:${delegation.nodeId}` },
+            };
+          },
+          cancel() {},
+          dispose() { disposedGenerations.push(generation); },
+        } as any;
+      },
+    });
+    try {
+      const old = runner.run(request("old"));
+      await oldStarted.promise;
+      catalog.publish(skillSnapshot(2));
+      const nextA = runner.run(request("next-a"));
+      const nextB = runner.run(request("next-b"));
+      await Bun.sleep(10);
+      expect(createdGenerations).toEqual([1]);
+      releaseOld.resolve();
+
+      await expect(old).resolves.toBe("1:old");
+      await expect(Promise.all([nextA, nextB])).resolves.toEqual(["2:next-a", "2:next-b"]);
+      expect(createdGenerations).toEqual([1, 2]);
+      expect(disposedGenerations).toEqual([1]);
+      expect(maxActiveByGeneration.get(2)).toBe(2);
+    } finally {
+      releaseOld.resolve();
+      await runner.close();
+    }
+  });
+
+  it("rejects cancellation while waiting for rotation without creating or delegating", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const oldStarted = deferred();
+    const releaseOld = deferred();
+    const createdGenerations: number[] = [];
+    const delegatedNodes: string[] = [];
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-cancel-rotation",
+      runtimeDir: "/tmp/youban-runner-cancel-rotation/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      hostFactory: async () => {
+        const generation = catalog.snapshot().generation;
+        createdGenerations.push(generation);
+        return {
+          generation,
+          async delegate(delegation: { nodeId: string }) {
+            delegatedNodes.push(delegation.nodeId);
+            if (delegation.nodeId === "old") {
+              oldStarted.resolve();
+              await releaseOld.promise;
+            }
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() {},
+        } as any;
+      },
+    });
+    const old = runner.run(request("old"));
+    await oldStarted.promise;
+    catalog.publish(skillSnapshot(2));
+    const controller = new AbortController();
+    const cancelled = runner.run(request("cancelled", controller.signal));
+    await Bun.sleep(0);
+    controller.abort(new Error("cancelled while waiting"));
+
+    await expect(cancelled).rejects.toThrow("cancelled while waiting");
+    expect(createdGenerations).toEqual([1]);
+    expect(delegatedNodes).toEqual(["old"]);
+    releaseOld.resolve();
+    await old;
+    await runner.close();
+  });
+
+  it("retries a failed structured-host rotation on the following run", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const diagnostics = new SkillRuntimeDiagnostics();
+    const createdGenerations: number[] = [];
+    let generationTwoAttempts = 0;
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-rotation-retry",
+      runtimeDir: "/tmp/youban-runner-rotation-retry/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillRuntimeDiagnostics: diagnostics,
+      hostFactory: async () => {
+        const generation = catalog.snapshot().generation;
+        createdGenerations.push(generation);
+        if (generation === 2 && ++generationTwoAttempts === 1) {
+          throw new Error("failed at /private/runner with token=secret");
+        }
+        return {
+          generation,
+          async delegate() {
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() {},
+        } as any;
+      },
+    });
+    try {
+      await expect(runner.run(request("old"))).resolves.toBe(1);
+      catalog.publish(skillSnapshot(2));
+      await expect(runner.run(request("failure"))).rejects.toThrow("failed at");
+      expect(diagnostics.snapshot()).toEqual([{
+        component: "pi-subagent-runner",
+        generation: 2,
+        status: "failure",
+        errorCode: "structured_host_rotation_failed",
+      }]);
+      expect(JSON.stringify(diagnostics.snapshot())).not.toContain("/private/runner");
+      expect(JSON.stringify(diagnostics.snapshot())).not.toContain("token=secret");
+      await expect(runner.run(request("retry"))).resolves.toBe(2);
+      expect(createdGenerations).toEqual([1, 2, 2]);
+      expect(diagnostics.snapshot()).toEqual([{
+        component: "pi-subagent-runner",
+        generation: 2,
+        status: "success",
+      }]);
+    } finally {
+      await runner.close();
+    }
+  });
+
   it("runs a real structured pi-subagents child and returns its value", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "youban-pi-runner-"));
     const runtimeDir = join(tempRoot, "runtime");
