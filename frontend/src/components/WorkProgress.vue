@@ -24,48 +24,22 @@
       </div>
     </div>
 
-    <!-- 事件明细:只展示真实发生的事件,不再有占位的"等待"步骤 -->
     <div v-if="visibleEvents.length || currentThinking" class="wp-timeline" ref="timelineRef">
-      <div
-        v-for="step in visibleEvents"
-        :key="step.key"
-        class="wp-step"
-        :class="[step.status]"
-      >
-        <!-- 左侧图标 -->
-        <div class="wp-step-icon" :class="step.type">
-          <svg v-if="step.status === 'done'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-          <span v-else-if="step.status === 'active'" class="wp-spinner"></span>
-          <span v-else class="wp-step-dot"></span>
-        </div>
-
-        <!-- 右侧内容 -->
-        <div class="wp-step-body">
-          <div class="wp-step-title">{{ step.title }}</div>
-          <div v-if="step.content" class="wp-step-content">
-            <div class="wp-step-content-text" :class="{ expanded: expandedKeys.has(step.key) }">
-              {{ step.content }}
-            </div>
-            <button
-              v-if="step.content.length > 80"
-              class="wp-expand-btn"
-              @click="toggleExpand(step.key)"
-            >
-              {{ expandedKeys.has(step.key) ? '收起' : '展开' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 当前正在思考的动画:仅当最新一条事件是 thinking 时展示,避免过期残留 -->
-      <div v-if="currentThinking" class="wp-step active thinking-step">
-        <div class="wp-step-icon thinking">
-          <span class="wp-thinking-dots"><span></span><span></span><span></span></span>
-        </div>
-        <div class="wp-step-body">
-          <div class="wp-step-title">{{ currentThinking }}</div>
-        </div>
-      </div>
+      <ThoughtChain
+        v-if="thoughtItems.length"
+        :thinking-items="thoughtItems"
+        row-key="id"
+        dot-size="small"
+        max-width="100%"
+      />
+      <Thinking
+        v-if="currentThinking"
+        :model-value="true"
+        :content="currentThinking"
+        status="thinking"
+        :auto-collapse="false"
+        max-width="100%"
+      />
     </div>
 
     <!-- 展开/收起控制:默认展开,事件较多时可收起只看最新两条 -->
@@ -78,6 +52,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
+import { Thinking, ThoughtChain } from 'vue-element-plus-x'
 import YoubanLoader from '@/components/YoubanLoader.vue'
 import type { TripTaskDetail, TripTaskStage } from '@/types'
 
@@ -100,16 +75,7 @@ const props = defineProps<{
 // 默认展开详情;事件较多时收起只保留最新两条
 const COLLAPSED_COUNT = 2
 const expanded = ref(true)
-// 每条事件正文的展开状态用响应式 Set 维护(直接改 computed 产物不会触发重渲染)
-const expandedKeys = ref<Set<string>>(new Set())
 const timelineRef = ref<HTMLElement | null>(null)
-
-const toggleExpand = (key: string) => {
-  const next = new Set(expandedKeys.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  expandedKeys.value = next
-}
 
 const stageOrder: TripTaskStage[] = [
   'submitted', 'initializing', 'attraction_search', 'weather_search', 'hotel_search', 'planning', 'reviewing', 'graph_building', 'completed'
@@ -207,6 +173,14 @@ const visibleEvents = computed<StepItem[]>(() => {
     status: markActive && s.key === steps[steps.length - 1].key ? 'active' : s.status,
   }))
 })
+
+const thoughtItems = computed(() => visibleEvents.value.map((step) => ({
+  id: step.key,
+  title: step.title,
+  thinkContent: step.content || '',
+  isCanExpand: Boolean(step.content),
+  status: step.status === 'active' ? 'loading' as const : 'success' as const,
+})))
 
 // 自动滚动到底部
 watch(() => props.details?.length, () => {

@@ -19,6 +19,7 @@ const attractionImage = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 type PlanApiMocks = {
   budgetResponse?: unknown
   attractionDeleteResponse?: unknown
+  onChatEditRequest?: (body: Record<string, unknown>) => void
 }
 
 const tripPlanWithBlueprint = {
@@ -179,6 +180,19 @@ const mockCommonApi = async (page: Page, mocks: PlanApiMocks = {}): Promise<void
       await route.fulfill({ json: { items: [] } })
       return
     }
+    if (path === '/api/chat/edit' && route.request().method() === 'POST') {
+      mocks.onChatEditRequest?.(route.request().postDataJSON() as Record<string, unknown>)
+      await route.fulfill({
+        json: {
+          success: true,
+          reply: '已记录请求。',
+          updated_plan: null,
+          changes: [],
+          revision: 'mock-revision',
+        },
+      })
+      return
+    }
     if (path.endsWith('/conversation')) {
       await route.fulfill({ json: { plan_id: planId, messages: [] } })
       return
@@ -246,6 +260,20 @@ test('merges journey context into the trip overview without a separate navigatio
   await expect(blueprint.getByRole('button', { name: /D1 上海.*外滩/ })).toBeVisible()
   await expect(blueprint.getByText('测试酒店')).toHaveCount(0)
   await expect(blueprint.getByText('测试餐厅')).toHaveCount(0)
+})
+
+test('binds result-page agent requests to the persisted plan id', async ({ page }) => {
+  let requestBody: Record<string, unknown> | undefined
+  await preparePlanPage(page, tripPlanWithBlueprint, 'zh-CN', {
+    onChatEditRequest: (body) => { requestBody = body },
+  })
+
+  const editor = page.locator('.agent-sender [contenteditable]').first()
+  await editor.fill('把第一天安排得轻松一点')
+  await page.getByRole('button', { name: '发送' }).last().click()
+
+  await expect.poll(() => requestBody?.plan_id).toBe(planId)
+  expect(requestBody?.message).toBe('把第一天安排得轻松一点')
 })
 
 test('uses distinct overview and detailed itinerary labels in Japanese', async ({ page }) => {
@@ -406,7 +434,7 @@ test('deleting a budget attraction updates budget, overview, and detailed itiner
   await expect(budgetRow).toBeVisible()
   await budgetRow.locator('.budget-delete-btn').click()
   await expect(page.getByText('将从今日行程、行程总览、详细日程、景点地图和预算中同时删除「外滩」。')).toBeVisible()
-  await page.locator('.ant-modal-confirm .ant-btn-dangerous').click()
+  await page.getByRole('dialog').getByRole('button', { name: '确认删除' }).click()
   await expect(budgetRow).toHaveCount(0)
 
   await page.getByRole('menuitem', { name: '行程总览' }).click()
@@ -556,6 +584,7 @@ test('exports a non-empty itinerary image', async ({ page }, testInfo) => {
   })
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: '导出攻略' }).click()
+  await page.getByRole('menuitem', { name: /攻略长图/ }).click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toMatch(/^旅行计划_.*\.png$/)
   const path = await download.path()

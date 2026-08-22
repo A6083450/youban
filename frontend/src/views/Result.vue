@@ -1754,11 +1754,9 @@ const formatBudgetCalculation = (item: BudgetLedgerItem): string => {
 }
 
 const formatBudgetSource = (item: BudgetLedgerItem): string => {
-  const provider = item.entity_source === 'flyai'
-    ? 'FlyAI'
-    : item.entity_source === 'amap'
-      ? t('result.budget.amap')
-      : item.entity_source
+  const provider = item.entity_source === 'amap'
+    ? t('result.budget.amap')
+    : item.entity_source
   if (item.price_source === 'user') {
     return provider
       ? t('result.budget.userPriceWithSource', { provider })
@@ -1771,6 +1769,14 @@ const formatBudgetSource = (item: BudgetLedgerItem): string => {
 }
 
 const applyBudgetLedgerResponse = (response: BudgetLedgerResponse) => {
+  if (!response
+    || !Array.isArray(response.items)
+    || !response.totals
+    || typeof response.totals !== 'object'
+    || !response.per_person_totals
+    || typeof response.per_person_totals !== 'object') {
+    throw new Error('预算明细响应格式无效')
+  }
   budgetLedgerItems.value = response.items
   budgetPendingCount.value = response.pending_count
   budgetPerPersonTotals.value = response.per_person_totals

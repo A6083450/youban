@@ -1,0 +1,294 @@
+import { describe, expect, it } from "bun:test";
+import type { PlannerRunContext } from "../src/agents/trip-planner.ts";
+import {
+  PiTripPlanner,
+  type StructuredAgentRequest,
+  type StructuredAgentRunner,
+  type TripResearchSources,
+} from "../src/agents/pi-trip-planner.ts";
+import { emptyCheckpoint, type TripPlanningRequest } from "../src/domain/orchestrator.ts";
+
+const REQUEST: TripPlanningRequest = {
+  city: "大理",
+  cities: [{ city: "大理", days: 4 }],
+  start_date: "2026-10-01",
+  end_date: "2026-10-04",
+  travel_days: 4,
+  transportation: "公共交通",
+  accommodation: "舒适型酒店",
+  traveler_count: 2,
+  room_count: 1,
+  preferences: ["自然风光"],
+};
+
+const POIS = ["P1", "P2", "P3", "P4"].map((poiId, index) => ({
+  poi_id: poiId,
+  name: `景点${index + 1}`,
+  address: `地址${index + 1}`,
+  type: "风景名胜",
+  location: { longitude: 100 + index, latitude: 25 + index },
+}));
+
+class FakeResearch implements TripResearchSources {
+  calls: string[] = [];
+  async searchAttractions(city: string) {
+    this.calls.push(`attractions:${city}`);
+    return structuredClone(POIS);
+  }
+  async searchHotels(city: string) {
+    this.calls.push(`hotels:${city}`);
+    return [{ ...POIS[0]!, poi_id: "H1", name: "湖景酒店", rating: 4.7 }];
+  }
+  async getWeather(city: string) {
+    this.calls.push(`weather:${city}`);
+    return [{ city, date: "2026-10-01", day_weather: "晴" }];
+  }
+}
+
+class FakeAgents implements StructuredAgentRunner {
+  requests: StructuredAgentRequest[] = [];
+  active = 0;
+  maxActive = 0;
+  hallucinate = false;
+  mealCost: number | null = null;
+  failSummary = false;
+  failReview = false;
+
+  async run(request: StructuredAgentRequest): Promise<unknown> {
+    this.requests.push({
+      ...request,
+      input: structuredClone(request.input),
+      schema: structuredClone(request.schema),
+    });
+    this.active += 1;
+    this.maxActive = Math.max(this.maxActive, this.active);
+    try {
+      await Bun.sleep(5);
+      const input = request.input as Record<string, any>;
+      if (request.agent === "destination-researcher") {
+        return { selected_poi_ids: POIS.map((poi) => poi.poi_id) };
+      }
+      if (request.agent === "segment-planner") {
+        const segment = input.segment as Record<string, any>;
+        const candidates = input.attractions as Array<Record<string, any>>;
+        return {
+          days: segment.day_indices.map((dayIndex: number, offset: number) => ({
+            date: new Date(Date.UTC(2026, 9, dayIndex + 1)).toISOString().slice(0, 10),
+            day_index: dayIndex,
+            city: segment.city,
+            description: `第${dayIndex + 1}天`,
+            transportation: "公共交通",
+            accommodation: "湖景酒店",
+            hotel: null,
+            attractions: [{
+              name: this.hallucinate ? "虚构景点" : candidates[offset]?.name ?? candidates[0]?.name,
+              poi_id: this.hallucinate ? "FAKE" : candidates[offset]?.poi_id ?? candidates[0]?.poi_id,
+            }],
+            meals: this.mealCost === null ? [] : [{
+              type: "lunch",
+              name: "午餐",
+              estimated_cost: this.mealCost,
+            }],
+          })),
+        };
+      }
+      if (request.agent === "summary") {
+        if (this.failSummary) throw new Error("summary unavailable");
+        return { overall_suggestions: "按天气灵活调整" };
+      }
+      if (request.agent === "itinerary-reviewer") {
+        if (this.failReview) throw new Error("review unavailable");
+        return { issues: [] };
+      }
+      throw new Error(`unexpected agent ${request.agent}`);
+    } finally {
+      this.active -= 1;
+    }
+  }
+}
+
+function context(checkpoint = emptyCheckpoint()) {
+  const snapshots: unknown[] = [];
+  const progress: unknown[] = [];
+  const value: PlannerRunContext = {
+    checkpoint,
+    signal: new AbortController().signal,
+    onCheckpoint(next) {
+      JSON.stringify(next);
+      snapshots.push(structuredClone(next));
+    },
+    onProgress(next) {
+      progress.push(structuredClone(next));
+    },
+  };
+  return { value, snapshots, progress };
+}
+
+describe("PiTripPlanner", () => {
+  it("prefetches trusted facts, runs bounded segment children, and checkpoints every wave", async () => {
+    const research = new FakeResearch();
+    const agents = new FakeAgents();
+    const planner = new PiTripPlanner({
+      research,
+      agents,
+      segmentDays: 3,
+      segmentConcurrency: 8,
+      reviewEnabled: true,
+      duplicateRepairRounds: 1,
+    });
+    const run = context();
+    const result = await planner.plan(REQUEST, run.value);
+
+    expect(research.calls.sort()).toEqual([
+      "attractions:大理",
+      "hotels:大理",
+      "weather:大理",
+    ]);
+    const expectedAgents: StructuredAgentRequest["agent"][] = [
+      "destination-researcher",
+      "itinerary-reviewer",
+      "segment-planner",
+      "segment-planner",
+      "summary",
+    ];
+    expect(agents.requests.map((request) => request.agent).sort()).toEqual(expectedAgents.sort());
+    expect(agents.maxActive).toBeGreaterThanOrEqual(2);
+    expect(run.snapshots.length).toBeGreaterThanOrEqual(7);
+    expect(run.progress).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "attraction_search" }),
+      expect.objectContaining({ stage: "planning" }),
+      expect.objectContaining({ stage: "reviewing" }),
+    ]));
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        city: "大理",
+        days: expect.any(Array),
+        weather_info: [expect.objectContaining({ day_weather: "晴" })],
+        budget: expect.objectContaining({ total: 0 }),
+        overall_suggestions: "按天气灵活调整",
+      }),
+    }));
+    expect((result.data as Record<string, any>).days).toHaveLength(4);
+  });
+
+  it("reuses a completed checkpoint without repeating research or child work", async () => {
+    const research = new FakeResearch();
+    const agents = new FakeAgents();
+    const planner = new PiTripPlanner({ research, agents, reviewEnabled: true });
+    let saved = emptyCheckpoint();
+    await planner.plan(REQUEST, {
+      ...context().value,
+      onCheckpoint(next) { saved = structuredClone(next); },
+    });
+    research.calls = [];
+    agents.requests = [];
+    await planner.plan(REQUEST, context(saved).value);
+    expect(research.calls).toEqual([]);
+    expect(agents.requests).toEqual([]);
+  });
+
+  it("rejects segment attractions that are absent from the assigned trusted pool", async () => {
+    const agents = new FakeAgents();
+    agents.hallucinate = true;
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
+    await expect(planner.plan(REQUEST, context().value)).rejects.toThrow("未通过高德候选池验证");
+  });
+
+  it("applies deterministic scheduling and budget guardrails to the final plan", async () => {
+    const agents = new FakeAgents();
+    agents.mealCost = 100;
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
+    const result = await planner.plan({ ...REQUEST, budget_amount: 700 }, context().value);
+    const data = result.data as Record<string, any>;
+
+    expect(data.days[0].attractions[0]).toEqual(expect.objectContaining({
+      start_time: "09:00",
+      time_recommendation_basis: "weather",
+      crowd_recommendation_basis: "heuristic",
+    }));
+    expect(data.days[0].meals[0]).toEqual(expect.objectContaining({
+      time: "12:30",
+      time_recommendation_basis: "schedule",
+    }));
+    expect(data.budget_adjustment_applied).toBeTrue();
+    expect(data.budget_adjustment_note).toContain("待报价项目预留");
+  });
+
+  it("returns a complete plan with deterministic summary when summary child fails", async () => {
+    const agents = new FakeAgents();
+    agents.failSummary = true;
+    const run = context();
+    const result = await new PiTripPlanner({ research: new FakeResearch(), agents }).plan(REQUEST, run.value);
+    expect((result.data as Record<string, any>).overall_suggestions).toContain("行程已按日期生成");
+    expect((run.snapshots.at(-1) as Record<string, any>).summary).toEqual(expect.objectContaining({
+      status: "failed",
+      error: "summary unavailable",
+    }));
+  });
+
+  it("returns a complete plan with an empty review when review child fails", async () => {
+    const agents = new FakeAgents();
+    agents.failReview = true;
+    const run = context();
+    const result = await new PiTripPlanner({ research: new FakeResearch(), agents }).plan(REQUEST, run.value);
+    expect(result.review).toEqual({ issues: [] });
+    expect((run.snapshots.at(-1) as Record<string, any>).review).toEqual(expect.objectContaining({
+      status: "failed",
+      error: "review unavailable",
+    }));
+  });
+
+  it("starts a ready city's segments before slower city research finishes", async () => {
+    const events: string[] = [];
+    class TimedResearch extends FakeResearch {
+      private async complete(kind: string, city: string, value: any) {
+        await Bun.sleep(city === "丽江" ? 80 : 2);
+        events.push(`${kind}:${city}:done`);
+        return value;
+      }
+      override async searchAttractions(city: string) {
+        this.calls.push(`attractions:${city}`);
+        return this.complete("attractions", city, structuredClone(POIS));
+      }
+      override async searchHotels(city: string) {
+        this.calls.push(`hotels:${city}`);
+        return this.complete("hotels", city, [{ ...POIS[0]!, poi_id: "H1", name: "测试酒店" }]);
+      }
+      override async getWeather(city: string) {
+        this.calls.push(`weather:${city}`);
+        return this.complete("weather", city, [{ city, date: "2026-10-01", day_weather: "晴" }]);
+      }
+    }
+    class TimedAgents extends FakeAgents {
+      activeSegments = 0;
+      maxActiveSegments = 0;
+      override async run(request: StructuredAgentRequest) {
+        if (request.agent !== "segment-planner") return super.run(request);
+        const city = String((request.input as Record<string, any>).segment.city);
+        events.push(`segment:${city}:start`);
+        this.activeSegments += 1;
+        this.maxActiveSegments = Math.max(this.maxActiveSegments, this.activeSegments);
+        try {
+          return await super.run(request);
+        } finally {
+          this.activeSegments -= 1;
+        }
+      }
+    }
+    const agents = new TimedAgents();
+    const planner = new PiTripPlanner({
+      research: new TimedResearch(),
+      agents,
+      segmentDays: 2,
+      segmentConcurrency: 1,
+    });
+    await planner.plan({
+      ...REQUEST,
+      city: "大理",
+      cities: [{ city: "大理", days: 2 }, { city: "丽江", days: 2 }],
+    }, context().value);
+    expect(events.indexOf("segment:大理:start")).toBeLessThan(events.indexOf("weather:丽江:done"));
+    expect(agents.maxActiveSegments).toBe(1);
+  });
+});

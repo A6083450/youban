@@ -109,6 +109,11 @@
       "ja": "日本語",
       "en": "English"
     },
+    "skin": {
+      "label": "Interface style",
+      "default": "YouBan",
+      "google": "Google"
+    },
     "footerBrand": "YouBan",
     "footerCopy": "{year} All rights reserved.",
     "footerTech": "Powered by HelloAgents + AMap MCP"

@@ -109,6 +109,11 @@
       "ja": "日本語",
       "en": "English"
     },
+    "skin": {
+      "label": "画面スタイル",
+      "default": "游伴",
+      "google": "Google"
+    },
     "footerBrand": "游伴（ユーバン）",
     "footerCopy": "{year} All rights reserved.",
     "footerTech": "Powered by HelloAgents + AMap MCP"

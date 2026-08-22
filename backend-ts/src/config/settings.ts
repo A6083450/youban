@@ -34,11 +34,6 @@ export interface AppSettings extends RuntimeSettings {
   host: string; // env HOST，默认 "0.0.0.0"
   port: number; // env PORT，默认 8000（生产部署用 7860）
   cors_origins: string[]; // env CORS_ORIGINS 逗号分隔，默认 ["http://localhost:5173","http://localhost:3000","http://127.0.0.1:5173"]
-  flyai_enabled: boolean; // env FLYAI_ENABLED !== "false"
-  flyai_cli_path: string; // env FLYAI_CLI_PATH，默认 "flyai"
-  flyai_api_key: string; // env FLYAI_API_KEY
-  flyai_timeout_seconds: number; // 默认 8
-  flyai_cache_ttl_seconds: number; // 默认 3600
   llm_timeout: number; // env LLM_TIMEOUT，默认 60
 }
 
@@ -248,12 +243,6 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
     trip_duplicate_repair_rounds: readEnvInt(2, "TRIP_DUPLICATE_REPAIR_ROUNDS"),
     llm_api_style: readEnvEnum("LLM_API_STYLE", RUNTIME_ENUM_VALUES.llm_api_style, "responses"),
     chat_edit_agent: readEnvEnum("CHAT_EDIT_AGENT", RUNTIME_ENUM_VALUES.chat_edit_agent, "pi"),
-    // FlyAI 酒店搜索
-    flyai_enabled: process.env.FLYAI_ENABLED !== "false",
-    flyai_cli_path: readEnv("FLYAI_CLI_PATH") ?? "flyai",
-    flyai_api_key: readEnv("FLYAI_API_KEY") ?? "",
-    flyai_timeout_seconds: readEnvInt(8, "FLYAI_TIMEOUT_SECONDS"),
-    flyai_cache_ttl_seconds: readEnvInt(3600, "FLYAI_CACHE_TTL_SECONDS"),
     llm_timeout: readEnvInt(60, "LLM_TIMEOUT"),
   };
 

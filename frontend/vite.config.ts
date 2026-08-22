@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { resolve } from 'path'
 
@@ -7,6 +8,7 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [
     vue(),
+    tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.png', 'favicon.svg', 'apple-touch-icon.png'],
@@ -27,6 +29,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Optional code highlighting/diagram engines are loaded on demand, not precached.
+        globIgnores: ['assets/shiki-*.js', 'assets/mermaid-*.js'],
         // three.js splash chunk 较大,放宽单文件上限保证离线完整
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: '/index.html',
@@ -68,9 +72,10 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    alias: {
-      '@': resolve(__dirname, 'src')
-    }
+    alias: [
+      { find: '@shikijs/core', replacement: resolve(__dirname, 'src/vendor/shiki-core-disabled.ts') },
+      { find: '@', replacement: resolve(__dirname, 'src') },
+    ],
   },
   server: {
     port: 5173,
@@ -85,5 +90,22 @@ export default defineConfig({
         changeOrigin: true
       }
     }
-  }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('three')) return 'three'
+          if (id.includes('mermaid')) return 'mermaid'
+          if (id.includes('shiki') || id.includes('@shikijs')) return 'shiki'
+          if (id.includes('x-markdown-vue')) return 'markdown'
+          if (id.includes('vue-element-plus-x') || id.includes('element-plus')) return 'chat-ui'
+          if (id.includes('ant-design-vue') || id.includes('@ant-design')) return 'ant-design'
+          if (id.includes('vue')) return 'vue'
+          return 'vendor'
+        },
+      },
+    },
+  },
 })

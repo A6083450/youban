@@ -847,13 +847,15 @@ export async function healthCheck(): Promise<any> {
 export async function chatEditPlan(
   message: string,
   tripPlan: TripPlan,
-  history: ChatMessage[]
+  history: ChatMessage[],
+  planId?: string,
 ): Promise<TripChatEditResponse> {
   try {
     const response = await apiClient.post<TripChatEditResponse>('/api/chat/edit', {
       message,
       trip_plan: tripPlan,
       history,
+      plan_id: planId || undefined,
     })
     return response.data
   } catch (error: any) {

@@ -1,6 +1,5 @@
 <template>
   <div class="agent-dock">
-    <!-- 对话浮层:悬浮在输入条上方 -->
     <transition name="agent-pop">
       <section v-if="threadVisible" class="agent-thread">
         <header class="agent-thread-header">
@@ -15,98 +14,107 @@
             @mousedown.prevent
             @click="collapsed = true"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <ArrowDownBold aria-hidden="true" />
           </button>
         </header>
 
-        <div class="agent-messages" ref="messagesRef">
-          <div v-if="messages.length === 0" class="agent-empty">
-            <p>{{ t('result.agent.welcome') }}</p>
-            <div class="agent-quick">
-              <button
-                v-for="key in ['quick1', 'quick2', 'quick3']"
-                :key="key"
-                type="button"
-                class="agent-quick-chip"
-                :disabled="loading || !tripPlan"
-                @mousedown.prevent
-                @click="sendQuick(t(`result.agent.${key}`))"
-              >
-                {{ t(`result.agent.${key}`) }}
-              </button>
-            </div>
-          </div>
-
-          <template v-for="(msg, idx) in messages" :key="idx">
-            <!-- 用户消息 -->
-            <div v-if="msg.role === 'user'" class="agent-row user">
-              <div class="agent-bubble user">{{ msg.content }}</div>
-            </div>
-            <!-- typing -->
-            <div v-else-if="msg.kind === 'typing'" class="agent-row assistant">
-              <div class="agent-bubble assistant typing">
-                <span class="agent-dot"></span>
-                <span class="agent-dot"></span>
-                <span class="agent-dot"></span>
-              </div>
-            </div>
-            <!-- 文本回复 -->
-            <div v-else-if="msg.kind === 'text'" class="agent-row assistant">
-              <div class="agent-bubble assistant">{{ msg.content }}</div>
-            </div>
-            <!-- 修改摘要卡 -->
-            <div v-else class="agent-row assistant">
-              <div class="agent-bubble assistant">{{ msg.content }}</div>
-              <div v-if="msg.changes.length" class="agent-changes-card">
-                <div class="agent-changes-title">{{ t('result.agent.changesTitle') }}</div>
-                <ul class="agent-changes-list">
-                  <li v-for="(c, ci) in msg.changes" :key="ci">{{ c }}</li>
-                </ul>
-                <button
-                  type="button"
-                  class="agent-undo-btn"
-                  :disabled="msg.undone"
-                  @click="undoChange(msg)"
-                >
-                  {{ msg.undone ? t('result.agent.undone') : t('result.agent.undo') }}
-                </button>
-              </div>
-            </div>
-          </template>
+        <div v-if="messages.length === 0" class="agent-empty">
+          <Welcome :description="t('result.agent.welcome')" />
+          <Prompts :items="quickPrompts" vertical @item-click="sendQuickPrompt" />
         </div>
+        <BubbleList
+          v-else
+          ref="bubbleListRef"
+          class="agent-messages"
+          :list="panelBubbleItems"
+          item-key="id"
+          max-height="min(420px, 48vh)"
+          :auto-scroll="true"
+          :show-back-button="true"
+        >
+          <template #item="{ item }">
+            <Bubble
+              :class="`role-${item.message.role}`"
+              :placement="item.message.role === 'user' ? 'end' : 'start'"
+              :variant="item.message.role === 'user' ? 'filled' : 'outlined'"
+              :loading="item.message.kind === 'typing'"
+              max-width="88%"
+            >
+              <template #content>
+                <span v-if="item.message.role === 'user'">{{ item.message.content }}</span>
+                <template v-else-if="item.message.kind !== 'typing'">
+                  <MarkdownRenderer
+                    class="agent-markdown"
+                    :markdown="item.message.content"
+                    :allow-html="false"
+                    :enable-shiki="false"
+                    :enable-mermaid="false"
+                    :style="markdownStyle"
+                  />
+                  <div v-if="item.message.kind === 'changes' && item.message.changes.length" class="agent-changes-card">
+                    <div class="agent-changes-title">{{ t('result.agent.changesTitle') }}</div>
+                    <ul class="agent-changes-list">
+                      <li v-for="(change, changeIndex) in item.message.changes" :key="changeIndex">{{ change }}</li>
+                    </ul>
+                    <button
+                      type="button"
+                      class="agent-undo-btn"
+                      :disabled="item.message.undone"
+                      @click="undoChange(item.message)"
+                    >
+                      {{ item.message.undone ? t('result.agent.undone') : t('result.agent.undo') }}
+                    </button>
+                  </div>
+                </template>
+              </template>
+            </Bubble>
+          </template>
+        </BubbleList>
       </section>
     </transition>
 
-    <!-- 底部常驻输入条:直接输入与 Agent 对话改计划 -->
-    <div class="agent-inputbar" :class="{ 'is-focused': focused, 'is-disabled': !tripPlan }">
-      <textarea
-        ref="textareaRef"
-        v-model="input"
-        class="agent-textarea"
+    <div
+      ref="senderRoot"
+      class="agent-inputbar"
+      :class="{ 'is-focused': focused, 'is-disabled': !tripPlan }"
+      @focusin="onFocus"
+      @focusout="handleFocusOut"
+    >
+      <XSender
+        ref="senderRef"
+        class="agent-sender"
         :placeholder="t('result.agent.placeholder')"
         :disabled="loading || !tripPlan"
-        rows="1"
-        @focus="onFocus"
-        @blur="focused = false"
-        @input="autoGrow"
-        @keydown.enter.exact.prevent="send"
-      ></textarea>
-      <button
-        type="button"
-        class="agent-send"
-        :disabled="!input.trim() || loading || !tripPlan"
-        :aria-label="t('result.agent.send')"
-        @click="send"
+        :loading="loading"
+        :max-length="2000"
+        submit-type="enter"
+        @submit="send()"
+        @change="syncEmptyState"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-      </button>
+        <template #action-list>
+          <ElButton
+            circle
+            type="primary"
+            :aria-label="t('result.agent.send')"
+            :disabled="loading || !tripPlan || isEmpty"
+            :loading="loading"
+            @click="send()"
+          >
+            <ElIcon><Promotion /></ElIcon>
+          </ElButton>
+        </template>
+      </XSender>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Bubble, BubbleList, Prompts, Welcome, XSender } from 'vue-element-plus-x'
+import { ArrowDownBold, Promotion } from '@element-plus/icons-vue'
+import { ElButton, ElIcon } from 'element-plus'
+import { MarkdownRenderer } from 'x-markdown-vue'
 import { chatEditPlan, getPlanConversation } from '@/services/api'
 import type { ChatMessage, PanelMessage, TripPlan } from '@/types'
 
@@ -117,14 +125,50 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const input = ref('')
 const loading = ref(false)
 const focused = ref(false)
 const collapsed = ref(false)
 const messages = ref<PanelMessage[]>([])
 const snapshots = ref<TripPlan[]>([])
-const messagesRef = ref<HTMLElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const bubbleListRef = ref<{ scrollToBottom: (smooth?: boolean) => void } | null>(null)
+const senderRef = ref<InstanceType<typeof XSender> | null>(null)
+const senderRoot = ref<HTMLElement | null>(null)
+const isEmpty = ref(true)
+const markdownStyle = {
+  backgroundColor: 'transparent',
+  color: 'var(--text-primary)',
+  padding: '0',
+}
+
+const panelBubbleItems = computed(() => messages.value.map((message, index) => ({
+  id: `${index}-${message.role}-${message.kind}`,
+  message,
+})))
+
+const quickPrompts = computed(() => ['quick1', 'quick2', 'quick3'].map((key) => ({
+  key,
+  label: t(`result.agent.${key}`),
+  disabled: loading.value || !props.tripPlan,
+})))
+
+const syncEmptyState = () => {
+  isEmpty.value = !senderRef.value?.getModelValue().text.trim()
+}
+
+const syncEditorAccessibility = () => {
+  const editor = senderRoot.value?.querySelector<HTMLElement>('[contenteditable]')
+  if (!editor) return
+  const label = t('result.agent.placeholder')
+  editor.setAttribute('role', 'textbox')
+  editor.setAttribute('aria-label', label)
+  editor.setAttribute('aria-multiline', 'true')
+  editor.setAttribute('placeholder', label)
+}
+
+onMounted(async () => {
+  await nextTick()
+  syncEditorAccessibility()
+})
 
 // 聚焦或已有对话时展开浮层;collapsed 为用户手动收起的覆盖开关
 const threadVisible = computed(
@@ -136,9 +180,7 @@ const threadVisible = computed(
 
 const scrollToBottom = () => {
   nextTick(() => {
-    if (messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    }
+    bubbleListRef.value?.scrollToBottom(false)
   })
 }
 
@@ -182,26 +224,28 @@ const onFocus = () => {
   collapsed.value = false
 }
 
-const autoGrow = () => {
-  const el = textareaRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, 108)}px`
+const handleFocusOut = () => {
+  window.setTimeout(() => {
+    focused.value = false
+  }, 0)
 }
 
 const sendQuick = (text: string) => {
-  input.value = text
-  void send()
+  senderRef.value?.setText(text)
+  isEmpty.value = !text.trim()
+  void send(text)
 }
 
-const send = async () => {
-  const text = input.value.trim()
+const sendQuickPrompt = (prompt: { label?: string }) => sendQuick(prompt.label || '')
+
+const send = async (textOverride?: string) => {
+  const text = (textOverride ?? senderRef.value?.getModelValue().text ?? '').trim()
   if (!text || loading.value || !props.tripPlan) return
 
   collapsed.value = false
   messages.value.push({ role: 'user', kind: 'text', content: text })
-  input.value = ''
-  nextTick(autoGrow)
+  senderRef.value?.clear()
+  isEmpty.value = true
   loading.value = true
   messages.value.push({ role: 'assistant', kind: 'typing' })
   scrollToBottom()
@@ -212,7 +256,7 @@ const send = async () => {
       .slice(0, -1)
       .map((m) => ({ role: m.role, content: m.content }))
 
-    const res = await chatEditPlan(text, props.tripPlan, history)
+    const res = await chatEditPlan(text, props.tripPlan, history, props.planId)
     messages.value.pop() // 移除 typing
 
     if (res.updated_plan) {
@@ -268,9 +312,9 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 .agent-thread {
   display: flex;
   flex-direction: column;
-  background: #FAF7F2;
+  background: var(--surface-page);
   border: 1px solid var(--chat-ai-border);
-  border-radius: 18px;
+  border-radius: var(--card-radius);
   box-shadow: 0 18px 48px rgba(61, 50, 41, 0.18);
   overflow: hidden;
 }
@@ -292,18 +336,18 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--chat-ai-border);
-  background: #fff;
+  background: var(--surface-elevated);
 }
 
 .agent-title {
   font-size: 14px;
   font-weight: 700;
-  color: #3D3229;
+  color: var(--text-primary);
 }
 
 .agent-subtitle {
   font-size: 12px;
-  color: #A89888;
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -321,24 +365,50 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
   transition: all 0.15s ease;
 }
 
+.agent-collapse svg {
+  width: 15px;
+  height: 15px;
+}
+
 .agent-collapse:hover {
   background: rgba(217, 119, 87, 0.15);
   color: #D97757;
 }
 
 .agent-messages {
-  max-height: min(420px, 48vh);
-  overflow-y: auto;
   padding: 16px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  min-height: 100px;
 }
 
 .agent-empty {
-  color: #6B5D52;
+  padding: 16px;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.agent-empty :deep(.el-prompts-item) {
+  border-radius: 8px;
+  border-color: var(--border-subtle);
+}
+
+.agent-markdown {
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.agent-messages :deep(.role-user) {
+  --elx-bubble-bg: var(--accent-primary);
+  --elx-bubble-text-color: #fff;
+}
+
+.agent-markdown :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.agent-markdown :deep(> :last-child) {
+  margin-bottom: 0;
 }
 
 .agent-quick {
@@ -474,13 +544,8 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 }
 
 .agent-inputbar {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 8px 8px 18px;
-  background: #fff;
-  border: 1px solid var(--chat-ai-border);
-  border-radius: 24px;
+  width: 100%;
+  border-radius: 16px;
   box-shadow: 0 10px 32px rgba(61, 50, 41, 0.16);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -492,6 +557,17 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 
 .agent-inputbar.is-disabled {
   opacity: 0.6;
+}
+
+.agent-sender {
+  width: 100%;
+  --el-color-primary: var(--accent-primary);
+}
+
+.agent-sender :deep(.el-sender-wrap) {
+  border-color: var(--border-subtle);
+  border-radius: 16px;
+  background: var(--surface-elevated);
 }
 
 .agent-textarea {

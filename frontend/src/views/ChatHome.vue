@@ -1,56 +1,70 @@
 <template>
   <div class="chat-home">
-    <!-- 对话流 -->
-    <div v-show="items.length > 0" ref="scrollRef" class="chat-scroll" @scroll="handleConversationScroll">
-      <div class="thread">
-        <template v-for="item in items" :key="item.id">
-          <div class="msg-row" :class="item.role">
-            <!-- 左侧:游伴头像 -->
-            <div v-if="item.role === 'assistant'" class="msg-avatar ai" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-            </div>
-
-            <div class="msg-col" :class="item.role">
-              <div class="msg-name">{{ item.role === 'assistant' ? t('chatHome.assistantName') : t('chatHome.userName') }}</div>
-
-              <!-- 文本消息(用户/AI) -->
-              <div v-if="item.type === 'text'" class="msg-bubble" :class="item.role">{{ item.text }}</div>
-
-              <!-- AI typing -->
-              <div v-else-if="item.type === 'typing'" class="msg-bubble assistant typing">
-                <span class="typing-dot"></span>
-                <span class="typing-dot"></span>
-                <span class="typing-dot"></span>
-              </div>
-
-              <!-- AI 流式打字机:游伴回复逐字流出 -->
-              <div v-else-if="item.type === 'streaming'" class="msg-bubble assistant streaming">
-                <template v-if="item.text">{{ item.text }}<span class="stream-caret" aria-hidden="true"></span></template>
-                <span v-else class="typing">
-                  <span class="typing-dot"></span>
-                  <span class="typing-dot"></span>
-                  <span class="typing-dot"></span>
-                </span>
-              </div>
-
-              <!-- 确认卡片(纯展示,用户在下方输入框用自然语言确认/修改) -->
-              <TripDraftConfirmCard
-                v-else-if="item.type === 'confirm'"
-                :draft="item.draft"
+    <div v-show="items.length > 0" class="chat-scroll">
+      <BubbleList
+        ref="bubbleListRef"
+        class="thread"
+        :list="items"
+        item-key="id"
+        max-height="100%"
+        :auto-scroll="true"
+        :show-back-button="true"
+        :smooth-scroll="false"
+        @scroll-state-change="handleConversationScroll"
+      >
+        <template #item="{ item }">
+          <Bubble
+            class="chat-bubble"
+            :class="`role-${item.role}`"
+            :placement="item.role === 'user' ? 'end' : 'start'"
+            :variant="item.role === 'user' ? 'filled' : 'outlined'"
+            :loading="item.type === 'typing'"
+            :no-style="isStructuredItem(item)"
+            max-width="min(680px, calc(100vw - 96px))"
+          >
+            <template #avatar>
+              <span class="bubble-avatar" :class="item.role" aria-hidden="true">
+                <UserFilled v-if="item.role === 'user'" />
+                <Compass v-else />
+              </span>
+            </template>
+            <template #header>
+              <span class="msg-name">{{ item.role === 'assistant' ? t('chatHome.assistantName') : t('chatHome.userName') }}</span>
+            </template>
+            <template #content>
+              <div v-if="item.type === 'text' && item.role === 'user'" class="user-message">{{ item.text }}</div>
+              <MarkdownRenderer
+                v-else-if="item.type === 'text'"
+                class="assistant-markdown"
+                :markdown="item.text"
+                :allow-html="false"
+                :enable-shiki="false"
+                :enable-mermaid="false"
+                :style="markdownStyle"
               />
-
-              <!-- 生成进度 -->
-              <div v-else-if="item.type === 'progress'" class="progress-wrap">
-                <WorkProgress
-                  :visible="item.status.visible"
-                  :progress="item.status.progress"
-                  :message="item.status.message"
-                  :stage="item.status.stage"
-                  :details="item.status.details"
+              <div v-else-if="item.type === 'streaming'" class="streaming-message" aria-live="polite">
+                <MarkdownRenderer
+                  v-if="item.text"
+                  class="assistant-markdown"
+                  :markdown="item.text"
+                  :allow-html="false"
+                  :enable-shiki="false"
+                  :enable-mermaid="false"
+                  :style="markdownStyle"
                 />
+                <span v-if="item.text" class="stream-caret" aria-hidden="true"></span>
+                <span v-else class="stream-wait">{{ t('composer.parsing') }}</span>
               </div>
-
-              <!-- 生成失败 -->
+              <TripDraftConfirmCard v-else-if="item.type === 'confirm'" :draft="item.draft" />
+              <WorkProgress
+                v-else-if="item.type === 'progress'"
+                class="progress-wrap"
+                :visible="item.status.visible"
+                :progress="item.status.progress"
+                :message="item.status.message"
+                :stage="item.status.stage"
+                :details="item.status.details"
+              />
               <TripGenerationFailure
                 v-else-if="item.type === 'failed'"
                 :task-id="item.taskId"
@@ -62,22 +76,21 @@
                 @retry="retryFailedItem(item, false)"
                 @restart-all="retryFailedItem(item, true)"
               />
-
-              <!-- 完成卡片 -->
-              <div v-else class="done-card" role="button" tabindex="0" @click="openPlan(item.planId)" @keydown.enter="openPlan(item.planId)">
-                <div class="done-title">✅ {{ t('chatHome.doneTitle') }}</div>
+              <div
+                v-else-if="item.type === 'done'"
+                class="done-card"
+                role="button"
+                tabindex="0"
+                @click="openPlan(item.planId)"
+                @keydown.enter="openPlan(item.planId)"
+              >
+                <div class="done-title"><CircleCheckFilled aria-hidden="true" />{{ t('chatHome.doneTitle') }}</div>
                 <div class="done-desc">{{ item.city }} · {{ item.days }}{{ t('composer.daysUnit') }} · {{ t('chatHome.doneCta') }}</div>
               </div>
-            </div>
-
-            <!-- 右侧:用户头像 -->
-            <div v-if="item.role === 'user'" class="msg-avatar user" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            </div>
-          </div>
+            </template>
+          </Bubble>
         </template>
-        <div ref="scrollEndRef" class="chat-scroll-end" aria-hidden="true"></div>
-      </div>
+      </BubbleList>
     </div>
 
     <!-- 输入区(空态时整体居中,含欢迎语) -->
@@ -106,19 +119,15 @@
           </span>
         </button>
       </div>
-      <div v-if="items.length === 0" class="welcome">
-        <h1 class="welcome-title">{{ t('chatHome.title') }}</h1>
-        <p class="welcome-desc">{{ t('chatHome.desc') }}</p>
-      </div>
+      <Welcome
+        v-if="items.length === 0"
+        class="welcome"
+        :title="t('chatHome.title')"
+        :description="t('chatHome.desc')"
+      />
       <PlanComposer ref="composerRef" :disabled="busy" @send="handleUserSend" />
       <div v-if="items.length === 0" class="suggestions">
-        <button
-          v-for="s in suggestions"
-          :key="s"
-          type="button"
-          class="suggestion-chip"
-          @click="fillSuggestion(s)"
-        >{{ s }}</button>
+        <Prompts :items="promptItems" wrap @item-click="handlePromptClick" />
         <button
           type="button"
           class="suggestion-refresh"
@@ -141,6 +150,9 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
+import { Bubble, BubbleList, Prompts, Welcome } from 'vue-element-plus-x'
+import { CircleCheckFilled, Compass, UserFilled } from '@element-plus/icons-vue'
+import { MarkdownRenderer } from 'x-markdown-vue'
 import dayjs from 'dayjs'
 import PlanComposer from '@/components/PlanComposer.vue'
 import TripDraftConfirmCard from '@/components/TripDraftConfirmCard.vue'
@@ -154,7 +166,6 @@ import { clearActiveTripTask, readActiveTripTask, saveActiveTripTask } from '@/s
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
-import { isConversationNearBottom, scrollConversationToBottom } from '@/utils/chatScroll.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
 import type { ChatMessage, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
 
@@ -202,8 +213,7 @@ const openOngoing = (p: TripHistoryItem) => {
 }
 
 const composerRef = ref<InstanceType<typeof PlanComposer> | null>(null)
-const scrollRef = ref<HTMLElement | null>(null)
-const scrollEndRef = ref<HTMLElement | null>(null)
+const bubbleListRef = ref<{ scrollToBottom: (smooth?: boolean) => void } | null>(null)
 const followingLatest = ref(true)
 const previousScrollRestoration = typeof window !== 'undefined' && 'scrollRestoration' in window.history
   ? window.history.scrollRestoration
@@ -212,6 +222,11 @@ if (previousScrollRestoration !== null) {
   window.history.scrollRestoration = 'manual'
 }
 const items = ref<ChatItem[]>([])
+const markdownStyle = {
+  backgroundColor: 'transparent',
+  color: 'var(--text-primary)',
+  padding: '0',
+}
 const busy = ref(false)
 const generating = ref(false)
 let operationToken = 0
@@ -238,6 +253,14 @@ const suggestionPool = computed<string[]>(() => {
 })
 
 const suggestions = ref<string[]>([])
+
+const promptItems = computed(() => suggestions.value.map((suggestion) => ({
+  key: suggestion,
+  label: suggestion,
+})))
+
+const isStructuredItem = (item: ChatItem): boolean =>
+  item.type === 'confirm' || item.type === 'progress' || item.type === 'failed' || item.type === 'done'
 
 const shuffle = (arr: string[]): string[] => {
   const a = [...arr]
@@ -268,21 +291,22 @@ watch(suggestionPool, refreshSuggestions, { immediate: true })
 
 const fillSuggestion = (text: string) => {
   composerRef.value?.setText(text)
+  composerRef.value?.focus()
 }
+
+const handlePromptClick = (item: { label?: string }) => fillSuggestion(item.label || '')
 
 const scrollToBottom = (force = false) => {
   if (!force && !followingLatest.value) return
   nextTick(() => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollConversationToBottom(scrollRef.value, scrollEndRef.value)
-      })
+      bubbleListRef.value?.scrollToBottom(false)
     })
   })
 }
 
-const handleConversationScroll = () => {
-  followingLatest.value = isConversationNearBottom(scrollRef.value)
+const handleConversationScroll = (state: string) => {
+  followingLatest.value = state === 'AT_BOTTOM'
 }
 
 const pushItem = (item: ChatItemData & { id?: number }): number => {
@@ -972,7 +996,7 @@ const onConfirmGenerate = async (
 .chat-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 32px 24px 16px;
   display: flex;
   justify-content: center;
@@ -985,9 +1009,79 @@ const onConfirmGenerate = async (
 .thread {
   width: 100%;
   max-width: 768px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  min-height: 0;
+}
+
+:deep(.el-bubble-list) {
+  height: 100%;
+  padding: 0 4px;
+}
+
+:deep(.el-bubble-list-item) {
+  padding-bottom: 14px;
+}
+
+.chat-bubble {
+  width: 100%;
+  animation: chat-msg-in 0.2s ease-out;
+}
+
+.chat-bubble.role-user {
+  --elx-bubble-bg: var(--accent-primary);
+  --elx-bubble-text-color: #fff;
+}
+
+.bubble-avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+}
+
+.bubble-avatar.assistant {
+  color: #fff;
+  background: var(--accent-primary);
+}
+
+.bubble-avatar svg {
+  width: 17px;
+  height: 17px;
+}
+
+.user-message,
+.streaming-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.assistant-markdown {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+:deep(.assistant-markdown > :first-child) {
+  margin-top: 0;
+}
+
+:deep(.assistant-markdown > :last-child) {
+  margin-bottom: 0;
+}
+
+.streaming-message {
+  display: inline;
+}
+
+.streaming-message .assistant-markdown {
+  display: inline;
+}
+
+.stream-wait {
+  color: var(--text-secondary);
 }
 
 .chat-scroll-end {
@@ -1146,9 +1240,18 @@ const onConfirmGenerate = async (
 }
 
 .done-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 14px;
   font-weight: 700;
   color: #3D3229;
+}
+
+.done-title svg {
+  width: 17px;
+  height: 17px;
+  color: var(--status-success);
 }
 
 .done-desc {
@@ -1228,6 +1331,15 @@ const onConfirmGenerate = async (
   text-align: center;
 }
 
+:deep(.welcome .el-welcome-title) {
+  color: var(--text-primary);
+  letter-spacing: 0;
+}
+
+:deep(.welcome .el-welcome-description) {
+  color: var(--text-secondary);
+}
+
 .welcome-title {
   font-size: 32px;
   font-weight: 800;
@@ -1247,6 +1359,23 @@ const onConfirmGenerate = async (
   gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.suggestions :deep(.el-prompts) {
+  width: 100%;
+}
+
+.suggestions :deep(.el-prompts-item) {
+  min-height: 38px;
+  border-color: var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+}
+
+.suggestions :deep(.el-prompts-item:hover) {
+  border-color: var(--accent-primary);
+  color: var(--accent-strong);
 }
 
 .suggestion-chip {

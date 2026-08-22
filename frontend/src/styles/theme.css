@@ -1,0 +1,116 @@
+@import "tailwindcss/theme";
+@import "tailwindcss/utilities";
+
+@theme inline {
+  --color-brand: var(--accent-primary);
+  --color-brand-strong: var(--accent-strong);
+  --color-surface: var(--surface-page);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-ink: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --radius-card: var(--card-radius);
+}
+:root,
+:root[data-skin='default'] {
+  color-scheme: light;
+  --surface-page: #faf7f2;
+  --surface-soft: #f5f0e8;
+  --surface-elevated: #ffffff;
+  --text-primary: #3d3229;
+  --text-secondary: #6b5d52;
+  --accent-primary: #d97757;
+  --accent-strong: #c4603d;
+  --accent-soft: rgba(217, 119, 87, 0.1);
+  --accent-focus: rgba(217, 119, 87, 0.24);
+  --brand-companion: #c17f59;
+  --border-subtle: rgba(61, 50, 41, 0.12);
+  --status-success: #3a9c7a;
+  --status-danger: #c2413a;
+  --chat-user-bubble: linear-gradient(135deg, #d97757 0%, #c4603d 100%);
+  --chat-ai-bg: #ffffff;
+  --chat-ai-border: rgba(100, 80, 60, 0.14);
+  --card-radius: 12px;
+  --card-shadow: 0 4px 16px rgba(100, 80, 60, 0.06);
+  --card-shadow-hover: 0 8px 24px rgba(100, 80, 60, 0.12);
+  --el-color-primary: #d97757;
+  --el-color-primary-light-3: #e59d85;
+  --el-color-primary-light-5: #ecbbaa;
+  --el-color-primary-light-7: #f4d9cf;
+  --el-color-primary-light-9: #fcf2ef;
+  --el-border-radius-base: 8px;
+  --el-text-color-primary: var(--text-primary);
+  --el-border-color: var(--border-subtle);
+  --el-bg-color: var(--surface-elevated);
+}
+
+:root[data-skin='google'] {
+  color-scheme: light;
+  --surface-page: #f8fafd;
+  --surface-soft: #eef3f9;
+  --surface-elevated: #ffffff;
+  --text-primary: #202124;
+  --text-secondary: #5f6368;
+  --accent-primary: #1a73e8;
+  --accent-strong: #1557b0;
+  --accent-soft: rgba(26, 115, 232, 0.1);
+  --accent-focus: rgba(26, 115, 232, 0.24);
+  --brand-companion: #1a73e8;
+  --border-subtle: #dfe3e7;
+  --status-success: #188038;
+  --status-danger: #d93025;
+  --chat-user-bubble: #1a73e8;
+  --chat-ai-bg: #ffffff;
+  --chat-ai-border: #dfe3e7;
+  --card-radius: 16px;
+  --card-shadow: 0 1px 2px rgba(60, 64, 67, 0.18), 0 1px 3px rgba(60, 64, 67, 0.1);
+  --card-shadow-hover: 0 2px 6px rgba(60, 64, 67, 0.2);
+  --el-color-primary: #1a73e8;
+  --el-color-primary-light-3: #5b9af0;
+  --el-color-primary-light-5: #8bb8f4;
+  --el-color-primary-light-7: #bad5f8;
+  --el-color-primary-light-9: #e8f0fe;
+  --el-border-radius-base: 12px;
+  --el-text-color-primary: var(--text-primary);
+  --el-border-color: var(--border-subtle);
+  --el-bg-color: var(--surface-elevated);
+}
+
+body,
+.app-shell,
+.main-area {
+  background: var(--surface-page);
+  color: var(--text-primary);
+}
+
+.sidebar,
+.mobile-topbar {
+  background: var(--surface-elevated);
+  border-color: var(--border-subtle);
+}
+
+.sidebar-brand,
+.mobile-brand {
+  color: var(--text-primary);
+}
+
+.new-plan-btn {
+  background: var(--accent-soft);
+  border-color: var(--accent-focus);
+  color: var(--accent-strong);
+}
+
+:where(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,52 +1,84 @@
 <template>
-  <div class="composer">
-    <div class="input-box" :class="{ disabled }">
-      <textarea
-        ref="textareaRef"
-        v-model="inputText"
-        class="input-textarea"
-        :placeholder="t('composer.placeholder')"
-        :disabled="disabled"
-        rows="2"
-        @keydown.enter.exact.prevent="handleSend"
-      ></textarea>
-      <button
-        type="button"
-        class="send-btn"
-        :disabled="!inputText.trim() || disabled"
-        :aria-label="t('composer.send')"
-        @click="handleSend"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-      </button>
-    </div>
+  <div ref="composerRoot" class="composer">
+    <XSender
+      ref="senderRef"
+      class="composer-sender"
+      :placeholder="t('composer.placeholder')"
+      :disabled="disabled"
+      :loading="disabled"
+      :max-length="2000"
+      submit-type="enter"
+      @submit="handleSend"
+      @change="syncEmptyState"
+    >
+      <template #action-list>
+        <ElButton
+          circle
+          type="primary"
+          :aria-label="t('composer.send')"
+          :disabled="disabled || isEmpty"
+          :loading="disabled"
+          @click="handleSend"
+        >
+          <ElIcon><Promotion /></ElIcon>
+        </ElButton>
+      </template>
+    </XSender>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Promotion } from '@element-plus/icons-vue'
+import { ElButton, ElIcon } from 'element-plus'
+import { XSender } from 'vue-element-plus-x'
 
 const props = withDefaults(defineProps<{ disabled?: boolean }>(), { disabled: false })
 const emit = defineEmits<{ (e: 'send', text: string): void }>()
 
 const { t } = useI18n()
-const inputText = ref('')
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const senderRef = ref<InstanceType<typeof XSender> | null>(null)
+const composerRoot = ref<HTMLElement | null>(null)
+const isEmpty = ref(true)
+
+const editorElement = () => composerRoot.value?.querySelector<HTMLElement>('[contenteditable]') ?? null
+
+const syncEditorAccessibility = () => {
+  const editor = editorElement()
+  if (!editor) return
+  const label = t('composer.placeholder')
+  editor.setAttribute('role', 'textbox')
+  editor.setAttribute('aria-label', label)
+  editor.setAttribute('aria-multiline', 'true')
+  editor.setAttribute('placeholder', label)
+}
+
+const syncEmptyState = () => {
+  isEmpty.value = !senderRef.value?.getModelValue().text.trim()
+}
+
+onMounted(async () => {
+  await nextTick()
+  syncEditorAccessibility()
+})
 
 const handleSend = () => {
-  const text = inputText.value.trim()
+  const text = senderRef.value?.getModelValue().text.trim() || ''
   if (!text || props.disabled) return
   emit('send', text)
-  inputText.value = ''
+  senderRef.value?.clear()
+  isEmpty.value = true
 }
 
 const setText = (text: string) => {
-  inputText.value = text
+  senderRef.value?.setText(text)
+  isEmpty.value = !text.trim()
 }
-
 const focus = () => {
-  textareaRef.value?.focus()
+  syncEditorAccessibility()
+  editorElement()?.focus()
+  senderRef.value?.focus('last')
 }
 
 defineExpose({ focus, setText })
@@ -59,60 +91,18 @@ defineExpose({ focus, setText })
   margin: 0 auto;
 }
 
-.input-box {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  background: #FFFFFF;
-  border: 1px solid rgba(100, 80, 60, 0.18);
-  border-radius: 24px;
-  padding: 12px 14px;
-  box-shadow: 0 4px 20px rgba(100, 80, 60, 0.08);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+.composer-sender {
+  --el-color-primary: var(--accent-primary);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(60, 64, 67, 0.1);
 }
 
-.input-box:focus-within {
-  border-color: #D97757;
-  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.1);
+.composer-sender:focus-within {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 5px 22px rgba(60, 64, 67, 0.12);
 }
 
-.input-box.disabled {
-  opacity: 0.7;
-}
-
-.input-textarea {
-  flex: 1;
-  border: none;
-  outline: none;
-  resize: none;
-  font-family: inherit;
-  font-size: 15px;
-  color: #3D3229;
-  background: transparent;
-  line-height: 1.5;
-}
-
-.input-textarea::placeholder {
-  color: #A89888;
-}
-
-.send-btn {
-  width: 38px;
-  height: 38px;
-  flex-shrink: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--chat-user-bubble);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+:deep(.el-sender-wrap) {
+  border-color: var(--border-subtle);
+  background: var(--surface-elevated);
 }
 </style>

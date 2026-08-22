@@ -1,4 +1,5 @@
 <template>
+  <a-config-provider :theme="antTheme">
   <div class="app-shell">
     <!-- 移动端顶栏 -->
     <header v-if="!isBareRoute" class="mobile-topbar">
@@ -113,6 +114,19 @@
               {{ t(opt.labelKey) }}
             </button>
           </div>
+          <div class="skin-switch" role="group" :aria-label="t('app.skin.label')">
+            <button
+              v-for="option in skinOptions"
+              :key="option.value"
+              type="button"
+              class="skin-switch-btn"
+              :class="{ active: skin === option.value }"
+              :aria-pressed="skin === option.value"
+              @click="applySkin(option.value)"
+            >
+              {{ t(option.labelKey) }}
+            </button>
+          </div>
         </div>
 
         <div class="sidebar-user">
@@ -131,6 +145,7 @@
 
     <YoubanSplash />
   </div>
+  </a-config-provider>
 </template>
 
 <script setup lang="ts">
@@ -149,6 +164,7 @@ import SidebarShareCodeTool from '@/components/SidebarShareCodeTool.vue'
 import YoubanSplash from '@/splash/YoubanSplash.vue'
 import { AUTH_UPDATED_EVENT } from '@/stores/auth'
 import { ACTIVE_TRIP_TASK_UPDATED_EVENT, readActiveTripTask } from '@/stores/activeTripTask'
+import { applySkin, skin, type AppSkin } from '@/stores/skin'
 import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
 import type { TripHistoryItem } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
@@ -172,6 +188,22 @@ const localeOptions = [
   { value: 'ja-JP', labelKey: 'app.language.ja' },
   { value: 'en-US', labelKey: 'app.language.en' },
 ] as const
+
+const skinOptions: ReadonlyArray<{ value: AppSkin; labelKey: string }> = [
+  { value: 'default', labelKey: 'app.skin.default' },
+  { value: 'google', labelKey: 'app.skin.google' },
+]
+
+const antTheme = computed(() => ({
+  token: {
+    colorPrimary: skin.value === 'google' ? '#1a73e8' : '#d97757',
+    colorSuccess: skin.value === 'google' ? '#188038' : '#3a9c7a',
+    colorError: skin.value === 'google' ? '#d93025' : '#c2413a',
+    colorText: skin.value === 'google' ? '#202124' : '#3d3229',
+    colorBgLayout: skin.value === 'google' ? '#f8fafd' : '#faf7f2',
+    borderRadius: skin.value === 'google' ? 12 : 8,
+  },
+}))
 
 const switchLocale = (value: string) => {
   locale.value = value
@@ -307,6 +339,39 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.app-shell > :deep(.ant-app),
+.app-shell + * {
+  min-height: 0;
+}
+
+.skin-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.skin-switch-btn {
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skin-switch-btn.active {
+  background: var(--surface-elevated);
+  color: var(--accent-primary);
+  box-shadow: 0 1px 3px rgba(32, 33, 36, 0.16);
+}
+
 /* ─── 固定左侧栏（Codex 式会话列表） ─── */
 .sidebar {
   width: var(--desktop-sidebar-width);
@@ -343,10 +408,10 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border: 1px solid rgba(217, 119, 87, 0.35);
+  border: 1px solid var(--accent-focus);
   border-radius: 12px;
-  background: rgba(217, 119, 87, 0.08);
-  color: #C4603D;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -354,7 +419,7 @@ onUnmounted(() => {
 }
 
 .new-plan-btn:hover {
-  background: rgba(217, 119, 87, 0.16);
+  background: var(--accent-focus);
 }
 
 .new-plan-plus {

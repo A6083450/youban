@@ -7,21 +7,29 @@
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "audit:python-tests": "bun run scripts/generate-python-test-disposition.ts --check",
+    "bench:pi-subagents": "bun run scripts/benchmark-pi-subagents.ts",
+    "smoke:deployment": "bun run scripts/smoke-deployment.ts",
+    "migrate:sqlite": "bun run scripts/migrate-json-to-sqlite.ts",
+    "export:json": "bun run scripts/export-sqlite-to-json.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",
     "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
     "@elysiajs/cors": "^1.4.2",
     "@elysiajs/static": "^1.4.10",
     "@elysiajs/swagger": "^1.3.1",
-    "@fly-ai/flyai-cli": "1.0.16",
     "@sinclair/typebox": "^0.34.52",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
-    "pi-hermes-memory": "0.9.6"
+    "pi-hermes-memory": "0.9.6",
+    "pi-subagents": "0.53.0"
   },
   "devDependencies": {
+    "@types/node": "24.13.3",
     "bun-types": "^1.4.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.7"

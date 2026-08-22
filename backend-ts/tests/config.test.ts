@@ -151,11 +151,16 @@ describe("settings: env 读取", () => {
     expect(settings.trip_duplicate_repair_rounds).toBe(2);
     expect(settings.llm_api_style).toBe("responses");
     expect(settings.chat_edit_agent).toBe("pi");
-    expect(settings.flyai_enabled).toBe(true);
-    expect(settings.flyai_cli_path).toBe("flyai");
-    expect(settings.flyai_timeout_seconds).toBe(8);
-    expect(settings.flyai_cache_ttl_seconds).toBe(3600);
     expect(settings.llm_timeout).toBe(60);
+  });
+
+  it("已移除的 FlyAI 环境变量不会重新进入服务配置面", () => {
+    process.env.FLYAI_ENABLED = "true";
+    process.env.FLYAI_API_KEY = "must-not-leak";
+
+    const settings = getSettings() as unknown as Record<string, unknown>;
+
+    expect(Object.keys(settings).filter((key) => key.startsWith("flyai_"))).toEqual([]);
   });
 });
 
