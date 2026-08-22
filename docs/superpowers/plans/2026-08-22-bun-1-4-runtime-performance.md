@@ -399,7 +399,7 @@ export function installMemoryPressureHandler(
 ): () => void;
 
 export async function shutdownServer(
-  server: { stop(force?: boolean): void | Promise<void> },
+  server: { stop(force?: boolean): unknown | Promise<unknown> },
   runtime: Pick<HttpRuntime, "close">,
   options?: { timeoutMs?: number; exit?: (code: number) => never },
 ): Promise<void>;

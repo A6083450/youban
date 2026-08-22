@@ -1199,6 +1199,14 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     get planner() { return planner; },
     get chatService() { return chatService; },
     get parentAgent() { return parentAgent; },
+    releaseIdleResources(reason: "memory-pressure") {
+      return parentAgent.releaseIdleResources?.(reason) ?? Promise.resolve({
+        persistent: 0,
+        temporary: 0,
+        busy: 0,
+        evicted: 0,
+      });
+    },
     close() {
       if (closed) return Promise.resolve();
       closed = true;
