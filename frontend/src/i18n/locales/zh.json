@@ -103,16 +103,18 @@
     "brand": "游伴",
     "subBrand": "游伴 · AI 旅行引擎",
     "badge": "AI 文旅智能体",
+    "preferences": {
+      "label": "偏好设置"
+    },
     "language": {
       "label": "语言",
       "zh": "中文",
-      "ja": "日本語",
       "en": "English"
     },
     "skin": {
-      "label": "界面风格",
-      "default": "游伴",
-      "google": "Google"
+      "label": "外观",
+      "warm": "暖光",
+      "clear": "清朗"
     },
     "footerBrand": "游伴",
     "footerCopy": "{year} All rights reserved.",

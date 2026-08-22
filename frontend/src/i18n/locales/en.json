@@ -103,16 +103,18 @@
     "brand": "YouBan",
     "subBrand": "YouBan · AI Travel Engine",
     "badge": "AI Travel Agent",
+    "preferences": {
+      "label": "Preferences"
+    },
     "language": {
       "label": "Language",
       "zh": "中文",
-      "ja": "日本語",
       "en": "English"
     },
     "skin": {
-      "label": "Interface style",
-      "default": "YouBan",
-      "google": "Google"
+      "label": "Appearance",
+      "warm": "Warm",
+      "clear": "Clear"
     },
     "footerBrand": "YouBan",
     "footerCopy": "{year} All rights reserved.",
