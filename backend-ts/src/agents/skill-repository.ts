@@ -256,7 +256,7 @@ export class SkillCatalogRepository {
       const skill = this.requireSkillRow(skillId);
       if (!skill.candidate_version_id) throw new SkillVersionConflictError();
       const candidate = this.versionRow(skill.candidate_version_id);
-      if (!candidate) throw new SkillVersionConflictError();
+      if (!candidate) throw new Error("candidate version record is missing");
       const activatedAt = nowIso();
       if (skill.active_version_id) {
         this.database.raw.query(

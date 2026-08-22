@@ -13,6 +13,7 @@ import type {
   SkillConfigurationInput,
 } from "../src/agents/skill-types.ts";
 import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
+import { YoubanDatabase } from "../src/domain/database.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 import { createZipFixture } from "./helpers/zip-fixture.ts";
 
@@ -483,6 +484,52 @@ describe("admin Skill HTTP", () => {
     }));
   });
 
+  it("returns a safe internal activation failure for a dangling candidate pointer", async () => {
+    const value = runtime();
+    const dataDir = tempDirs.at(-1)!;
+    const staged = await responseJson(await multipartRequest(
+      value,
+      "/api/admin/skills/upload",
+      validUpload(),
+      ADMIN,
+    ));
+    const skillId = staged.skill.id as string;
+    const danglingCandidateId = "dangling-/private/staging/prompt-secret";
+    const database = new YoubanDatabase(join(dataDir, "youban.db"));
+    try {
+      database.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        database.raw.query(
+          "UPDATE managed_skills SET candidate_version_id = ? WHERE id = ?",
+        ).run(danglingCandidateId, skillId);
+      } finally {
+        database.raw.exec("PRAGMA foreign_keys = ON");
+      }
+    } finally {
+      database.close();
+    }
+
+    const response = await jsonRequest(
+      value,
+      "POST",
+      `/api/admin/skills/${skillId}/activate`,
+      { enabled: true, agent_ids: ["segment-planner"] },
+      ADMIN,
+    );
+
+    expect(response.status).toBe(500);
+    const body = await responseJson(response);
+    expect(body).toEqual({
+      detail: "技能管理服务暂时不可用",
+      code: "skill_activation_failed",
+    });
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain(danglingCandidateId);
+    expect(serialized).not.toContain("/private/staging");
+    expect(serialized).not.toContain("prompt-secret");
+    expect(serialized).not.toContain("FOREIGN KEY");
+  });
+
   it("normalizes Git inputs and strips URL credentials, query, fragment, and package paths", async () => {
     const skills = new FakeSkillService();
     const value = runtime({ skillService: skills });
@@ -576,6 +623,96 @@ describe("admin Skill HTTP", () => {
       code: "internal_error",
     });
     expect(JSON.stringify(rejectedBody)).not.toContain(taint);
+  });
+
+  it("excludes configured hexadecimal credentials from integrity fields", async () => {
+    const previousToken = process.env.YOUBAN_SKILL_GIT_TOKEN;
+    const commitToken = "c".repeat(40);
+    const shaToken = "d".repeat(64);
+    const skills = new FakeSkillService();
+    const value = runtime({ skillService: skills });
+    try {
+      process.env.YOUBAN_SKILL_GIT_TOKEN = commitToken;
+      const credentialCommitVersion = version({
+        sourceCommit: commitToken,
+        packageRelativePath: "/private/staging/prompt-secret-package",
+      });
+      skills.current = detail({
+        candidateVersion: credentialCommitVersion,
+        versions: [credentialCommitVersion],
+      });
+
+      const sanitized = await jsonRequest(
+        value,
+        "GET",
+        "/api/admin/skills/skill-1",
+        undefined,
+        ADMIN,
+      );
+      expect(sanitized.status).toBe(200);
+      const sanitizedBody = await responseJson(sanitized);
+      expect(sanitizedBody.skill.candidate_version.source_commit).toBeNull();
+      const sanitizedSerialized = JSON.stringify(sanitizedBody);
+      expect(sanitizedSerialized).not.toContain(commitToken);
+      expect(sanitizedSerialized).not.toContain("/private/staging");
+      expect(sanitizedSerialized).not.toContain("prompt-secret-package");
+
+      process.env.YOUBAN_SKILL_GIT_TOKEN = shaToken;
+      const credentialHashVersion = version({
+        sha256: shaToken,
+        content: "Authorization: Bearer hidden /private/staging prompt-secret-content",
+        packageRelativePath: "/private/staging/prompt-secret-package",
+      });
+      skills.current = detail({
+        candidateVersion: credentialHashVersion,
+        versions: [credentialHashVersion],
+      });
+
+      const rejected = await jsonRequest(
+        value,
+        "GET",
+        "/api/admin/skills/skill-1",
+        undefined,
+        ADMIN,
+      );
+      expect(rejected.status).toBe(500);
+      const rejectedBody = await responseJson(rejected);
+      expect(rejectedBody).toEqual({
+        detail: "技能管理服务暂时不可用",
+        code: "internal_error",
+      });
+      const rejectedSerialized = JSON.stringify(rejectedBody);
+      expect(rejectedSerialized).not.toContain(shaToken);
+      expect(rejectedSerialized).not.toContain("/private/staging");
+      expect(rejectedSerialized).not.toContain("prompt-secret-content");
+      expect(rejectedSerialized).not.toContain("prompt-secret-package");
+
+      delete process.env.YOUBAN_SKILL_GIT_TOKEN;
+      const ordinaryIntegrityVersion = version({
+        sha256: shaToken,
+        sourceCommit: commitToken,
+      });
+      skills.current = detail({
+        candidateVersion: ordinaryIntegrityVersion,
+        versions: [ordinaryIntegrityVersion],
+      });
+      const accepted = await jsonRequest(
+        value,
+        "GET",
+        "/api/admin/skills/skill-1",
+        undefined,
+        ADMIN,
+      );
+      expect(accepted.status).toBe(200);
+      const acceptedBody = await responseJson(accepted);
+      expect(acceptedBody.skill.candidate_version).toMatchObject({
+        sha256: shaToken,
+        source_commit: commitToken,
+      });
+    } finally {
+      if (previousToken === undefined) delete process.env.YOUBAN_SKILL_GIT_TOKEN;
+      else process.env.YOUBAN_SKILL_GIT_TOKEN = previousToken;
+    }
   });
 
   it("rejects built-in edits, archives, and restores below the HTTP boundary", async () => {

@@ -187,6 +187,46 @@ describe("SkillCatalogRepository", () => {
     }
   });
 
+  it("does not classify a dangling candidate version pointer as an expected version conflict", () => {
+    const { database, repository } = createRepository();
+    try {
+      const skill = repository.createCustomSkill(candidate("museum-guide", "first"));
+      const danglingCandidateId = "dangling-candidate-version";
+      database.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        database.raw.query(
+          "UPDATE managed_skills SET candidate_version_id = ? WHERE id = ?",
+        ).run(danglingCandidateId, skill.id);
+      } finally {
+        database.raw.exec("PRAGMA foreign_keys = ON");
+      }
+
+      let failure: unknown;
+      try {
+        repository.activate(skill.id, {
+          enabled: true,
+          agentIds: ["segment-planner"],
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toEqual(expect.objectContaining({ code: "skill_version_conflict" }));
+      expect(database.raw.query(
+        "SELECT candidate_version_id, active_version_id, enabled, generation FROM managed_skills WHERE id = ?",
+      ).get(skill.id)).toEqual({
+        candidate_version_id: danglingCandidateId,
+        active_version_id: null,
+        enabled: 0,
+        generation: 0,
+      });
+      expect(repository.get(skill.id)?.versions.map((item) => item.state)).toEqual(["candidate"]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("rolls back activation when a replacement assignment fails", () => {
     const { database, repository } = createRepository();
     try {

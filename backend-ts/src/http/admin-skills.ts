@@ -313,11 +313,12 @@ function toSummaryDto(skill: ManagedSkillSummary) {
 }
 
 function toVersionDto(version: SkillVersion) {
-  if (!/^[0-9a-f]{64}$/i.test(version.sha256)) {
+  if (!/^[0-9a-f]{64}$/i.test(version.sha256) || containsConfiguredCredential(version.sha256)) {
     throw new Error("invalid skill version sha256");
   }
   const sourceCommit = version.sourceCommit
     && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(version.sourceCommit)
+    && !containsConfiguredCredential(version.sourceCommit)
     ? version.sourceCommit.toLowerCase()
     : null;
   return {

@@ -386,6 +386,34 @@ describe("SkillManagementService lifecycle", () => {
     expect(unchanged.candidateVersion).toBeUndefined();
   });
 
+  it("treats a dangling candidate version pointer as an internal activation failure", async () => {
+    const { service, database } = createHarness();
+    const installed = await service.stageUpload({ filename: "museum.zip", bytes: uploadBytes() });
+    const danglingCandidateId = "dangling-/private/staging/prompt-secret";
+    database.raw.exec("PRAGMA foreign_keys = OFF");
+    try {
+      database.raw.query(
+        "UPDATE managed_skills SET candidate_version_id = ? WHERE id = ?",
+      ).run(danglingCandidateId, installed.id);
+    } finally {
+      database.raw.exec("PRAGMA foreign_keys = ON");
+    }
+
+    expectManagementCode(() => service.activate(installed.id, {
+      enabled: true,
+      agentIds: ["segment-planner"],
+    }), "skill_activation_failed");
+
+    expect(auditRows(database).at(-1)).toMatchObject({
+      operation: "skill_activated",
+      result: "failure",
+      error_code: "internal_error",
+    });
+    expect(JSON.stringify(auditRows(database))).not.toContain(danglingCandidateId);
+    expect(service.snapshot().assignments["segment-planner"])
+      .not.toContainEqual(expect.objectContaining({ id: installed.id }));
+  });
+
   it("allows built-in configuration but rejects edit, archive, and restore", async () => {
     const { service } = createHarness();
     const builtin = service.list().find((skill) => skill.name === "trip-planning")!;
