@@ -92,7 +92,7 @@ function abortError(signal: AbortSignal): unknown {
 
 export class PersistentPiParentAgent implements YoubanParentAgent {
   private readonly sessions = new Map<string, ParentSessionEntry>();
-  private readonly failedRotations = new Map<string, number>();
+  private readonly rotationRecoveries = new Set<string>();
   private readonly sessionLimit: number;
   private readonly sessionIdleMs: number;
   private readonly now: () => number;
@@ -102,6 +102,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   private readonly sweepTimer?: ReturnType<typeof setInterval>;
   private releaseApiKey: (() => void) | undefined;
   private closed = false;
+  private closePromise: Promise<void> | undefined;
 
   constructor(private readonly options: PersistentParentAgentOptions) {
     this.sessionLimit = options.sessionLimit ?? 64;
@@ -175,8 +176,8 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     const skillSnapshot = this.skillCatalog.snapshot();
     if (skillSnapshot.generation === entry.generation) return current;
 
-    this.disposeSessionHost(session);
     try {
+      this.disposeSessionHost(session);
       const host = await this.sessionFactory(this.sessionOptions(entry, skillSnapshot));
       session.host = host;
       entry.generation = skillSnapshot.generation;
@@ -188,7 +189,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     } catch (error) {
       entry.invalidated = true;
       entry.rotationFailure = error;
-      this.failedRotations.set(entry.id, skillSnapshot.generation);
+      this.rotationRecoveries.add(entry.id);
       if (this.sessions.get(entry.id) === entry) this.sessions.delete(entry.id);
       this.skillRuntimeDiagnostics.recordFailure(
         "persistent-parent-agent",
@@ -234,8 +235,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     const sessionDir = join(this.options.runtimeDir, "sessions", id);
     const pending = this.sessionFactory(this.sessionOptions({ sessionDir, customTools }, skillSnapshot))
       .then((host) => {
-        if (this.failedRotations.get(id) === skillSnapshot.generation) {
-          this.failedRotations.delete(id);
+        if (this.rotationRecoveries.delete(id)) {
           this.skillRuntimeDiagnostics.recordSuccess(
             "persistent-parent-agent",
             skillSnapshot.generation,
@@ -245,7 +245,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       })
       .catch((error) => {
         if (this.sessions.get(id) === entry) this.sessions.delete(id);
-        if (this.failedRotations.get(id) === skillSnapshot.generation) {
+        if (this.rotationRecoveries.has(id)) {
           this.skillRuntimeDiagnostics.recordFailure(
             "persistent-parent-agent",
             skillSnapshot.generation,
@@ -270,7 +270,12 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     return entry;
   }
 
-  private async serialized<T>(scope: ParentAgentScope, run: (host: YoubanAgentSessionHost) => Promise<T>): Promise<T> {
+  private async serialized<T>(
+    scope: ParentAgentScope,
+    signal: AbortSignal | undefined,
+    run: (host: YoubanAgentSessionHost) => Promise<T>,
+  ): Promise<T> {
+    if (signal?.aborted) throw abortError(signal);
     const entry = this.sessionEntry(scope);
     entry.queuedOperations += 1;
     let release: (() => void) | undefined;
@@ -279,6 +284,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       const previous = session.tail;
       session.tail = new Promise<void>((resolve) => { release = resolve; });
       await previous.catch(() => {});
+      if (signal?.aborted) throw abortError(signal);
       const host = await this.hostForOperation(entry, session);
       return await run(host);
     } finally {
@@ -290,7 +296,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   }
 
   complete(input: ParentAgentCompletion): Promise<string> {
-    return this.serialized(input.scope, async (host) => {
+    return this.serialized(input.scope, input.signal, async (host) => {
       if (input.signal?.aborted) throw abortError(input.signal);
       let deltaTail = Promise.resolve();
       const unsubscribe = host.session.subscribe((event) => {
@@ -317,7 +323,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   }
 
   delegate(scope: ParentAgentScope, request: StructuredAgentRequest): Promise<unknown> {
-    return this.serialized(scope, async (host) => {
+    return this.serialized(scope, request.signal, async (host) => {
       if (request.signal.aborted) throw abortError(request.signal);
       const identity = {
         requestId: crypto.randomUUID(),
@@ -353,7 +359,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   }
 
   recordExchange(scope: ParentAgentScope, user: string, assistant: string): Promise<void> {
-    return this.serialized(scope, (host) => host.session.sendCustomMessage({
+    return this.serialized(scope, undefined, (host) => host.session.sendCustomMessage({
       customType: "youban_exchange",
       content: JSON.stringify({ user, assistant }),
       display: false,
@@ -362,7 +368,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
   }
 
   async inspect(scope: ParentAgentScope): Promise<{ sessionFile?: string; tools: string[]; systemPrompt: string }> {
-    return this.serialized(scope, async (host) => ({
+    return this.serialized(scope, undefined, async (host) => ({
       sessionFile: host.session.sessionFile,
       tools: host.session.getActiveToolNames(),
       systemPrompt: host.session.systemPrompt,
@@ -397,13 +403,17 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
     };
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     const entries = [...this.sessions.values()];
-    await Promise.allSettled(entries.map((entry) => this.beginDisposal(entry)));
-    this.releaseApiKey?.();
-    this.releaseApiKey = undefined;
+    this.closePromise = (async () => {
+      await Promise.allSettled(entries.map((entry) => this.beginDisposal(entry)));
+      this.rotationRecoveries.clear();
+      this.releaseApiKey?.();
+      this.releaseApiKey = undefined;
+    })();
+    return this.closePromise;
   }
 }

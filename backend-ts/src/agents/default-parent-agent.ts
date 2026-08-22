@@ -6,12 +6,15 @@ import type { SqliteTaskStore } from "../domain/task-store.ts";
 import type { UserMemoryService } from "../services/hermes-memory.ts";
 import { getPiLlmClient } from "./llm/providers.ts";
 import { createParentBusinessTools } from "./parent-business-tools.ts";
-import { PersistentPiParentAgent } from "./persistent-parent-agent.ts";
+import {
+  PersistentPiParentAgent,
+  type PersistentParentAgentOptions,
+} from "./persistent-parent-agent.ts";
 import { writeRuntimeModelConfig } from "./pi-subagent-runner.ts";
 import type { SkillCatalogProvider } from "./skill-management-service.ts";
 import type { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
 
-export function createDefaultParentAgent(options: {
+export interface DefaultParentAgentOptions {
   cwd: string;
   dataDir: string;
   tasks: SqliteTaskStore;
@@ -20,6 +23,7 @@ export function createDefaultParentAgent(options: {
   model?: Model<Api>;
   skillCatalog?: SkillCatalogProvider;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
+  parentFactory?: (options: PersistentParentAgentOptions) => PersistentPiParentAgent;
   settings?: Pick<AppSettings,
     | "openai_api_key"
     | "openai_base_url"
@@ -29,7 +33,9 @@ export function createDefaultParentAgent(options: {
     | "pi_parent_session_limit"
     | "pi_parent_session_idle_seconds"
   >;
-}): PersistentPiParentAgent {
+}
+
+export function createDefaultParentAgent(options: DefaultParentAgentOptions): PersistentPiParentAgent {
   const settings = options.settings ?? getSettings();
   const runtimeDir = options.runtimeDir ?? join(options.dataDir, "pi-runtime");
   writeRuntimeModelConfig(runtimeDir, {
@@ -37,7 +43,7 @@ export function createDefaultParentAgent(options: {
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
   });
-  return new PersistentPiParentAgent({
+  const parentOptions: PersistentParentAgentOptions = {
     cwd: options.cwd,
     runtimeDir,
     model: options.model ?? getPiLlmClient().model,
@@ -49,5 +55,6 @@ export function createDefaultParentAgent(options: {
     skillCatalog: options.skillCatalog,
     skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
     toolsForScope: (scope) => createParentBusinessTools(scope, options),
-  });
+  };
+  return options.parentFactory?.(parentOptions) ?? new PersistentPiParentAgent(parentOptions);
 }

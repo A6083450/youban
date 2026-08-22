@@ -71,8 +71,8 @@ describe("PiSubagentRunner", () => {
       model: getModel("openai", "gpt-4o-mini")!,
       subagentModel: "test/model",
       skillCatalog: catalog,
-      hostFactory: async () => {
-        const generation = catalog.snapshot().generation;
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
         createdGenerations.push(generation);
         return {
           generation,
@@ -115,8 +115,8 @@ describe("PiSubagentRunner", () => {
       model: getModel("openai", "gpt-4o-mini")!,
       subagentModel: "test/model",
       skillCatalog: catalog,
-      hostFactory: async () => {
-        const generation = catalog.snapshot().generation;
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
         createdGenerations.push(generation);
         return {
           generation,
@@ -165,6 +165,55 @@ describe("PiSubagentRunner", () => {
     }
   });
 
+  it("refreshes a stale waiter to the latest generation before rotating", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const oldStarted = deferred();
+    const releaseOld = deferred();
+    const createdGenerations: number[] = [];
+    const delegatedGenerations: number[] = [];
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-latest-waiter",
+      runtimeDir: "/tmp/youban-runner-latest-waiter/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        return {
+          generation,
+          async delegate(delegation: { nodeId: string }) {
+            delegatedGenerations.push(generation);
+            if (delegation.nodeId === "old") {
+              oldStarted.resolve();
+              await releaseOld.promise;
+            }
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() {},
+        } as any;
+      },
+    });
+    try {
+      const old = runner.run(request("old"));
+      await oldStarted.promise;
+      catalog.publish(skillSnapshot(2));
+      const waiting = runner.run(request("waiting"));
+      await Bun.sleep(0);
+      catalog.publish(skillSnapshot(3));
+      releaseOld.resolve();
+
+      await expect(old).resolves.toBe(1);
+      await expect(waiting).resolves.toBe(3);
+      expect(createdGenerations).toEqual([1, 3]);
+      expect(delegatedGenerations).toEqual([1, 3]);
+    } finally {
+      releaseOld.resolve();
+      await runner.close();
+    }
+  });
+
   it("rejects cancellation while waiting for rotation without creating or delegating", async () => {
     const catalog = new TestSkillCatalog(skillSnapshot(1));
     const oldStarted = deferred();
@@ -177,8 +226,8 @@ describe("PiSubagentRunner", () => {
       model: getModel("openai", "gpt-4o-mini")!,
       subagentModel: "test/model",
       skillCatalog: catalog,
-      hostFactory: async () => {
-        const generation = catalog.snapshot().generation;
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
         createdGenerations.push(generation);
         return {
           generation,
@@ -211,7 +260,7 @@ describe("PiSubagentRunner", () => {
     await runner.close();
   });
 
-  it("retries a failed structured-host rotation on the following run", async () => {
+  it("replaces a failed structured-host rotation with a later generation success", async () => {
     const catalog = new TestSkillCatalog(skillSnapshot(1));
     const diagnostics = new SkillRuntimeDiagnostics();
     const createdGenerations: number[] = [];
@@ -223,8 +272,8 @@ describe("PiSubagentRunner", () => {
       subagentModel: "test/model",
       skillCatalog: catalog,
       skillRuntimeDiagnostics: diagnostics,
-      hostFactory: async () => {
-        const generation = catalog.snapshot().generation;
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
         createdGenerations.push(generation);
         if (generation === 2 && ++generationTwoAttempts === 1) {
           throw new Error("failed at /private/runner with token=secret");
@@ -251,14 +300,167 @@ describe("PiSubagentRunner", () => {
       }]);
       expect(JSON.stringify(diagnostics.snapshot())).not.toContain("/private/runner");
       expect(JSON.stringify(diagnostics.snapshot())).not.toContain("token=secret");
-      await expect(runner.run(request("retry"))).resolves.toBe(2);
-      expect(createdGenerations).toEqual([1, 2, 2]);
+      catalog.publish(skillSnapshot(3));
+      await expect(runner.run(request("retry"))).resolves.toBe(3);
+      expect(createdGenerations).toEqual([1, 2, 3]);
       expect(diagnostics.snapshot()).toEqual([{
         component: "pi-subagent-runner",
-        generation: 2,
+        generation: 3,
         status: "success",
       }]);
     } finally {
+      await runner.close();
+    }
+  });
+
+  it("keeps explicit fixed-snapshot runner test doubles compatible", async () => {
+    const createdGenerations: number[] = [];
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-fixed-snapshot",
+      runtimeDir: "/tmp/youban-runner-fixed-snapshot/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillSnapshot: skillSnapshot(41),
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        return {
+          generation,
+          async delegate() {
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() {},
+        } as any;
+      },
+    });
+    try {
+      await expect(Promise.all([
+        runner.run(request("fixed-a")),
+        runner.run(request("fixed-b")),
+      ])).resolves.toEqual([41, 41]);
+      expect(createdGenerations).toEqual([41]);
+    } finally {
+      await runner.close();
+    }
+  });
+
+  it("waits for pending host creation before closing and delegates nothing", async () => {
+    const creationStarted = deferred();
+    const releaseCreation = deferred();
+    let delegateCalls = 0;
+    let disposeCalls = 0;
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-close-creation",
+      runtimeDir: "/tmp/youban-runner-close-creation/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillSnapshot: skillSnapshot(1),
+      hostFactory: async (options) => {
+        creationStarted.resolve();
+        await releaseCreation.promise;
+        return {
+          generation: options.skillSnapshot.generation,
+          async delegate() {
+            delegateCalls += 1;
+            return { status: "completed", result: { kind: "structured", value: 1 } };
+          },
+          cancel() {},
+          dispose() { disposeCalls += 1; },
+        } as any;
+      },
+    });
+    const running = runner.run(request("creation"));
+    await creationStarted.promise;
+    let closed = false;
+    const closing = runner.close().then(() => { closed = true; });
+    await Bun.sleep(0);
+    expect(closed).toBeFalse();
+    releaseCreation.resolve();
+
+    await expect(running).rejects.toThrow("closed");
+    await closing;
+    expect(delegateCalls).toBe(0);
+    expect(disposeCalls).toBe(1);
+  });
+
+  it("waits for active work before closing its structured host once", async () => {
+    const workStarted = deferred();
+    const releaseWork = deferred();
+    let disposeCalls = 0;
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-close-work",
+      runtimeDir: "/tmp/youban-runner-close-work/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillSnapshot: skillSnapshot(1),
+      hostFactory: async (options) => ({
+        generation: options.skillSnapshot.generation,
+        async delegate() {
+          workStarted.resolve();
+          await releaseWork.promise;
+          return { status: "completed", result: { kind: "structured", value: 1 } };
+        },
+        cancel() {},
+        dispose() { disposeCalls += 1; },
+      } as any),
+    });
+    const running = runner.run(request("work"));
+    await workStarted.promise;
+    let closed = false;
+    const closing = runner.close().then(() => { closed = true; });
+    await Bun.sleep(0);
+    expect(closed).toBeFalse();
+    releaseWork.resolve();
+
+    await expect(running).resolves.toBe(1);
+    await closing;
+    expect(disposeCalls).toBe(1);
+  });
+
+  it("waits for pending rotation creation before closing both generations once", async () => {
+    const catalog = new TestSkillCatalog(skillSnapshot(1));
+    const rotationStarted = deferred();
+    const releaseRotation = deferred();
+    const disposeCounts = new Map<number, number>();
+    const runner = new PiSubagentRunner({
+      cwd: "/tmp/youban-runner-close-rotation",
+      runtimeDir: "/tmp/youban-runner-close-rotation/runtime",
+      model: getModel("openai", "gpt-4o-mini")!,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      hostFactory: async (options) => {
+        const generation = options.skillSnapshot.generation;
+        if (generation === 2) {
+          rotationStarted.resolve();
+          await releaseRotation.promise;
+        }
+        return {
+          generation,
+          async delegate() {
+            return { status: "completed", result: { kind: "structured", value: generation } };
+          },
+          cancel() {},
+          dispose() { disposeCounts.set(generation, (disposeCounts.get(generation) ?? 0) + 1); },
+        } as any;
+      },
+    });
+    try {
+      await expect(runner.run(request("old"))).resolves.toBe(1);
+      catalog.publish(skillSnapshot(2));
+      const rotating = runner.run(request("rotating"));
+      await rotationStarted.promise;
+      let closed = false;
+      const closing = runner.close().then(() => { closed = true; });
+      await Bun.sleep(0);
+      expect(closed).toBeFalse();
+      releaseRotation.resolve();
+
+      await expect(rotating).rejects.toThrow("closed");
+      await closing;
+      expect(Object.fromEntries(disposeCounts)).toEqual({ 1: 1, 2: 1 });
+    } finally {
+      releaseRotation.resolve();
       await runner.close();
     }
   });

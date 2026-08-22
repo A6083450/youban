@@ -127,7 +127,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
   private hostState: RunnerHostState | undefined;
   private hostCreation: Promise<RunnerHostState> | undefined;
   private rotationPromise: Promise<void> | undefined;
-  private rotationRetryGeneration: number | undefined;
+  private rotationRecoveryPending = false;
   private activeRuns = 0;
   private readonly idleWaiters = new Set<() => void>();
   private releaseApiKey: (() => void) | undefined;
@@ -180,12 +180,12 @@ export class PiSubagentRunner implements StructuredAgentRunner {
   private async ensureHost(skillSnapshot: SkillCatalogSnapshot): Promise<RunnerHostState> {
     if (this.hostState) return this.hostState;
     if (!this.hostCreation) {
-      const isRotationRetry = this.rotationRetryGeneration === skillSnapshot.generation;
+      const isRotationRecovery = this.rotationRecoveryPending;
       const creation = this.createHost(skillSnapshot)
         .then((state) => {
           this.hostState = state;
-          if (isRotationRetry) {
-            this.rotationRetryGeneration = undefined;
+          if (isRotationRecovery) {
+            this.rotationRecoveryPending = false;
             this.skillRuntimeDiagnostics.recordSuccess(
               "pi-subagent-runner",
               skillSnapshot.generation,
@@ -194,7 +194,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
           return state;
         })
         .catch((error) => {
-          if (isRotationRetry) {
+          if (isRotationRecovery) {
             this.skillRuntimeDiagnostics.recordFailure(
               "pi-subagent-runner",
               skillSnapshot.generation,
@@ -260,13 +260,13 @@ export class PiSubagentRunner implements StructuredAgentRunner {
       try {
         const state = await this.createHost(skillSnapshot);
         this.hostState = state;
-        this.rotationRetryGeneration = undefined;
+        this.rotationRecoveryPending = false;
         this.skillRuntimeDiagnostics.recordSuccess(
           "pi-subagent-runner",
           skillSnapshot.generation,
         );
       } catch (error) {
-        this.rotationRetryGeneration = skillSnapshot.generation;
+        this.rotationRecoveryPending = true;
         this.skillRuntimeDiagnostics.recordFailure(
           "pi-subagent-runner",
           skillSnapshot.generation,
@@ -283,10 +283,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
     }
   }
 
-  private async acquireHost(
-    skillSnapshot: SkillCatalogSnapshot,
-    signal: AbortSignal,
-  ): Promise<RunnerHostState> {
+  private async acquireHost(signal: AbortSignal): Promise<RunnerHostState> {
     while (true) {
       this.assertOpen();
       if (signal.aborted) throw abortError(signal);
@@ -295,10 +292,12 @@ export class PiSubagentRunner implements StructuredAgentRunner {
         continue;
       }
 
-      const state = this.hostState ?? await waitWithSignal(this.ensureHost(skillSnapshot), signal);
+      const creationSnapshot = this.skillCatalog.snapshot();
+      const state = this.hostState ?? await waitWithSignal(this.ensureHost(creationSnapshot), signal);
       this.assertOpen();
       if (signal.aborted) throw abortError(signal);
-      if (state.generation === skillSnapshot.generation) {
+      const admissionSnapshot = this.skillCatalog.snapshot();
+      if (state.generation === admissionSnapshot.generation) {
         this.activeRuns += 1;
         return state;
       }
@@ -307,14 +306,15 @@ export class PiSubagentRunner implements StructuredAgentRunner {
       this.assertOpen();
       if (signal.aborted) throw abortError(signal);
       if (this.activeRuns > 0) continue;
-      await waitWithSignal(this.rotate(skillSnapshot), signal);
+      const rotationSnapshot = this.skillCatalog.snapshot();
+      if (this.hostState?.generation === rotationSnapshot.generation) continue;
+      await waitWithSignal(this.rotate(rotationSnapshot), signal);
     }
   }
 
   async run(request: StructuredAgentRequest): Promise<unknown> {
     if (request.signal.aborted) throw abortError(request.signal);
-    const skillSnapshot = this.skillCatalog.snapshot();
-    const state = await this.acquireHost(skillSnapshot, request.signal);
+    const state = await this.acquireHost(request.signal);
     try {
       const identity = {
         requestId: crypto.randomUUID(),

@@ -238,7 +238,121 @@ describe("persistent Pi parent agent", () => {
     }
   });
 
-  it("removes a failed rotated scope so a later call retries recreation", async () => {
+  it("does not create a parent host for pre-aborted completion or delegation", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    let factoryCalls = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-pre-aborted",
+      runtimeDir: "/tmp/youban-parent-pre-aborted/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        factoryCalls += 1;
+        return controlledParentHost({
+          generation: options.skillSnapshot.generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onDispose() {},
+        });
+      },
+    });
+    const completeController = new AbortController();
+    completeController.abort(new Error("completion already cancelled"));
+    const delegateController = new AbortController();
+    delegateController.abort(new Error("delegation already cancelled"));
+    try {
+      await expect(parent.complete({
+        scope: { key: "user:pre-aborted-complete", userId: "pre-aborted-complete" },
+        prompt: "must not create",
+        signal: completeController.signal,
+      })).rejects.toThrow("completion already cancelled");
+      await expect(parent.delegate(
+        { key: "user:pre-aborted-delegate", userId: "pre-aborted-delegate" },
+        {
+          agent: "plan-editor",
+          nodeId: "pre-aborted",
+          input: {},
+          schema: { type: "object" },
+          signal: delegateController.signal,
+        },
+      )).rejects.toThrow("delegation already cancelled");
+      expect(factoryCalls).toBe(0);
+    } finally {
+      await parent.close();
+    }
+  });
+
+  it("does not rotate a parent host for queued operations cancelled before admission", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const createdGenerations: number[] = [];
+    const disposedGenerations: number[] = [];
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-queued-cancel",
+      runtimeDir: "/tmp/youban-parent-queued-cancel/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        return controlledParentHost({
+          generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onPrompt: async (value) => {
+            if (value === "old") {
+              firstStarted.resolve();
+              await releaseFirst.promise;
+            }
+          },
+          onDispose: () => { disposedGenerations.push(generation); },
+        });
+      },
+    });
+    const scope = { key: "user:queued-cancel", userId: "queued-cancel" };
+    const first = parent.complete({ scope, prompt: "old" });
+    await firstStarted.promise;
+    catalog.publish(snapshot(2));
+    const completeController = new AbortController();
+    const delegateController = new AbortController();
+    const cancelledComplete = parent.complete({
+      scope,
+      prompt: "cancelled completion",
+      signal: completeController.signal,
+    });
+    const cancelledDelegate = parent.delegate(scope, {
+      agent: "plan-editor",
+      nodeId: "cancelled-delegation",
+      input: {},
+      schema: { type: "object" },
+      signal: delegateController.signal,
+    });
+    const observedComplete = cancelledComplete.catch((error) => error);
+    const observedDelegate = cancelledDelegate.catch((error) => error);
+    await Bun.sleep(0);
+    completeController.abort(new Error("queued completion cancelled"));
+    delegateController.abort(new Error("queued delegation cancelled"));
+    releaseFirst.resolve();
+    try {
+      await expect(first).resolves.toBe("old");
+      expect((await observedComplete as Error).message).toBe("queued completion cancelled");
+      expect((await observedDelegate as Error).message).toBe("queued delegation cancelled");
+      expect(createdGenerations).toEqual([1]);
+      expect(disposedGenerations).toEqual([]);
+    } finally {
+      releaseFirst.resolve();
+      await parent.close();
+    }
+  });
+
+  it("replaces a failed parent-host rotation with a later generation success", async () => {
     const catalog = new TestSkillCatalog(snapshot(1));
     const diagnostics = new SkillRuntimeDiagnostics();
     const createdGenerations: number[] = [];
@@ -280,11 +394,74 @@ describe("persistent Pi parent agent", () => {
       expect(JSON.stringify(diagnostics.snapshot())).not.toContain("/private/runtime");
       expect(JSON.stringify(diagnostics.snapshot())).not.toContain("sensitive prompt");
       expect(JSON.stringify(diagnostics.snapshot())).not.toContain("credential=secret");
+      catalog.publish(snapshot(3));
       await expect(parent.complete({ scope, prompt: "retry" })).resolves.toBe("retry");
-      expect(createdGenerations).toEqual([1, 2, 2]);
+      expect(createdGenerations).toEqual([1, 2, 3]);
       expect(diagnostics.snapshot()).toEqual([{
         component: "persistent-parent-agent",
+        generation: 3,
+        status: "success",
+      }]);
+    } finally {
+      await parent.close();
+    }
+  });
+
+  it("invalidates a scope when old-host disposal throws and retries with the same session directory", async () => {
+    const catalog = new TestSkillCatalog(snapshot(1));
+    const diagnostics = new SkillRuntimeDiagnostics();
+    const createdGenerations: number[] = [];
+    const sessionDirs: string[] = [];
+    let generationOneDisposals = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-dispose-failure",
+      runtimeDir: "/tmp/youban-parent-dispose-failure/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillCatalog: catalog,
+      skillRuntimeDiagnostics: diagnostics,
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+        const generation = options.skillSnapshot.generation;
+        createdGenerations.push(generation);
+        sessionDirs.push(options.sessionDir!);
+        return controlledParentHost({
+          generation,
+          sessionDir: options.sessionDir!,
+          transcript: [],
+          onDispose: () => {
+            if (generation === 1) {
+              generationOneDisposals += 1;
+              throw new Error("dispose failed at /private/parent with credential=secret");
+            }
+          },
+        });
+      },
+    });
+    const scope = { key: "user:dispose-failure", userId: "dispose-failure" };
+    try {
+      await expect(parent.complete({ scope, prompt: "old" })).resolves.toBe("old");
+      catalog.publish(snapshot(2));
+      await expect(parent.complete({ scope, prompt: "rotation" })).rejects.toThrow("dispose failed");
+      const failureStatus = diagnostics.snapshot();
+      catalog.publish(snapshot(3));
+      await expect(parent.complete({ scope, prompt: "retry" })).resolves.toBe("retry");
+
+      expect(generationOneDisposals).toBe(1);
+      expect(createdGenerations).toEqual([1, 3]);
+      expect(sessionDirs[1]).toBe(sessionDirs[0]);
+      expect(failureStatus).toEqual([{
+        component: "persistent-parent-agent",
         generation: 2,
+        status: "failure",
+        errorCode: "parent_host_rotation_failed",
+      }]);
+      expect(JSON.stringify(failureStatus)).not.toContain("/private/parent");
+      expect(JSON.stringify(failureStatus)).not.toContain("credential=secret");
+      expect(diagnostics.snapshot()).toEqual([{
+        component: "persistent-parent-agent",
+        generation: 3,
         status: "success",
       }]);
     } finally {
@@ -335,6 +512,47 @@ describe("persistent Pi parent agent", () => {
       releaseRotation.resolve();
       await parent.close();
     }
+  });
+
+  it("returns one close promise and keeps concurrent callers waiting for active work", async () => {
+    const workStarted = deferred();
+    const releaseWork = deferred();
+    let disposeCalls = 0;
+    const parent = new PersistentPiParentAgent({
+      cwd: "/tmp/youban-parent-close-idempotent",
+      runtimeDir: "/tmp/youban-parent-close-idempotent/runtime",
+      model: {} as never,
+      subagentModel: "test/model",
+      skillSnapshot: snapshot(1),
+      sweepIntervalMs: 0,
+      sessionFactory: async (options: CreateYoubanAgentSessionOptions) => controlledParentHost({
+        generation: options.skillSnapshot.generation,
+        sessionDir: options.sessionDir!,
+        transcript: [],
+        onPrompt: async () => {
+          workStarted.resolve();
+          await releaseWork.promise;
+        },
+        onDispose: () => { disposeCalls += 1; },
+      }),
+    });
+    const scope = { key: "user:close-idempotent", userId: "close-idempotent" };
+    const running = parent.complete({ scope, prompt: "hold" });
+    await workStarted.promise;
+    const firstClose = parent.close();
+    const secondClose = parent.close();
+    const samePromise = firstClose === secondClose;
+    const secondResolvedEarly = await Promise.race([
+      secondClose.then(() => true),
+      Bun.sleep(10).then(() => false),
+    ]);
+    releaseWork.resolve();
+
+    await expect(running).resolves.toBe("hold");
+    await Promise.all([firstClose, secondClose]);
+    expect(samePromise).toBeTrue();
+    expect(secondResolvedEarly).toBeFalse();
+    expect(disposeCalls).toBe(1);
   });
 
   it("uses the repository-owned built-in parent snapshot without a persisted catalog service", async () => {
