@@ -43,6 +43,32 @@ class FakeLlmClient implements LlmClient {
   }
 }
 
+class AbortAwareLlm implements LlmClient {
+  readonly model = new FakeLlmClient([]).model;
+  signal: AbortSignal | undefined;
+
+  async *stream(_prompt: string, options?: LlmCallOptions): AsyncIterable<string> {
+    this.signal = options?.signal;
+    if (!this.signal) throw new Error("missing signal");
+    await new Promise<void>((_resolve, reject) => {
+      if (this.signal!.aborted) return reject(this.signal!.reason);
+      this.signal!.addEventListener("abort", () => reject(this.signal!.reason), { once: true });
+    });
+  }
+
+  async complete(): Promise<string> {
+    throw new Error("unexpected non-stream completion");
+  }
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("timed out waiting for condition");
+    await Bun.sleep(5);
+  }
+}
+
 class FakeParentAgent implements YoubanParentAgent {
   readonly scopes: ParentAgentScope[] = [];
 
@@ -166,6 +192,39 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(finals).toHaveLength(1);
     expect(finals[0]?.payload).toEqual(expect.objectContaining({ action: "chat", reply: "你好呀朋友" }));
     expect(events.at(-1)).toBe("done");
+  });
+
+  it("aborts the parse model when the SSE reader disconnects", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-assistant-abort-"));
+    tempDirs.push(dataDir);
+    const llm = new AbortAwareLlm();
+    const runtime = createHttpRuntime({
+      dataDir,
+      assistant: new TripAssistant({
+        llm,
+        ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 19) }),
+      }),
+    });
+    runtimes.push(runtime);
+    const requestAbort = new AbortController();
+    const response = await runtime.app.handle(new Request("http://localhost/api/trip/parse/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "开始一个长请求", language: "zh-CN" }),
+      signal: requestAbort.signal,
+    }));
+    const reader = response.body!.getReader();
+    await waitUntil(() => llm.signal !== undefined);
+
+    const cancelling = reader.cancel("client-left");
+    try {
+      await Bun.sleep(10);
+      expect(llm.signal?.aborted).toBeTrue();
+      expect(llm.signal?.reason).toBe("client-left");
+    } finally {
+      requestAbort.abort(new Error("test cleanup"));
+      await cancelling.catch(() => {});
+    }
   });
 
   it("streams confirm message and signs only a high-confidence explicit confirmation", async () => {

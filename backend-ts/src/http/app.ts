@@ -56,6 +56,7 @@ import { SqliteUserRepository, UserInputError } from "../domain/users.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
 import type { ParentAgentScope, YoubanParentAgent } from "../agents/persistent-parent-agent.ts";
+import { sseResponse } from "./sse.ts";
 
 interface PoiSearch {
   searchPoi(keywords: string, city: string, types?: string): Promise<TrustedPoi[]>;
@@ -125,35 +126,6 @@ function frontendResponse(frontendDist: string | undefined, pathname: string): R
   const headers = new Headers();
   if (NO_CACHE_FRONTEND_FILES.has(relative)) headers.set("Cache-Control", "no-cache");
   return new Response(Bun.file(path), { headers });
-}
-
-function sseResponse(
-  run: (onDelta: (text: string) => void) => Promise<unknown>,
-): Response {
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const send = (payload: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
-      };
-      try {
-        const result = await run((text) => send({ type: "delta", text }));
-        send({ type: "final", payload: result });
-      } catch (error) {
-        send({ type: "error", message: error instanceof Error ? error.message : String(error) });
-      } finally {
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      }
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      "X-Accel-Buffering": "no",
-    },
-  });
 }
 
 export function createHttpRuntime(options: HttpRuntimeOptions) {
@@ -618,7 +590,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/parse/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta) => assistant.parse(body, { onDelta, signal: request.signal, scope: parentScope(headers) }),
+      (onDelta, signal) => assistant.parse(body, { onDelta, signal, scope: parentScope(headers) }),
+      [request.signal, planningAbort.signal],
     ), {
       body: t.Object({
         text: t.String({ maxLength: 500 }),
@@ -646,7 +619,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/confirm-reply/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta) => assistant.confirm(body, { onDelta, signal: request.signal, scope: parentScope(headers) }),
+      (onDelta, signal) => assistant.confirm(body, { onDelta, signal, scope: parentScope(headers) }),
+      [request.signal, planningAbort.signal],
     ), {
       body: t.Object({
         text: t.String({ maxLength: 500 }),
@@ -1119,11 +1093,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/chat/edit/stream", ({ body, headers, request }) => sseResponse(
-      async (onDelta) => {
-        const result = await editTrip(body, headers["x-user-id"] ?? "", request.signal, headers["x-admin-token"] ?? "");
+      async (onDelta, signal) => {
+        const result = await editTrip(body, headers["x-user-id"] ?? "", signal, headers["x-admin-token"] ?? "");
         onDelta(result.reply);
         return result;
       },
+      [request.signal, planningAbort.signal],
     ), {
       body: t.Object({
         message: t.String({ minLength: 1, maxLength: 2_000 }),
