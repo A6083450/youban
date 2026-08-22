@@ -28,3 +28,4 @@ output
 youban-spec
 /docs/superpowers
 backend-ts/node_modules/
+backend-ts/profiles/

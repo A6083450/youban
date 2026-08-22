@@ -9,8 +9,8 @@
     "preview": "vite preview",
     "test": "bun test src",
     "test:unit": "bun test src",
-    "test:e2e": "playwright test --workers=1",
-    "test:layout": "playwright test e2e/layout-overflow.spec.ts"
+    "test:e2e": "bunx playwright test --workers=1",
+    "test:layout": "bunx playwright test e2e/layout-overflow.spec.ts"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
