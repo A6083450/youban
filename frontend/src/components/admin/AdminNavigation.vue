@@ -113,6 +113,7 @@ const sectionIcons = {
   .admin-navigation-items {
     position: static;
     display: grid;
+    width: 100%;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0;
     padding: 0;
