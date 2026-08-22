@@ -143,6 +143,84 @@ describe("Bun server lifecycle", () => {
     }
   });
 
+  it("drains active Skill calls before closing its owned service exactly once", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-skill-runtime-close-"));
+    const runtime = createHttpRuntime({ dataDir, parentAgent: new ReleasableParent() });
+    const skills = runtime.skills;
+    const installed = skills.get(skills.list()[0]!.id);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    const originalClose = skills.close.bind(skills);
+    let closeCount = 0;
+    skills.stageGit = async () => {
+      started = true;
+      await gate;
+      return installed;
+    };
+    skills.close = () => {
+      closeCount += 1;
+      originalClose();
+    };
+
+    try {
+      const request = runtime.app.handle(new Request("http://localhost/api/admin/skills/git", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "admin@123",
+        },
+        body: JSON.stringify({ repository_url: "https://git.example.test/org/repo.git" }),
+      }));
+      await waitUntil(() => started);
+      const firstClose = runtime.close();
+      const secondClose = runtime.close();
+      expect(firstClose).toBe(secondClose);
+      await flushAsyncWork();
+      expect(closeCount).toBe(0);
+
+      release();
+      expect((await request).status).toBe(201);
+      await firstClose;
+      expect(closeCount).toBe(1);
+    } finally {
+      release();
+      await runtime.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not close a Skill service injected by its caller", async () => {
+    const ownerDir = mkdtempSync(join(tmpdir(), "youban-skill-owner-"));
+    const borrowerDir = mkdtempSync(join(tmpdir(), "youban-skill-borrower-"));
+    const owner = createHttpRuntime({ dataDir: ownerDir, parentAgent: new ReleasableParent() });
+    const sharedSkills = owner.skills;
+    const originalClose = sharedSkills.close.bind(sharedSkills);
+    let closeCount = 0;
+    sharedSkills.close = () => {
+      closeCount += 1;
+      originalClose();
+    };
+    const borrower = createHttpRuntime({
+      dataDir: borrowerDir,
+      parentAgent: new ReleasableParent(),
+      skillService: sharedSkills,
+    });
+
+    try {
+      await borrower.close();
+      expect(closeCount).toBe(0);
+      expect(sharedSkills.list()).toHaveLength(4);
+      await owner.close();
+      expect(closeCount).toBe(1);
+    } finally {
+      await borrower.close();
+      await owner.close();
+      rmSync(ownerDir, { recursive: true, force: true });
+      rmSync(borrowerDir, { recursive: true, force: true });
+    }
+  });
+
   it("begins runtime drain before server stop and closes resources afterward", async () => {
     const order: string[] = [];
     let finishStop!: () => void;

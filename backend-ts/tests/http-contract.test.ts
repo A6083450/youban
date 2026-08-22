@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SkillRuntimeDiagnostics } from "../src/agents/skill-runtime-diagnostics.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 
 const runtimes: HttpRuntime[] = [];
 const tempDirs: string[] = [];
 
-function runtime(options: { frontend?: boolean } = {}): HttpRuntime {
+function runtime(options: { frontend?: boolean; skillRuntimeDiagnostics?: SkillRuntimeDiagnostics } = {}): HttpRuntime {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-http-"));
   tempDirs.push(dataDir);
   mkdirSync(join(dataDir, "images"), { recursive: true });
@@ -22,13 +23,17 @@ function runtime(options: { frontend?: boolean } = {}): HttpRuntime {
     writeFileSync(join(frontendDist, "manifest.webmanifest"), "{}");
     writeFileSync(join(frontendDist, "assets", "app.js"), "app-bundle");
   }
-  const value = createHttpRuntime({ dataDir, frontendDist });
+  const value = createHttpRuntime({
+    dataDir,
+    frontendDist,
+    skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
+  });
   runtimes.push(value);
   return value;
 }
 
-afterEach(() => {
-  for (const value of runtimes.splice(0)) value.close();
+afterEach(async () => {
+  await Promise.all(runtimes.splice(0).map((value) => value.close()));
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -38,11 +43,33 @@ async function json(response: Response): Promise<Record<string, any>> {
 
 describe("HTTP compatibility contract", () => {
   it("keeps the root and trip health endpoints available and exposes docs", async () => {
-    const { app } = runtime();
+    const diagnostics = new SkillRuntimeDiagnostics();
+    diagnostics.recordSuccess("persistent-parent-agent", 12);
+    diagnostics.recordFailure("pi-subagent-runner", 13, "structured_host_rotation_failed");
+    const { app } = runtime({ skillRuntimeDiagnostics: diagnostics });
     for (const path of ["/health", "/api/trip/health"]) {
       const health = await app.handle(new Request(`http://localhost${path}`));
       expect(health.status).toBe(200);
-      expect(await json(health)).toEqual(expect.objectContaining({ status: "healthy" }));
+      const body = await json(health);
+      expect(body).toEqual(expect.objectContaining({ status: "healthy" }));
+      if (path === "/api/trip/health") {
+        expect(body.skills).toEqual({
+          catalog_generation: expect.any(Number),
+          runtime_components: [
+            { component: "persistent-parent-agent", generation: 12, status: "success" },
+            {
+              component: "pi-subagent-runner",
+              generation: 13,
+              status: "failure",
+              error_code: "structured_host_rotation_failed",
+            },
+          ],
+        });
+        const serialized = JSON.stringify(body.skills);
+        expect(serialized).not.toContain("assignments");
+        expect(serialized).not.toContain("content");
+        expect(serialized).not.toContain("errorCode");
+      }
     }
 
     const docs = await app.handle(new Request("http://localhost/docs"));

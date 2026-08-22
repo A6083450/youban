@@ -51,8 +51,8 @@ beforeEach(() => {
   }), { immediate: true });
 });
 
-afterEach(() => {
-  runtime.close();
+afterEach(async () => {
+  await runtime.close();
   rmSync(dataDir, { recursive: true, force: true });
   if (previousDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = previousDataDir;
@@ -153,5 +153,54 @@ describe("admin HTTP", () => {
     expect(initialParent.closed).toBe(false);
     expect(candidateParent.closed).toBe(true);
     expect(existsSync(join(dataDir, "runtime_settings.json"))).toBe(false);
+  });
+
+  it("keeps one injected Skill service across settings rebuilds without taking ownership", async () => {
+    await runtime.close();
+    const skillService = {
+      closeCount: 0,
+      snapshot: () => ({
+        generation: 73,
+        assignments: {
+          "parent-assistant": [],
+          "destination-researcher": [],
+          "segment-planner": [],
+          summary: [],
+          "itinerary-reviewer": [],
+          "plan-editor": [],
+        },
+      }),
+      subscribe: () => () => {},
+      list: () => [],
+      get: () => { throw new Error("unused"); },
+      stageUpload: async () => { throw new Error("unused"); },
+      stageGit: async () => { throw new Error("unused"); },
+      checkGitUpdate: async () => { throw new Error("unused"); },
+      saveCandidate: async () => { throw new Error("unused"); },
+      activate: () => { throw new Error("unused"); },
+      configure: () => { throw new Error("unused"); },
+      archive: () => { throw new Error("unused"); },
+      restore: () => { throw new Error("unused"); },
+      close() { this.closeCount += 1; },
+    };
+    const parent = new ClosableParent();
+    runtime = createHttpRuntime({
+      dataDir,
+      planner: new NoopPlanner(),
+      parentAgent: parent,
+      skillService,
+    });
+    const initialSkills = runtime.skills;
+
+    const response = await call("PUT", "/api/admin/settings", {
+      openai_model: "shared-skill-catalog-model",
+    }, "admin@123");
+
+    expect(response.status).toBe(200);
+    expect(runtime.skills).toBe(initialSkills);
+    expect(runtime.skills).toBe(skillService);
+    expect(skillService.closeCount).toBe(0);
+    await runtime.close();
+    expect(skillService.closeCount).toBe(0);
   });
 });

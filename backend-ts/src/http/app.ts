@@ -7,6 +7,8 @@ import { Elysia, t } from "elysia";
 import { createDefaultTripChatService } from "../agents/default-trip-chat-service.ts";
 import { createDefaultParentAgent } from "../agents/default-parent-agent.ts";
 import { createDefaultTripPlanner } from "../agents/default-trip-planner.ts";
+import { SkillManagementService } from "../agents/skill-management-service.ts";
+import { SkillRuntimeDiagnostics } from "../agents/skill-runtime-diagnostics.ts";
 import { TripAssistant } from "../agents/trip-assistant.ts";
 import { createPiLlmClient, getPiLlmClient } from "../agents/llm/providers.ts";
 import type { TripPlanner } from "../agents/trip-planner.ts";
@@ -61,6 +63,11 @@ import { SqliteUserRepository, UserInputError } from "../domain/users.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
 import type { ParentAgentScope, YoubanParentAgent } from "../agents/persistent-parent-agent.ts";
+import {
+  adminSkillValidationFailure,
+  createAdminSkillRoutes,
+  type AdminSkillService,
+} from "./admin-skills.ts";
 import { sseResponse } from "./sse.ts";
 
 interface PoiSearch {
@@ -91,6 +98,8 @@ export interface HttpRuntimeOptions {
   poiSearch?: PoiSearch;
   memory?: UserMemoryService;
   parentAgent?: YoubanParentAgent;
+  skillService?: AdminSkillService;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   serviceFactories?: {
     parentAgent?: () => YoubanParentAgent;
     planner?: () => TripPlanner;
@@ -155,6 +164,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const memory = options.memory ?? new HermesMemoryBridge({ dataDir: options.dataDir });
   const settings = getSettings();
   const repoRoot = getRepoRoot();
+  const skills = options.skillService ?? new SkillManagementService({
+    databasePath,
+    dataDir: join(options.dataDir, "skills"),
+    builtinSkillsDir: join(repoRoot, "backend-ts", "src", "agents", "skills"),
+  });
+  const skillRuntimeDiagnostics = options.skillRuntimeDiagnostics ?? new SkillRuntimeDiagnostics();
   const initialGenerationRuntimeDir = piGenerationRuntimeDir(options.dataDir, settings);
   let parentAgent = options.parentAgent ?? options.serviceFactories?.parentAgent?.() ?? createDefaultParentAgent({
     cwd: repoRoot,
@@ -163,6 +178,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     tasks,
     memory,
     settings,
+    skillCatalog: skills,
+    skillRuntimeDiagnostics,
   });
   const confirmationLedger = options.assistant?.ledger ?? new ConfirmationLedger();
   let assistant = options.assistant ?? new TripAssistant({
@@ -175,6 +192,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     dataDir: options.dataDir,
     runtimeDir: initialGenerationRuntimeDir,
     settings,
+    skillCatalog: skills,
+    skillRuntimeDiagnostics,
   });
   let chatService = options.chatService ?? createDefaultTripChatService({
     cwd: repoRoot,
@@ -183,6 +202,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     parentAgent,
     memory,
     settings,
+    skillCatalog: skills,
+    skillRuntimeDiagnostics,
   });
   let poiSearch = options.poiSearch ?? new AmapResearchSources({ apiKey: settings.vite_amap_web_key });
   const planningAbort = new AbortController();
@@ -250,6 +271,18 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     }
   };
 
+  const withSkillService = async <T>(run: () => T | Promise<T>): Promise<T> => {
+    await serviceGate;
+    if (closed) throw new Error("HTTP runtime is closed");
+    const operation = Promise.resolve().then(run);
+    activeServiceCalls.add(operation);
+    try {
+      return await operation;
+    } finally {
+      activeServiceCalls.delete(operation);
+    }
+  };
+
   const llmConfig = (value: AppSettings) => ({
     apiKey: value.openai_api_key,
     baseUrl: value.openai_base_url,
@@ -299,6 +332,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
               memory,
               model: candidateLlm.model,
               settings: candidateSettings,
+              skillCatalog: skills,
+              skillRuntimeDiagnostics,
             });
           nextAssistant = options.assistant ?? new TripAssistant({
             llm: candidateLlm,
@@ -312,6 +347,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
               runtimeDir: candidateRuntimeDir,
               model: candidateLlm.model,
               settings: candidateSettings,
+              skillCatalog: skills,
+              skillRuntimeDiagnostics,
             });
           nextChatService = options.chatService ?? createDefaultTripChatService({
             cwd: repoRoot,
@@ -321,6 +358,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
             memory,
             llm: candidateLlm,
             settings: candidateSettings,
+            skillCatalog: skills,
+            skillRuntimeDiagnostics,
           });
           nextPoiSearch = options.poiSearch
             ?? new AmapResearchSources({ apiKey: candidateSettings.vite_amap_web_key });
@@ -593,6 +632,25 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     return output;
   };
 
+  const skillHealth = () => {
+    let catalogGeneration = 0;
+    try {
+      const generation = skills.snapshot().generation;
+      if (Number.isSafeInteger(generation) && generation >= 0) catalogGeneration = generation;
+    } catch {
+      // Health diagnostics expose bounded state only, never catalog exceptions.
+    }
+    return {
+      catalog_generation: catalogGeneration,
+      runtime_components: skillRuntimeDiagnostics.snapshot().map((component) => ({
+        component: component.component,
+        generation: component.generation,
+        status: component.status,
+        ...(component.status === "failure" ? { error_code: component.errorCode } : {}),
+      })),
+    };
+  };
+
   const app = new Elysia({ name: "youban-http" })
     .use(cors({
       origin: options.corsOrigins ?? settings.cors_origins,
@@ -610,7 +668,18 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         },
       },
     }))
-    .onError(({ code, error, set }) => {
+    .onError(({ code, error, request, set }) => {
+      const pathname = new URL(request.url).pathname;
+      if (pathname.startsWith("/api/admin/skills")) {
+        if (code === "VALIDATION" || code === "PARSE") {
+          set.status = 422;
+          return adminSkillValidationFailure(request);
+        }
+        set.status = code === "NOT_FOUND" ? 404 : 500;
+        return code === "NOT_FOUND"
+          ? { detail: "技能接口不存在", code: "skill_not_found" }
+          : { detail: "技能管理服务暂时不可用", code: "internal_error" };
+      }
       if (code === "VALIDATION" || code === "PARSE") set.status = 422;
       else if (code === "NOT_FOUND") set.status = 404;
       else set.status = 500;
@@ -626,6 +695,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       status: "healthy",
       service: settings.app_name,
       version: settings.app_version,
+      skills: skillHealth(),
+    }))
+    .use(createAdminSkillRoutes({
+      skills,
+      authorize: validAdminToken,
+      runSkillOperation: withSkillService,
     }))
     .get("/api/settings", () => {
       const current = getSettings();
@@ -1381,6 +1456,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     tasks,
     users,
     conversations,
+    skills,
+    skillRuntimeDiagnostics,
     get assistant() { return assistant; },
     get planner() { return planner; },
     get chatService() { return chatService; },
@@ -1408,6 +1485,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           Promise.resolve(chatService.close()),
           ...(!options.parentAgent ? [Promise.resolve(parentAgent.close())] : []),
         ]);
+        if (!options.skillService) skills.close();
       };
       closePromise = activeRuns.size === 0
         ? closeResources()
