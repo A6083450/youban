@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -183,13 +184,31 @@ export class SkillPackageStore {
   }
 
   restoreCommittedPackageToStaging(packagePath: string, stagingDir: string): void {
-    const resolvedStaging = resolve(stagingDir);
-    if (dirname(resolvedStaging) !== this.stagingRoot || !resolvedStaging.startsWith(join(this.stagingRoot, "stage-"))) {
-      throw new Error("staging directory is not owned by this package store");
-    }
+    const resolvedStaging = this.resolveOwnedStagingPath(stagingDir);
     const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
     renameSync(source, resolvedStaging);
-    this.removeEmptyPackageParents(dirname(source), this.packagesRoot);
+    this.cleanupEmptyPackageParents(dirname(source), this.packagesRoot);
+  }
+
+  recoverCommittedPackageToStaging(packagePath: string, stagingDir: string): void {
+    const resolvedStaging = this.resolveOwnedStagingPath(stagingDir);
+    const packageTarget = this.resolvePackagePath(this.packagesRoot, packagePath);
+    const stagingExists = existsSync(resolvedStaging);
+    const packageExists = existsSync(packageTarget);
+    if (stagingExists && !packageExists) return;
+    if (!stagingExists && packageExists) {
+      const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
+      renameSync(source, resolvedStaging);
+      this.cleanupEmptyPackageParents(dirname(source), this.packagesRoot);
+      return;
+    }
+    throw new Error("candidate package recovery state is ambiguous");
+  }
+
+  discardCommittedPackage(packagePath: string): void {
+    const source = this.resolveExistingPackagePath(this.packagesRoot, packagePath);
+    rmSync(source, { recursive: true, force: false });
+    this.cleanupEmptyPackageParents(dirname(source), this.packagesRoot);
   }
 
   createEditedStaging(packagePath: string, skillContent: Uint8Array): string {
@@ -251,6 +270,14 @@ export class SkillPackageStore {
     return target;
   }
 
+  recoverArchivedPackage(archivePath: string, packagePath: string): void {
+    this.recoverPackageLocation(this.packagesRoot, packagePath, this.archiveRoot, archivePath);
+  }
+
+  recoverRestoredPackage(packagePath: string, archivePath: string): void {
+    this.recoverPackageLocation(this.archiveRoot, archivePath, this.packagesRoot, packagePath);
+  }
+
   private createOwnedDirectory(root: string, child: string): string {
     assertOwnedDirectory(root, "package root");
     const directory = join(root, child);
@@ -285,6 +312,14 @@ export class SkillPackageStore {
     return target;
   }
 
+  private cleanupEmptyPackageParents(directory: string, root: string): void {
+    try {
+      this.removeEmptyPackageParents(directory, root);
+    } catch {
+      // The authoritative rename already completed; empty parent removal is cosmetic.
+    }
+  }
+
   private removeEmptyPackageParents(directory: string, root: string): void {
     let current = directory;
     while (current !== root) {
@@ -292,6 +327,44 @@ export class SkillPackageStore {
       rmdirSync(current);
       current = dirname(current);
     }
+  }
+
+  private recoverPackageLocation(
+    desiredRoot: string,
+    desiredPath: string,
+    alternateRoot: string,
+    alternatePath: string,
+  ): void {
+    const desired = this.resolvePackagePath(desiredRoot, desiredPath);
+    const alternate = this.resolvePackagePath(alternateRoot, alternatePath);
+    const desiredExists = existsSync(desired);
+    const alternateExists = existsSync(alternate);
+    if (desiredExists && !alternateExists) return;
+    if (!desiredExists && alternateExists) {
+      const source = this.resolveExistingPackagePath(alternateRoot, alternatePath);
+      const target = this.preparePackageTarget(desiredRoot, desiredPath);
+      renameSync(source, target);
+      return;
+    }
+    throw new Error("package recovery state is ambiguous");
+  }
+
+  private resolvePackagePath(root: string, packagePath: string): string {
+    const normalizedPath = normalizeSkillPackagePath(packagePath);
+    const target = join(root, ...normalizedPath.split("/"));
+    const pathRelative = relative(root, target);
+    if (pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative)) {
+      throw new Error("package path escapes its owned root");
+    }
+    return target;
+  }
+
+  private resolveOwnedStagingPath(stagingDir: string): string {
+    const resolvedStaging = resolve(stagingDir);
+    if (dirname(resolvedStaging) !== this.stagingRoot || !resolvedStaging.startsWith(join(this.stagingRoot, "stage-"))) {
+      throw new Error("staging directory is not owned by this package store");
+    }
+    return resolvedStaging;
   }
 
   private assertStagingDirectory(stagingDir: string): void {

@@ -6,6 +6,7 @@ import {
   type GitSkillInstallRequest,
   type GitSkillRemoteRequest,
   type ResolvedGitRemote,
+  validateGitRef,
 } from "./skill-git-importer.ts";
 import {
   normalizeSkillPackagePath,
@@ -53,6 +54,8 @@ export type SkillManagementErrorCode =
   | "skill_archived"
   | "skill_not_git_managed"
   | "skill_service_closed"
+  | "skill_state_changed"
+  | "skill_catalog_refresh_failed"
   | "package_commit_failed"
   | "package_compensation_failed"
   | "candidate_write_failed"
@@ -62,9 +65,16 @@ export type SkillManagementErrorCode =
   | "skill_restore_failed";
 
 export class SkillManagementError extends Error {
-  constructor(public readonly code: SkillManagementErrorCode, message: string) {
+  readonly committed: boolean;
+
+  constructor(
+    public readonly code: SkillManagementErrorCode,
+    message: string,
+    options: { committed?: boolean } = {},
+  ) {
     super(message);
     this.name = "SkillManagementError";
+    this.committed = options.committed ?? false;
   }
 }
 
@@ -92,8 +102,12 @@ const STABLE_DEPENDENCY_CODES = new Set([
   "git_failed",
 ]);
 
-function managementError(code: SkillManagementErrorCode, message: string): SkillManagementError {
-  return new SkillManagementError(code, message);
+function managementError(
+  code: SkillManagementErrorCode,
+  message: string,
+  options?: { committed?: boolean },
+): SkillManagementError {
+  return new SkillManagementError(code, message, options);
 }
 
 function stableErrorCode(error: unknown, fallback: string): string {
@@ -131,12 +145,6 @@ function sanitizeGitUrl(value: string | undefined): string | undefined {
   }
 }
 
-function sanitizeGitRef(value: string | undefined): string | undefined {
-  if (!value || value.length > 255 || /[\0-\x20\x7f]/.test(value)) return undefined;
-  const configuredToken = process.env.YOUBAN_SKILL_GIT_TOKEN;
-  return configuredToken && value.includes(configuredToken) ? undefined : value;
-}
-
 function sanitizeSubdirectory(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
@@ -169,7 +177,10 @@ export class SkillManagementService implements SkillCatalogProvider {
   private readonly now: () => Date;
   private readonly ownedDatabase?: YoubanDatabase;
   private readonly listeners = new Set<(snapshot: SkillCatalogSnapshot) => void>();
+  private readonly pendingSnapshots: SkillCatalogSnapshot[] = [];
   private currentSnapshot: SkillCatalogSnapshot;
+  private snapshotDirty = false;
+  private dispatching = false;
   private closed = false;
 
   constructor(options: SkillManagementServiceOptions) {
@@ -185,9 +196,10 @@ export class SkillManagementService implements SkillCatalogProvider {
     this.gitImporter = options.gitImporter ?? new GitSkillImporter(this.packageStore);
 
     try {
-      for (const skill of loadBuiltinSkillDefinitions(options.builtinSkillsDir)) {
-        this.repository.reconcileBuiltin(skill);
-      }
+      const builtins = loadBuiltinSkillDefinitions(options.builtinSkillsDir);
+      this.repository.transaction(() => {
+        for (const skill of builtins) this.repository.reconcileBuiltin(skill);
+      });
       this.currentSnapshot = this.readSnapshot();
     } catch (error) {
       this.ownedDatabase?.close();
@@ -208,6 +220,12 @@ export class SkillManagementService implements SkillCatalogProvider {
   async stageUpload(input: { filename: string; bytes: Uint8Array }): Promise<ManagedSkillDetail> {
     this.assertOpen();
     const staged = await this.zipImporter.stage(input.bytes);
+    try {
+      this.assertOpen();
+    } catch (error) {
+      this.cleanupStaged(staged);
+      throw error;
+    }
     return this.finalizeCandidate(staged, {
       operation: "candidate_upload_staged",
       source: "upload",
@@ -217,11 +235,19 @@ export class SkillManagementService implements SkillCatalogProvider {
   async stageGit(input: GitSkillInstallRequest): Promise<ManagedSkillDetail> {
     this.assertOpen();
     const staged = await this.gitImporter.stage(input);
+    let sourceRef: string | undefined;
+    try {
+      this.assertOpen();
+      sourceRef = validateGitRef(staged.sourceRef);
+    } catch (error) {
+      this.cleanupStaged(staged);
+      throw error;
+    }
     return this.finalizeCandidate(staged, {
       operation: "candidate_git_staged",
       source: "git",
       repositoryUrl: sanitizeGitUrl(staged.sanitizedSource),
-      sourceRef: sanitizeGitRef(staged.sourceRef),
+      sourceRef,
       sourceSubdirectory: sanitizeSubdirectory(input.subdirectory),
     });
   }
@@ -251,7 +277,18 @@ export class SkillManagementService implements SkillCatalogProvider {
     try {
       remote = await this.gitImporter.resolveRemote(request);
     } catch (error) {
-      this.appendFailureAudit(existing.id, "git_update_checked", error, existing.repositoryUrl);
+      if (!this.closed) {
+        this.appendFailureAudit(existing.id, "git_update_checked", error, existing.repositoryUrl);
+      }
+      throw error;
+    }
+    let resolvedState: ManagedSkill;
+    try {
+      resolvedState = this.requireUnchangedSkill(existing);
+    } catch (error) {
+      if (!this.closed) {
+        this.appendFailureAudit(existing.id, "git_update_checked", error, existing.repositoryUrl);
+      }
       throw error;
     }
     if (!remote.changed) {
@@ -261,7 +298,7 @@ export class SkillManagementService implements SkillCatalogProvider {
         sanitizedSource: sanitizeGitUrl(existing.repositoryUrl),
         result: "success",
       });
-      return { changed: false, skill: this.get(existing.id) };
+      return { changed: false, skill: detached(resolvedState) };
     }
 
     let staged: StagedSkillPackage;
@@ -272,12 +309,24 @@ export class SkillManagementService implements SkillCatalogProvider {
         ...(existing.sourceSubdirectory ? { subdirectory: existing.sourceSubdirectory } : {}),
       });
     } catch (error) {
-      this.appendFailureAudit(existing.id, "candidate_git_staged", error, existing.repositoryUrl);
+      if (!this.closed) {
+        this.appendFailureAudit(existing.id, "candidate_git_staged", error, existing.repositoryUrl);
+      }
+      throw error;
+    }
+    let current: ManagedSkill;
+    try {
+      current = this.requireUnchangedSkill(existing);
+    } catch (error) {
+      this.cleanupStaged(staged);
+      if (!this.closed) {
+        this.appendFailureAudit(existing.id, "candidate_git_staged", error, existing.repositoryUrl);
+      }
       throw error;
     }
     const skill = this.finalizeCandidate(staged, {
       operation: "candidate_git_staged",
-      existing,
+      existing: current,
       source: "git",
       repositoryUrl: sanitizeGitUrl(existing.repositoryUrl),
     });
@@ -314,8 +363,9 @@ export class SkillManagementService implements SkillCatalogProvider {
     this.assertOpen();
     const existing = this.requireSkill(skillId);
     if (existing.archivedAt) throw managementError("skill_archived", "archived skills cannot be activated");
+    let activated: ManagedSkill;
     try {
-      const activated = this.repository.transaction(() => {
+      activated = this.repository.transaction(() => {
         const skill = this.repository.activate(skillId, input);
         this.repository.appendAudit({
           operation: "skill_activated",
@@ -325,13 +375,13 @@ export class SkillManagementService implements SkillCatalogProvider {
         });
         return skill;
       });
-      this.publish();
-      return detached(activated);
     } catch (error) {
       this.appendFailureAudit(skillId, "skill_activated", error);
       if (error instanceof SkillManagementError) throw error;
       throw managementError("skill_activation_failed", "skill activation failed");
     }
+    this.refreshAfterCommit();
+    return detached(activated);
   }
 
   configure(skillId: string, input: SkillConfigurationInput): ManagedSkillDetail {
@@ -339,8 +389,9 @@ export class SkillManagementService implements SkillCatalogProvider {
     const existing = this.requireSkill(skillId);
     if (existing.archivedAt) throw managementError("skill_archived", "archived skills cannot be configured");
     const configuration = input.enabled ? input : { enabled: false, agentIds: existing.agentIds };
+    let configured: ManagedSkill;
     try {
-      const configured = this.repository.transaction(() => {
+      configured = this.repository.transaction(() => {
         const skill = this.repository.configure(skillId, configuration);
         this.repository.appendAudit({
           operation: "skill_configured",
@@ -350,12 +401,12 @@ export class SkillManagementService implements SkillCatalogProvider {
         });
         return skill;
       });
-      this.publish();
-      return detached(configured);
     } catch (error) {
       this.appendFailureAudit(skillId, "skill_configured", error);
       throw managementError("skill_configuration_failed", "skill configuration failed");
     }
+    this.refreshAfterCommit();
+    return detached(configured);
   }
 
   archive(skillId: string): ManagedSkillDetail {
@@ -368,8 +419,9 @@ export class SkillManagementService implements SkillCatalogProvider {
     }
     if (existing.archivedAt) throw managementError("skill_archived", "skill is already archived");
     let renamed = false;
+    let archived: ManagedSkill;
     try {
-      const archived = this.repository.transaction(() => {
+      archived = this.repository.transaction(() => {
         try {
           this.packageStore.archivePackage(existing.name, existing.name);
           renamed = true;
@@ -385,20 +437,30 @@ export class SkillManagementService implements SkillCatalogProvider {
         });
         return skill;
       });
-      this.publish();
-      return detached(archived);
     } catch (error) {
+      let compensationFailed = false;
       if (renamed) {
         try {
           this.packageStore.restoreArchivedPackage(existing.name, existing.name);
         } catch {
-          throw managementError("package_compensation_failed", "skill package compensation failed");
+          try {
+            this.packageStore.recoverArchivedPackage(existing.name, existing.name);
+          } catch {
+            compensationFailed = true;
+          }
         }
       }
-      this.appendFailureAudit(skillId, "skill_archived", error);
-      if (error instanceof SkillManagementError) throw error;
-      throw managementError("skill_archive_failed", "skill archive failed");
+      const failure = error instanceof SkillManagementError
+        ? error
+        : managementError("skill_archive_failed", "skill archive failed");
+      this.appendFailureAudit(skillId, "skill_archived", failure);
+      if (compensationFailed) {
+        throw managementError("package_compensation_failed", "skill package compensation failed");
+      }
+      throw failure;
     }
+    this.refreshAfterCommit();
+    return detached(archived);
   }
 
   restore(skillId: string): ManagedSkillDetail {
@@ -407,8 +469,9 @@ export class SkillManagementService implements SkillCatalogProvider {
     if (existing.kind === "builtin") throw managementError("builtin_skill_immutable", "built-in skills cannot be restored");
     if (!existing.archivedAt) throw managementError("skill_not_archived", "skill is not archived");
     let renamed = false;
+    let restored: ManagedSkill;
     try {
-      const restored = this.repository.transaction(() => {
+      restored = this.repository.transaction(() => {
         try {
           this.packageStore.restoreArchivedPackage(existing.name, existing.name);
           renamed = true;
@@ -424,24 +487,35 @@ export class SkillManagementService implements SkillCatalogProvider {
         });
         return skill;
       });
-      this.publish();
-      return detached(restored);
     } catch (error) {
+      let compensationFailed = false;
       if (renamed) {
         try {
           this.packageStore.archivePackage(existing.name, existing.name);
         } catch {
-          throw managementError("package_compensation_failed", "skill package compensation failed");
+          try {
+            this.packageStore.recoverRestoredPackage(existing.name, existing.name);
+          } catch {
+            compensationFailed = true;
+          }
         }
       }
-      this.appendFailureAudit(skillId, "skill_restored", error);
-      if (error instanceof SkillManagementError) throw error;
-      throw managementError("skill_restore_failed", "skill restore failed");
+      const failure = error instanceof SkillManagementError
+        ? error
+        : managementError("skill_restore_failed", "skill restore failed");
+      this.appendFailureAudit(skillId, "skill_restored", failure);
+      if (compensationFailed) {
+        throw managementError("package_compensation_failed", "skill package compensation failed");
+      }
+      throw failure;
     }
+    this.refreshAfterCommit();
+    return detached(restored);
   }
 
   snapshot(): SkillCatalogSnapshot {
     this.assertOpen();
+    if (this.snapshotDirty) this.refreshAfterCommit();
     return detached(this.currentSnapshot);
   }
 
@@ -460,6 +534,7 @@ export class SkillManagementService implements SkillCatalogProvider {
     if (this.closed) return;
     this.closed = true;
     this.listeners.clear();
+    this.pendingSnapshots.length = 0;
     this.ownedDatabase?.close();
   }
 
@@ -524,17 +599,36 @@ export class SkillManagementService implements SkillCatalogProvider {
       });
       return detached(saved);
     } catch (error) {
+      let compensationFailed = false;
       if (committed) {
         try {
           this.packageStore.restoreCommittedPackageToStaging(packageRelativePath, staged.stagingDir);
           committed = false;
         } catch {
-          throw managementError("package_compensation_failed", "skill package compensation failed");
+          try {
+            this.packageStore.recoverCommittedPackageToStaging(packageRelativePath, staged.stagingDir);
+            committed = false;
+          } catch {
+            try {
+              this.packageStore.discardCommittedPackage(packageRelativePath);
+              committed = false;
+            } catch {
+              compensationFailed = true;
+            }
+          }
         }
       }
       this.cleanupStaged(staged);
-      if (error instanceof SkillManagementError) throw error;
-      throw managementError("candidate_write_failed", "candidate metadata could not be saved");
+      const failure = error instanceof SkillManagementError
+        ? error
+        : managementError("candidate_write_failed", "candidate metadata could not be saved");
+      if (options.existing) {
+        this.appendFailureAudit(options.existing.id, options.operation, failure, options.repositoryUrl);
+      }
+      if (compensationFailed) {
+        throw managementError("package_compensation_failed", "skill package compensation failed");
+      }
+      throw failure;
     }
   }
 
@@ -555,6 +649,36 @@ export class SkillManagementService implements SkillCatalogProvider {
     }
     if (skill.archivedAt) throw managementError("skill_archived", "archived skills cannot be edited");
     return skill;
+  }
+
+  private requireUnchangedSkill(expected: ManagedSkill): ManagedSkill {
+    this.assertOpen();
+    const current = this.repository.get(expected.id);
+    if (!current || !this.hasSameLifecycleState(current, expected)) {
+      throw managementError(
+        "skill_state_changed",
+        "skill changed while the asynchronous operation was in progress",
+      );
+    }
+    return current;
+  }
+
+  private hasSameLifecycleState(current: ManagedSkill, expected: ManagedSkill): boolean {
+    return current.name === expected.name
+      && current.kind === expected.kind
+      && current.source === expected.source
+      && current.repositoryUrl === expected.repositoryUrl
+      && current.sourceRef === expected.sourceRef
+      && current.sourceSubdirectory === expected.sourceSubdirectory
+      && current.enabled === expected.enabled
+      && current.generation === expected.generation
+      && current.archivedAt === expected.archivedAt
+      && current.activeVersion?.id === expected.activeVersion?.id
+      && current.activeVersion?.sourceCommit === expected.activeVersion?.sourceCommit
+      && current.candidateVersion?.id === expected.candidateVersion?.id
+      && current.candidateVersion?.sourceCommit === expected.candidateVersion?.sourceCommit
+      && current.agentIds.length === expected.agentIds.length
+      && current.agentIds.every((agentId, index) => agentId === expected.agentIds[index]);
   }
 
   private appendFailureAudit(
@@ -592,13 +716,44 @@ export class SkillManagementService implements SkillCatalogProvider {
 
   private publish(): void {
     if (this.closed) return;
-    this.currentSnapshot = this.readSnapshot();
-    for (const listener of [...this.listeners]) {
-      try {
-        listener(detached(this.currentSnapshot));
-      } catch {
-        // Listener failures are isolated from catalog commits and other subscribers.
+    const published = this.readSnapshot();
+    this.currentSnapshot = published;
+    this.snapshotDirty = false;
+
+    this.pendingSnapshots.push(published);
+    if (this.dispatching) return;
+
+    this.dispatching = true;
+    try {
+      while (!this.closed) {
+        const next = this.pendingSnapshots.shift();
+        if (!next) break;
+        for (const listener of [...this.listeners]) {
+          if (this.closed) break;
+          if (!this.listeners.has(listener)) continue;
+          try {
+            listener(detached(next));
+          } catch {
+            // Listener failures are isolated from catalog commits and other subscribers.
+          }
+        }
       }
+    } finally {
+      this.dispatching = false;
+      if (this.closed) this.pendingSnapshots.length = 0;
+    }
+  }
+
+  private refreshAfterCommit(): void {
+    try {
+      this.publish();
+    } catch {
+      this.snapshotDirty = true;
+      throw managementError(
+        "skill_catalog_refresh_failed",
+        "skill catalog changed but its runtime snapshot could not be refreshed",
+        { committed: true },
+      );
     }
   }
 

@@ -431,7 +431,7 @@ async function validateAndResolveHost(
   return unique;
 }
 
-function validateRef(ref: string | undefined): string | undefined {
+export function validateGitRef(ref: string | undefined): string | undefined {
   if (ref === undefined) return undefined;
   const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
   const invalidComponent = fullRef.split("/").some(
@@ -590,7 +590,7 @@ export class GitSkillImporter {
   async stage(request: GitSkillInstallRequest): Promise<StagedSkillPackage> {
     const repositoryUrl = normalizeRepositoryUrl(request.repositoryUrl);
     const pinnedAddresses = await validateAndResolveHost(repositoryUrl, this.resolveHostname);
-    const ref = validateRef(request.ref);
+    const ref = validateGitRef(request.ref);
     const subdirectory = validateSubdirectory(request.subdirectory);
     const acquisition = classifyRefAcquisition(ref);
     const checkoutRoot = mkdtempSync(join(tmpdir(), "youban-skill-git-checkout-"));
@@ -652,7 +652,7 @@ export class GitSkillImporter {
   async resolveRemote(request: GitSkillRemoteRequest): Promise<ResolvedGitRemote> {
     const repositoryUrl = normalizeRepositoryUrl(request.repositoryUrl);
     const pinnedAddresses = await validateAndResolveHost(repositoryUrl, this.resolveHostname);
-    const ref = validateRef(request.ref);
+    const ref = validateGitRef(request.ref);
     validateSubdirectory(request.subdirectory);
     let commit: string;
     if (ref && COMMIT_PATTERN.test(ref)) {
