@@ -23,13 +23,20 @@ import type {
   AdminSkillVersion,
 } from '../types'
 import {
+  ADMIN_SKILL_AGENT_IDS,
   adminSkillSourceKey,
   adminSkillStateKey,
+  beginCandidateEdit,
   filterAdminSkills,
+  localizeAdminSkillError,
+  setSkillAssignment,
   skillActions,
   skillInstallSources,
   sortAdminSkillVersions,
   toSkillConfiguration,
+  validateGitInstallInput,
+  validateSkillArchive,
+  validateZipSelection,
 } from './skill-management'
 
 class MemoryStorage implements Storage {
@@ -236,6 +243,85 @@ describe('admin Skill pure state helpers', () => {
     expect(configuration.agent_ids).not.toBe(skill.agent_ids)
     configuration.agent_ids.pop()
     expect(skill.agent_ids).toEqual(['segment-planner', 'itinerary-reviewer'])
+  })
+
+  it('does not replace active content when candidate editing begins', () => {
+    const state = beginCandidateEdit(detail())
+
+    expect(state.editorContent).toBe(detail().candidate_version?.content)
+    expect(state.activeVersionId).toBe(detail().active_version?.id)
+    expect(state.dirty).toBe(false)
+
+    const withoutCandidate = detail({ candidate_version: null, candidate_version_id: null })
+    expect(beginCandidateEdit(withoutCandidate).editorContent).toBe(withoutCandidate.active_version?.content)
+  })
+
+  it('requires a disabled custom skill before archive', () => {
+    const customEnabled = summary({ state: 'enabled', enabled: true, candidate_version_id: null })
+    const customDisabled = summary({ state: 'disabled', enabled: false, candidate_version_id: null })
+    const builtinDisabled = summary({
+      kind: 'builtin',
+      source: 'builtin',
+      state: 'disabled',
+      enabled: false,
+      candidate_version_id: null,
+    })
+
+    expect(skillActions(customEnabled)).not.toContain('archive')
+    expect(skillActions(customDisabled)).toContain('archive')
+    expect(skillActions(builtinDisabled)).not.toContain('archive')
+    expect(validateSkillArchive(customEnabled)).toBe('skill_must_be_disabled')
+    expect(validateSkillArchive(customDisabled)).toBeNull()
+    expect(validateSkillArchive(builtinDisabled)).toBe('builtin_skill_immutable')
+  })
+
+  it('toggles only known assignments without mutating the current selection', () => {
+    const selected = Object.freeze(['segment-planner', 'summary'] as const)
+    const added = setSkillAssignment(selected, 'plan-editor', true)
+    const removed = setSkillAssignment(added, 'summary', false)
+
+    expect(ADMIN_SKILL_AGENT_IDS).toHaveLength(6)
+    expect(added).toEqual(['segment-planner', 'summary', 'plan-editor'])
+    expect(removed).toEqual(['segment-planner', 'plan-editor'])
+    expect(selected).toEqual(['segment-planner', 'summary'])
+  })
+
+  it('accepts exactly one zip and validates credential-free HTTPS Git input', () => {
+    const zip = new File(['zip'], 'museum-guide.zip', { type: 'application/zip' })
+    expect(validateZipSelection([zip])).toBeNull()
+    expect(validateZipSelection([])).toBe('zip_required')
+    expect(validateZipSelection([zip, zip])).toBe('zip_single_file')
+    expect(validateZipSelection([new File(['text'], 'SKILL.md')])).toBe('zip_extension')
+
+    expect(validateGitInstallInput({ repository_url: 'https://example.test/skills.git' })).toBeNull()
+    expect(validateGitInstallInput({ repository_url: 'http://example.test/skills.git' })).toBe('invalid_git_url')
+    expect(validateGitInstallInput({ repository_url: 'https://token@example.test/skills.git' })).toBe('invalid_git_url')
+    expect(validateGitInstallInput({
+      repository_url: 'https://example.test/skills.git',
+      subdirectory: '../private',
+    })).toBe('invalid_git_subdirectory')
+  })
+
+  it('maps stable backend errors without rendering server details', () => {
+    expect(localizeAdminSkillError({ code: 'invalid_skill_frontmatter' })).toBe(
+      'admin.skills.errors.invalid_skill_frontmatter',
+    )
+    expect(localizeAdminSkillError({ code: 'unknown_backend_error' })).toBe(
+      'admin.skills.errors.fallback',
+    )
+    expect(localizeAdminSkillError(new Error('secret token abc'))).toBe(
+      'admin.skills.errors.fallback',
+    )
+    for (const code of [
+      'skill_service_closed',
+      'package_commit_failed',
+      'skill_activation_failed',
+      'invalid_zip_entry',
+      'git_output_too_large',
+      'internal_error',
+    ]) {
+      expect(localizeAdminSkillError({ code })).toBe(`admin.skills.errors.${code}`)
+    }
   })
 })
 

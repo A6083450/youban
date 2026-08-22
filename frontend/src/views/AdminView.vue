@@ -49,10 +49,9 @@
           />
           <section
             v-show="activeSection === 'skills'"
-            class="admin-skills-placeholder"
-            aria-labelledby="admin-skills-title"
+            class="admin-skills-workspace"
           >
-            <h1 id="admin-skills-title" class="admin-panel-title">{{ t('admin.navigation.skills') }}</h1>
+            <AdminSkillsPanel :on-unauthorized="handleUnauthorized" />
           </section>
           <AdminTripsPanel
             v-show="activeSection === 'trips'"
@@ -70,6 +69,7 @@ import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import AdminNavigation from '@/components/admin/AdminNavigation.vue'
 import AdminRuntimeSettingsPanel from '@/components/admin/AdminRuntimeSettingsPanel.vue'
+import AdminSkillsPanel from '@/components/admin/AdminSkillsPanel.vue'
 import AdminTripsPanel from '@/components/admin/AdminTripsPanel.vue'
 import {
   readStoredAdminSection,
@@ -252,16 +252,8 @@ onMounted(() => {
   padding: 32px 36px 48px;
 }
 
-.admin-skills-placeholder {
+.admin-skills-workspace {
   width: 100%;
-}
-
-.admin-panel-title {
-  margin: 0;
-  color: #3d3229;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.35;
 }
 
 @media (max-width: 760px) {
@@ -302,9 +294,6 @@ onMounted(() => {
     padding: 24px 16px 36px;
   }
 
-  .admin-panel-title {
-    font-size: 20px;
-  }
 }
 
 @media (max-width: 350px) {
