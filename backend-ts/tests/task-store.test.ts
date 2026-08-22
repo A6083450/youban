@@ -8,6 +8,8 @@ import {
   createTaskState,
   type TripTaskState,
 } from "../src/domain/task-store.ts";
+import { INITIAL_SCHEMA_SQL } from "../src/domain/db-schema.ts";
+import { YoubanDatabase } from "../src/domain/database.ts";
 
 const tempDirs: string[] = [];
 
@@ -28,7 +30,7 @@ describe("SqliteTaskStore", () => {
     store.close();
 
     const db = new Database(path, { readonly: true });
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
     expect(db.query("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
@@ -38,6 +40,35 @@ describe("SqliteTaskStore", () => {
       { name: "users" },
     ]));
     db.close();
+  });
+
+  it("migrates a version-one database without losing tasks", () => {
+    const path = databasePath();
+    const now = "2026-08-22T00:00:00.000Z";
+    const database = new Database(path);
+    database.exec(INITIAL_SCHEMA_SQL);
+    database.exec("PRAGMA user_version = 1");
+    database.query(
+      "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run("t1", "t1", "u1", "completed", "", now, now, "{}");
+    database.close();
+
+    const migrated = new YoubanDatabase(path);
+    expect(migrated.raw.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(migrated.raw.query("SELECT task_id FROM tasks").get()).toEqual({ task_id: "t1" });
+    expect(
+      migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'managed_skills'").get(),
+    ).toBeDefined();
+    expect(
+      migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'skill_versions'").get(),
+    ).toBeDefined();
+    expect(
+      migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'skill_agent_assignments'").get(),
+    ).toBeDefined();
+    expect(
+      migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'skill_audit_events'").get(),
+    ).toBeDefined();
+    migrated.close();
   });
 
   it("debounces progress writes but flushes terminal state immediately", async () => {

@@ -5,6 +5,7 @@ import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import {
   CURRENT_SCHEMA_VERSION,
   INITIAL_SCHEMA_SQL,
+  SKILL_CATALOG_SCHEMA_SQL,
   schema,
   type YoubanSchema,
 } from "./db-schema.ts";
@@ -31,18 +32,36 @@ export class YoubanDatabase {
   }
 
   private migrate(): void {
-    const row = this.raw.query("PRAGMA user_version").get() as { user_version: number };
-    if (row.user_version > CURRENT_SCHEMA_VERSION) {
+    const { user_version: currentVersion } = this.raw.query("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    if (currentVersion > CURRENT_SCHEMA_VERSION) {
       throw new Error(
-        `database schema ${row.user_version} is newer than supported ${CURRENT_SCHEMA_VERSION}`,
+        `database schema ${currentVersion} is newer than supported ${CURRENT_SCHEMA_VERSION}`,
       );
     }
-    if (row.user_version === CURRENT_SCHEMA_VERSION) return;
+    if (currentVersion === CURRENT_SCHEMA_VERSION) return;
+    const migrations: Readonly<Record<number, () => void>> = {
+      1: () => this.migrateVersionOne(),
+      2: () => this.migrateVersionTwo(),
+    };
     const migrate = this.raw.transaction(() => {
-      this.raw.exec(INITIAL_SCHEMA_SQL);
-      this.raw.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+      for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {
+        const apply = migrations[version];
+        if (!apply) throw new Error(`missing migration for schema version ${version}`);
+        apply();
+        this.raw.exec(`PRAGMA user_version = ${version}`);
+      }
     });
     migrate();
+  }
+
+  private migrateVersionOne(): void {
+    this.raw.exec(INITIAL_SCHEMA_SQL);
+  }
+
+  private migrateVersionTwo(): void {
+    this.raw.exec(SKILL_CATALOG_SCHEMA_SQL);
   }
 
   quickCheck(): string {
