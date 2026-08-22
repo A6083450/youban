@@ -57,7 +57,7 @@
           :placeholder="t('admin.skills.install.optional')"
           :disabled="submitting"
         />
-        <div class="credential-status" role="status">
+        <div class="credential-status">
           <SafetyCertificateOutlined aria-hidden="true" />
           <span>
             {{ capabilities.private_git_credentials_available
@@ -68,6 +68,9 @@
       </div>
 
       <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+      <p v-if="submitting" class="install-progress" role="status">
+        {{ t('admin.skills.install.installing') }}
+      </p>
       <div class="skill-install-actions">
         <a-button :disabled="submitting" @click="emit('close')">
           {{ t('common.cancel') }}
@@ -78,7 +81,6 @@
           {{ t(source === 'upload' ? 'admin.skills.install.uploadAction' : 'admin.skills.install.gitAction') }}
         </a-button>
       </div>
-      <div class="sr-status" aria-live="polite">{{ asyncStatus }}</div>
     </form>
   </a-modal>
 </template>
@@ -116,7 +118,6 @@ const gitRef = ref('')
 const gitSubdirectory = ref('')
 const submitting = ref(false)
 const formError = ref('')
-const asyncStatus = ref('')
 
 const sourceOptions = computed(() => skillInstallSources(props.capabilities).map((item) => ({
   value: item,
@@ -129,7 +130,6 @@ watch(() => props.capabilities.git_available, (available) => {
 
 watch(source, () => {
   formError.value = ''
-  asyncStatus.value = ''
 })
 
 const selectFile = (event: Event) => {
@@ -141,13 +141,11 @@ const selectFile = (event: Event) => {
 const submit = async () => {
   if (submitting.value) return
   formError.value = ''
-  asyncStatus.value = t('admin.skills.install.installing')
 
   if (source.value === 'upload') {
     const validation = validateZipSelection(file.value ? [file.value] : [])
     if (validation) {
       formError.value = t(`admin.skills.install.validation.${validation}`)
-      asyncStatus.value = ''
       return
     }
   } else {
@@ -158,7 +156,6 @@ const submit = async () => {
     })
     if (validation) {
       formError.value = t(`admin.skills.install.validation.${validation}`)
-      asyncStatus.value = ''
       return
     }
   }
@@ -174,10 +171,8 @@ const submit = async () => {
       })
     if (!response.skill.candidate_version) {
       formError.value = t('admin.skills.errors.fallback')
-      asyncStatus.value = formError.value
       return
     }
-    asyncStatus.value = t('admin.skills.install.success')
     file.value = null
     if (fileInput.value) fileInput.value.value = ''
     gitUrl.value = ''
@@ -190,7 +185,6 @@ const submit = async () => {
       return
     }
     formError.value = t(localizeAdminSkillError(error))
-    asyncStatus.value = formError.value
   } finally {
     submitting.value = false
   }
@@ -233,7 +227,8 @@ const submit = async () => {
 }
 
 .field-hint,
-.form-error {
+.form-error,
+.install-progress {
   margin: 0;
   font-size: 12px;
 }
@@ -244,6 +239,10 @@ const submit = async () => {
 
 .form-error {
   color: #b42318;
+}
+
+.install-progress {
+  color: #4c5940;
 }
 
 .credential-status {
@@ -263,15 +262,6 @@ const submit = async () => {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 24px;
-}
-
-.sr-status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
 }
 
 @media (max-width: 480px) {

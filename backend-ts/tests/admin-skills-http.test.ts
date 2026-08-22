@@ -9,6 +9,7 @@ import type {
 import type {
   ManagedSkillDetail,
   ManagedSkillSummary,
+  SkillActivationInput,
   SkillCatalogSnapshot,
   SkillConfigurationInput,
 } from "../src/agents/skill-types.ts";
@@ -21,6 +22,7 @@ const ADMIN = "admin@123";
 const SKILL = "---\nname: museum-guide\ndescription: A practical museum visit guide.\n---\n\n# Museum guide\n";
 const EDITED_SKILL = SKILL.replace("# Museum guide", "# Museum guide\n\nEdited candidate marker");
 const SECOND_EDITED_SKILL = SKILL.replace("# Museum guide", "# Museum guide\n\nSecond candidate marker");
+const THIRD_EDITED_SKILL = SKILL.replace("# Museum guide", "# Museum guide\n\nThird candidate marker");
 const COMMIT = "1".repeat(40);
 const EMPTY_SNAPSHOT: SkillCatalogSnapshot = {
   generation: 41,
@@ -118,7 +120,7 @@ class FakeSkillService {
     return { changed: false, skill: structuredClone(this.current) };
   }
   async saveCandidate(): Promise<ManagedSkillDetail> { return structuredClone(this.current); }
-  activate(_id: string, input: SkillConfigurationInput): ManagedSkillDetail {
+  activate(_id: string, input: SkillActivationInput): ManagedSkillDetail {
     this.current = { ...this.current, enabled: input.enabled, agentIds: [...input.agentIds] };
     return structuredClone(this.current);
   }
@@ -357,7 +359,11 @@ describe("admin Skill HTTP", () => {
       value,
       "POST",
       `/api/admin/skills/${id}/activate`,
-      { enabled: true, agent_ids: ["segment-planner"] },
+      {
+        candidate_version_id: staged.skill.candidate_version.id,
+        enabled: true,
+        agent_ids: ["segment-planner"],
+      },
       ADMIN,
     ));
     expect(activated.skill).toEqual(expect.objectContaining({
@@ -372,7 +378,11 @@ describe("admin Skill HTTP", () => {
       value,
       "POST",
       `/api/admin/skills/${id}/activate`,
-      { enabled: true, agent_ids: ["segment-planner"] },
+      {
+        candidate_version_id: staged.skill.candidate_version.id,
+        enabled: true,
+        agent_ids: ["segment-planner"],
+      },
       ADMIN,
     );
     expect(repeatedActivation.status).toBe(409);
@@ -391,6 +401,45 @@ describe("admin Skill HTTP", () => {
     expect(edited.skill.state).toBe("candidate");
     expect(edited.skill.active_version.content).toBe(SKILL);
     expect(edited.skill.candidate_version.content).toBe(EDITED_SKILL);
+
+    const replacement = await responseJson(await jsonRequest(
+      value,
+      "PUT",
+      `/api/admin/skills/${id}/candidate`,
+      { content: SECOND_EDITED_SKILL },
+      ADMIN,
+    ));
+    expect(replacement.skill.candidate_version.id).not.toBe(edited.skill.candidate_version.id);
+
+    const staleActivation = await jsonRequest(
+      value,
+      "POST",
+      `/api/admin/skills/${id}/activate`,
+      {
+        candidate_version_id: edited.skill.candidate_version.id,
+        enabled: true,
+        agent_ids: ["summary"],
+      },
+      ADMIN,
+    );
+    expect(staleActivation.status).toBe(409);
+    expect(await responseJson(staleActivation)).toEqual({
+      detail: "技能候选版本不存在或已被激活",
+      code: "skill_version_conflict",
+    });
+
+    const afterStaleActivation = await responseJson(await jsonRequest(
+      value,
+      "GET",
+      `/api/admin/skills/${id}`,
+      undefined,
+      ADMIN,
+    ));
+    expect(afterStaleActivation.skill).toEqual(expect.objectContaining({
+      enabled: true,
+      agent_ids: ["segment-planner"],
+      candidate_version: expect.objectContaining({ id: replacement.skill.candidate_version.id }),
+    }));
 
     const disabled = await responseJson(await jsonRequest(
       value,
@@ -421,17 +470,27 @@ describe("admin Skill HTTP", () => {
       value,
       "POST",
       `/api/admin/skills/${id}/activate`,
-      { enabled: false, agent_ids: ["segment-planner"] },
+      {
+        candidate_version_id: replacement.skill.candidate_version.id,
+        enabled: false,
+        agent_ids: ["segment-planner"],
+      },
       ADMIN,
     ));
     expect(secondActivation.skill.versions.map((item: Record<string, unknown>) => item.version_number))
-      .toEqual([1, 2]);
+      .toEqual([1, 2, 3]);
+    expect(secondActivation.skill).toEqual(expect.objectContaining({
+      enabled: false,
+      agent_ids: ["segment-planner"],
+      active_version: expect.objectContaining({ id: replacement.skill.candidate_version.id }),
+      candidate_version: null,
+    }));
 
     const nextCandidate = await responseJson(await jsonRequest(
       value,
       "PUT",
       `/api/admin/skills/${id}/candidate`,
-      { content: SECOND_EDITED_SKILL },
+      { content: THIRD_EDITED_SKILL },
       ADMIN,
     ));
     expect(nextCandidate.skill).toEqual(expect.objectContaining({
@@ -440,9 +499,9 @@ describe("admin Skill HTTP", () => {
       agent_ids: ["segment-planner"],
     }));
     expect(nextCandidate.skill.versions.map((item: Record<string, unknown>) => item.version_number))
-      .toEqual([1, 2, 3]);
+      .toEqual([1, 2, 3, 4]);
     expect(nextCandidate.skill.versions.map((item: Record<string, unknown>) => item.state))
-      .toEqual(["superseded", "active", "candidate"]);
+      .toEqual(["superseded", "archived", "active", "candidate"]);
 
     const archived = await responseJson(await jsonRequest(
       value,
@@ -513,7 +572,11 @@ describe("admin Skill HTTP", () => {
       value,
       "POST",
       `/api/admin/skills/${skillId}/activate`,
-      { enabled: true, agent_ids: ["segment-planner"] },
+      {
+        candidate_version_id: danglingCandidateId,
+        enabled: true,
+        agent_ids: ["segment-planner"],
+      },
       ADMIN,
     );
 
@@ -877,7 +940,7 @@ describe("admin Skill HTTP", () => {
       value,
       "POST",
       "/api/admin/skills/missing/activate",
-      { enabled: true, agent_ids: ["filesystem-agent"] },
+      { candidate_version_id: "candidate-1", enabled: true, agent_ids: ["filesystem-agent"] },
       ADMIN,
     );
     expect(invalidAssignment.status).toBe(422);

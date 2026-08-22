@@ -353,6 +353,10 @@ export interface AdminSkillConfigurationRequest {
   agent_ids: readonly AdminSkillAgentId[]
 }
 
+export interface AdminSkillActivationRequest extends AdminSkillConfigurationRequest {
+  candidate_version_id: string
+}
+
 export interface AdminSkillListResponse {
   items: AdminSkillSummary[]
   capabilities: AdminSkillCapabilities

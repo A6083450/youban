@@ -6,6 +6,7 @@ import type { SkillCatalogProvider } from "../agents/skill-management-service.ts
 import { normalizeSkillPackagePath } from "../agents/skill-package-store.ts";
 import {
   SKILL_AGENT_IDS,
+  type SkillActivationInput,
   type ManagedSkillDetail,
   type ManagedSkillSummary,
   type SkillConfigurationInput,
@@ -132,7 +133,7 @@ export interface AdminSkillService extends SkillCatalogProvider {
   stageGit(input: GitSkillInstallRequest): Promise<ManagedSkillDetail>;
   checkGitUpdate(skillId: string): Promise<{ changed: boolean; skill: ManagedSkillDetail }>;
   saveCandidate(skillId: string, content: string): Promise<ManagedSkillDetail>;
-  activate(skillId: string, input: SkillConfigurationInput): ManagedSkillDetail;
+  activate(skillId: string, input: SkillActivationInput): ManagedSkillDetail;
   configure(skillId: string, input: SkillConfigurationInput): ManagedSkillDetail;
   archive(skillId: string): ManagedSkillDetail;
   restore(skillId: string): ManagedSkillDetail;
@@ -419,6 +420,18 @@ function configuration(input: { enabled: boolean; agent_ids: readonly (typeof SK
   return { enabled: input.enabled, agentIds: [...input.agent_ids] };
 }
 
+function activation(input: {
+  candidate_version_id: string;
+  enabled: boolean;
+  agent_ids: readonly (typeof SKILL_AGENT_IDS)[number][];
+}): SkillActivationInput {
+  return {
+    candidateVersionId: input.candidate_version_id,
+    enabled: input.enabled,
+    agentIds: [...input.agent_ids],
+  };
+}
+
 function boundedFilename(file: File): string {
   const name = basename(file.name.replaceAll("\0", "")).slice(0, MAX_FILENAME_LENGTH);
   return name || "skill.zip";
@@ -589,11 +602,15 @@ export function createAdminSkillRoutes(options: AdminSkillRoutesOptions) {
     .post("/api/admin/skills/:skillId/activate", ({ params, body, headers, set }) => {
       if (!options.authorize(headers)) return unauthorized(set);
       return execute(set, () => ({
-        skill: toDetailDto(options.skills.activate(params.skillId, configuration(body))),
+        skill: toDetailDto(options.skills.activate(params.skillId, activation(body))),
       }));
     }, {
       params: SkillIdParamsSchema,
-      body: ConfigurationBodySchema,
+      body: t.Object({
+        candidate_version_id: t.String({ minLength: 1, maxLength: 128 }),
+        enabled: t.Boolean(),
+        agent_ids: t.Array(SkillAgentIdSchema, { maxItems: SKILL_AGENT_IDS.length, uniqueItems: true }),
+      }, { additionalProperties: false }),
       response: { 200: SkillMutationResponseSchema, ...SkillErrorResponses },
     })
     .put("/api/admin/skills/:skillId/configuration", ({ params, body, headers, set }) => {

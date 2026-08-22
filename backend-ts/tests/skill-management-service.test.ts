@@ -324,6 +324,7 @@ describe("SkillManagementService lifecycle", () => {
     const { service } = createHarness();
     const installed = await service.stageUpload({ filename: "museum.zip", bytes: uploadBytes() });
     await service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
       enabled: true,
       agentIds: ["segment-planner"],
     });
@@ -349,6 +350,7 @@ describe("SkillManagementService lifecycle", () => {
     service.subscribe((snapshot) => events.push(snapshot.generation));
 
     const active = service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
       enabled: true,
       agentIds: ["segment-planner"],
     });
@@ -369,11 +371,13 @@ describe("SkillManagementService lifecycle", () => {
     const { service } = createHarness();
     const installed = await service.stageUpload({ filename: "museum.zip", bytes: uploadBytes() });
     const active = service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
       enabled: true,
       agentIds: ["segment-planner"],
     });
 
     expectManagementCode(() => service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
       enabled: false,
       agentIds: ["summary"],
     }), "skill_version_conflict");
@@ -400,6 +404,7 @@ describe("SkillManagementService lifecycle", () => {
     }
 
     expectManagementCode(() => service.activate(installed.id, {
+      candidateVersionId: danglingCandidateId,
       enabled: true,
       agentIds: ["segment-planner"],
     }), "skill_activation_failed");
@@ -436,7 +441,11 @@ describe("SkillManagementService lifecycle", () => {
   it("requires custom skills to be disabled before atomic archive and restores them disabled", async () => {
     const { service, packageStore } = createHarness();
     const installed = await service.stageUpload({ filename: "museum.zip", bytes: uploadBytes() });
-    service.activate(installed.id, { enabled: true, agentIds: ["segment-planner"] });
+    service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["segment-planner"],
+    });
 
     expectManagementCode(() => service.archive(installed.id), "skill_must_be_disabled");
     service.configure(installed.id, { enabled: false, agentIds: [] });
@@ -466,7 +475,11 @@ describe("SkillManagementService Git, audit, and events", () => {
       repositoryUrl: "https://git.example.com/org/museum.git",
       ref: "main",
     });
-    service.activate(installed.id, { enabled: true, agentIds: ["summary"] });
+    service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["summary"],
+    });
     const generation = service.snapshot().generation;
     const stageCount = gitImporter.stagedRequests.length;
 
@@ -603,7 +616,11 @@ describe("SkillManagementService Git, audit, and events", () => {
     });
     const unsubscribe = service.subscribe((snapshot) => delivered.push(snapshot));
 
-    service.activate(installed.id, { enabled: true, agentIds: ["summary"] });
+    service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["summary"],
+    });
     await service.saveCandidate(installed.id, EDITED_SKILL);
     service.configure(installed.id, { enabled: false, agentIds: [] });
 
@@ -642,7 +659,11 @@ describe("SkillManagementService Git, audit, and events", () => {
     });
     service.subscribe((snapshot) => second.push(snapshot.generation));
 
-    service.activate(installed.id, { enabled: true, agentIds: ["summary"] });
+    service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["summary"],
+    });
 
     expect(first).toEqual([baseGeneration + 1, baseGeneration + 2]);
     expect(second).toEqual([baseGeneration + 1, baseGeneration + 2]);
@@ -661,7 +682,11 @@ describe("SkillManagementService Git, audit, and events", () => {
       unsubscribed.push(snapshot.generation);
     });
 
-    firstHarness.service.activate(firstInstalled.id, { enabled: true, agentIds: ["summary"] });
+    firstHarness.service.activate(firstInstalled.id, {
+      candidateVersionId: firstInstalled.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["summary"],
+    });
     expect(unsubscribed).toEqual([]);
 
     const secondHarness = createHarness();
@@ -673,7 +698,11 @@ describe("SkillManagementService Git, audit, and events", () => {
     secondHarness.service.subscribe(() => secondHarness.service.close());
     secondHarness.service.subscribe((snapshot) => afterClose.push(snapshot.generation));
 
-    secondHarness.service.activate(secondInstalled.id, { enabled: true, agentIds: ["summary"] });
+    secondHarness.service.activate(secondInstalled.id, {
+      candidateVersionId: secondInstalled.candidateVersion!.id,
+      enabled: true,
+      agentIds: ["summary"],
+    });
     expect(afterClose).toEqual([]);
   });
 
@@ -709,7 +738,11 @@ describe("SkillManagementService Git, audit, and events", () => {
       repositoryUrl: "https://git.example.com/org/museum.git",
       ref: "main",
     });
-    service.activate(installed.id, { enabled: false, agentIds: ["summary"] });
+    service.activate(installed.id, {
+      candidateVersionId: installed.candidateVersion!.id,
+      enabled: false,
+      agentIds: ["summary"],
+    });
     importer.remoteGate = deferred<ResolvedGitRemote>();
     const checking = service.checkGitUpdate(installed.id);
 

@@ -22,13 +22,20 @@ import type {
   AdminSkillSummary,
   AdminSkillVersion,
 } from '../types'
+import en from '../i18n/locales/en.json'
+import zh from '../i18n/locales/zh.json'
 import {
   ADMIN_SKILL_AGENT_IDS,
+  STABLE_ADMIN_SKILL_ERROR_CODES,
   adminSkillSourceKey,
   adminSkillStateKey,
   beginCandidateEdit,
+  createAdminSkillDraft,
   filterAdminSkills,
+  hasAdminSkillDraftChanges,
   localizeAdminSkillError,
+  mergeAdminSkillDraft,
+  shouldApplySkillMutation,
   setSkillAssignment,
   skillActions,
   skillInstallSources,
@@ -37,6 +44,8 @@ import {
   validateGitInstallInput,
   validateSkillArchive,
   validateZipSelection,
+  withAdminSkillDraftConfiguration,
+  withAdminSkillDraftContent,
 } from './skill-management'
 
 class MemoryStorage implements Storage {
@@ -323,6 +332,85 @@ describe('admin Skill pure state helpers', () => {
       expect(localizeAdminSkillError({ code })).toBe(`admin.skills.errors.${code}`)
     }
   })
+
+  it('keeps all stable backend error codes aligned with natural Chinese and English copy', () => {
+    expect(STABLE_ADMIN_SKILL_ERROR_CODES).toHaveLength(45)
+    expect(Object.keys(en.admin.skills.errors).sort()).toEqual([
+      'fallback',
+      ...STABLE_ADMIN_SKILL_ERROR_CODES,
+    ].sort())
+    expect(Object.keys(zh.admin.skills.errors).sort()).toEqual([
+      'fallback',
+      ...STABLE_ADMIN_SKILL_ERROR_CODES,
+    ].sort())
+    for (const code of STABLE_ADMIN_SKILL_ERROR_CODES) {
+      expect(en.admin.skills.errors[code]).not.toBe(`admin.skills.errors.${code}`)
+      expect(zh.admin.skills.errors[code]).not.toBe(`admin.skills.errors.${code}`)
+      expect(en.admin.skills.errors[code].trim()).not.toBe('')
+      expect(zh.admin.skills.errors[code].trim()).not.toBe('')
+    }
+  })
+
+  it('tracks content and configuration drafts independently', () => {
+    const initial = createAdminSkillDraft(detail())
+    const contentChanged = withAdminSkillDraftContent(initial, `${initial.editorContent}\nnew line`)
+    const bothChanged = withAdminSkillDraftConfiguration(contentChanged, false, ['summary'])
+
+    expect(initial.contentDirty).toBeFalse()
+    expect(initial.configurationDirty).toBeFalse()
+    expect(contentChanged.contentDirty).toBeTrue()
+    expect(contentChanged.configurationDirty).toBeFalse()
+    expect(bothChanged.contentDirty).toBeTrue()
+    expect(bothChanged.configurationDirty).toBeTrue()
+    expect(hasAdminSkillDraftChanges(bothChanged)).toBeTrue()
+  })
+
+  it('preserves a configuration draft when candidate content is saved or updated', () => {
+    const original = createAdminSkillDraft(detail())
+    const bothChanged = withAdminSkillDraftConfiguration(
+      withAdminSkillDraftContent(original, `${original.editorContent}\nreviewed edit`),
+      true,
+      ['summary', 'plan-editor'],
+    )
+    const serverCandidate = detail({
+      candidate_version: version(3, 'version-3', 'candidate'),
+      candidate_version_id: 'version-3',
+      enabled: false,
+      agent_ids: ['segment-planner'],
+    })
+
+    for (const operation of ['candidate', 'update'] as const) {
+      const merged = mergeAdminSkillDraft(bothChanged, serverCandidate, operation)
+      expect(merged.editorContent).toBe(serverCandidate.candidate_version?.content)
+      expect(merged.contentDirty).toBeFalse()
+      expect(merged.enabled).toBeTrue()
+      expect(merged.agentIds).toEqual(['summary', 'plan-editor'])
+      expect(merged.configurationDirty).toBeTrue()
+    }
+  })
+
+  it('adopts server configuration only after configure or activate succeeds', () => {
+    const draft = withAdminSkillDraftConfiguration(
+      createAdminSkillDraft(detail()),
+      true,
+      ['summary'],
+    )
+    const configured = detail({ enabled: true, agent_ids: ['summary'] })
+
+    for (const operation of ['configure', 'activate'] as const) {
+      const merged = mergeAdminSkillDraft(draft, configured, operation)
+      expect(merged.enabled).toBeTrue()
+      expect(merged.agentIds).toEqual(['summary'])
+      expect(merged.configurationDirty).toBeFalse()
+    }
+  })
+
+  it('accepts a mutation response only for the currently selected origin skill', () => {
+    expect(shouldApplySkillMutation('skill-b', 'skill-a', 'skill-a')).toBeFalse()
+    expect(shouldApplySkillMutation('skill-b', 'skill-b', 'skill-b')).toBeTrue()
+    expect(shouldApplySkillMutation('skill-b', 'skill-b', 'skill-a')).toBeFalse()
+    expect(shouldApplySkillMutation(null, 'skill-a', 'skill-a')).toBeFalse()
+  })
 })
 
 interface CapturedRequest {
@@ -414,6 +502,7 @@ describe('admin Skill API client', () => {
     const encodedId = 'museum%2Fguide%20%3F%23'
     const skillId = 'museum/guide ?#'
     const frozenConfiguration = Object.freeze({
+      candidate_version_id: 'version-2',
       enabled: false,
       agent_ids: Object.freeze(['segment-planner', 'itinerary-reviewer'] as const),
     })
@@ -471,7 +560,11 @@ describe('admin Skill API client', () => {
       {
         method: 'POST',
         path: `/api/admin/skills/${encodedId}/activate`,
-        body: { enabled: false, agent_ids: ['segment-planner', 'itinerary-reviewer'] },
+        body: {
+          candidate_version_id: 'version-2',
+          enabled: false,
+          agent_ids: ['segment-planner', 'itinerary-reviewer'],
+        },
       },
       {
         method: 'PUT',

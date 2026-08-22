@@ -5,6 +5,7 @@ import {
   type ManagedSkill,
   type NewSkillAuditEvent,
   type ReconciledBuiltinSkill,
+  type SkillActivationInput,
   type SkillAgentId,
   type SkillCatalogSnapshot,
   type SkillConfigurationInput,
@@ -250,11 +251,12 @@ export class SkillCatalogRepository {
     return this.get(skillId)!;
   }
 
-  activate(skillId: string, input: SkillConfigurationInput): ManagedSkill {
+  activate(skillId: string, input: SkillActivationInput): ManagedSkill {
     const agentIds = this.normalizeAgentIds(input.agentIds);
     this.transaction(() => {
       const skill = this.requireSkillRow(skillId);
       if (!skill.candidate_version_id) throw new SkillVersionConflictError();
+      if (skill.candidate_version_id !== input.candidateVersionId) throw new SkillVersionConflictError();
       const candidate = this.versionRow(skill.candidate_version_id);
       if (!candidate) throw new Error("candidate version record is missing");
       const activatedAt = nowIso();

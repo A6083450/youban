@@ -21,6 +21,7 @@ import type {
   ManagedSkillDetail,
   ManagedSkillSummary,
   NewSkillAuditEvent,
+  SkillActivationInput,
   SkillCatalogSnapshot,
   SkillConfigurationInput,
 } from "./skill-types.ts";
@@ -360,7 +361,7 @@ export class SkillManagementService implements SkillCatalogProvider {
     });
   }
 
-  activate(skillId: string, input: SkillConfigurationInput): ManagedSkillDetail {
+  activate(skillId: string, input: SkillActivationInput): ManagedSkillDetail {
     this.assertOpen();
     const existing = this.requireSkill(skillId);
     if (existing.archivedAt) throw managementError("skill_archived", "archived skills cannot be activated");

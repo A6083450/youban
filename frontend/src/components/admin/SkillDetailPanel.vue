@@ -1,7 +1,7 @@
 <template>
   <article class="skill-detail" :aria-labelledby="headingId">
     <div class="skill-detail-heading-row">
-      <button class="back-button" type="button" @click="emit('back')">
+      <button class="back-button" type="button" @click="emit('leave-requested')">
         <ArrowLeftOutlined aria-hidden="true" />
         {{ t('admin.skills.backToList') }}
       </button>
@@ -36,18 +36,15 @@
     <div v-if="mutationError" class="operation-message error" role="alert">
       {{ mutationError }}
     </div>
-    <div v-if="operationMessage" class="operation-message" role="status">
-      {{ operationMessage }}
+    <div v-if="busy" class="operation-message" role="status">
+      {{ t(`admin.skills.progress.${busy}`) }}
     </div>
 
     <a-tabs v-model:active-key="activeTab" class="skill-tabs">
       <a-tab-pane key="content" :tab="t('admin.skills.tabs.content')">
         <section class="tab-section">
           <div class="section-heading">
-            <div>
-              <h3>{{ t('admin.skills.content.activeTitle') }}</h3>
-              <p>{{ t('admin.skills.content.activeHint') }}</p>
-            </div>
+            <h3>{{ t('admin.skills.content.activeTitle') }}</h3>
           </div>
           <VersionMetadata v-if="skill.active_version" :version="skill.active_version" />
           <pre v-if="skill.active_version" class="skill-content readonly-content">{{ skill.active_version.content }}</pre>
@@ -58,9 +55,7 @@
           <div class="section-heading">
             <div>
               <h3>{{ t('admin.skills.content.candidateTitle') }}</h3>
-              <p>{{ skill.kind === 'builtin'
-                ? t('admin.skills.content.builtinReadOnly')
-                : t('admin.skills.content.candidateHint') }}</p>
+              <p v-if="skill.kind === 'builtin'">{{ t('admin.skills.content.builtinReadOnly') }}</p>
             </div>
             <a-button
               v-if="skill.kind === 'custom' && !skill.archived_at"
@@ -78,8 +73,8 @@
             v-model="editorContent"
             class="skill-editor"
             :aria-label="t('admin.skills.content.editorLabel')"
+            :disabled="Boolean(busy)"
             spellcheck="false"
-            @input="editorDirty = true"
           />
           <pre v-else-if="skill.candidate_version" class="skill-content readonly-content">{{ skill.candidate_version.content }}</pre>
           <div v-else-if="skill.kind === 'builtin'" class="empty-inline">
@@ -89,10 +84,7 @@
 
         <section v-if="skill.candidate_version" class="tab-section">
           <div class="section-heading">
-            <div>
-              <h3>{{ t('admin.skills.content.diffTitle') }}</h3>
-              <p>{{ t('admin.skills.content.diffHint') }}</p>
-            </div>
+            <h3>{{ t('admin.skills.content.diffTitle') }}</h3>
           </div>
           <div class="diff-legend" aria-hidden="true">
             <span class="diff-label added">{{ t('admin.skills.content.added') }}</span>
@@ -121,10 +113,7 @@
       <a-tab-pane key="assignments" :tab="t('admin.skills.tabs.assignments')">
         <section class="tab-section configuration-section">
           <div class="enable-row">
-            <div>
-              <h3>{{ t('admin.skills.assignments.globalTitle') }}</h3>
-              <p>{{ t('admin.skills.assignments.globalHint') }}</p>
-            </div>
+            <h3>{{ t('admin.skills.assignments.globalTitle') }}</h3>
             <a-switch
               v-model:checked="enabled"
               :disabled="Boolean(busy) || Boolean(skill.archived_at)"
@@ -133,7 +122,6 @@
           </div>
           <fieldset :disabled="Boolean(busy) || Boolean(skill.archived_at)" class="assignment-fieldset">
             <legend>{{ t('admin.skills.assignments.targetsTitle') }}</legend>
-            <p>{{ t('admin.skills.assignments.targetsHint') }}</p>
             <div class="assignment-grid">
               <label v-for="agentId in ADMIN_SKILL_AGENT_IDS" :key="agentId" class="assignment-option">
                 <input
@@ -154,7 +142,7 @@
           <div class="configuration-actions">
             <a-button
               :loading="busy === 'configure'"
-              :disabled="Boolean(busy) || Boolean(skill.archived_at) || editorDirty"
+              :disabled="Boolean(busy) || Boolean(skill.archived_at) || editorDirty || !configurationDirty"
               @click="saveConfiguration"
             >
               <SaveOutlined aria-hidden="true" />
@@ -177,10 +165,7 @@
       <a-tab-pane key="versions" :tab="t('admin.skills.tabs.versions')">
         <section class="tab-section">
           <div class="section-heading">
-            <div>
-              <h3>{{ t('admin.skills.versions.title') }}</h3>
-              <p>{{ t('admin.skills.versions.hint') }}</p>
-            </div>
+            <h3>{{ t('admin.skills.versions.title') }}</h3>
           </div>
           <ol class="version-list">
             <li v-for="version in sortedVersions" :key="version.id" class="version-row">
@@ -217,7 +202,7 @@
       <a-button
         v-if="canArchive"
         danger
-        :disabled="Boolean(busy) || editorDirty"
+        :disabled="Boolean(busy) || hasDirtyDraft"
         @click="archiveDialogOpen = true"
       >
         <InboxOutlined aria-hidden="true" />
@@ -237,7 +222,6 @@
     >
       <p>{{ t('admin.skills.archive.description', { name: skill.name }) }}</p>
     </a-modal>
-    <div class="sr-status" aria-live="polite">{{ operationMessage || mutationError }}</div>
   </article>
 </template>
 
@@ -256,11 +240,15 @@ import {
 import {
   ADMIN_SKILL_AGENT_IDS,
   adminSkillStateKey,
-  beginCandidateEdit,
+  createAdminSkillDraft,
+  hasAdminSkillDraftChanges,
   localizeAdminSkillError,
+  mergeAdminSkillDraft,
   setSkillAssignment,
   skillActions,
   sortAdminSkillVersions,
+  withAdminSkillDraftConfiguration,
+  withAdminSkillDraftContent,
 } from '@/admin/skill-management'
 import {
   adminActivateSkill,
@@ -271,6 +259,10 @@ import {
   adminSaveSkillCandidate,
   isAdminAuthError,
 } from '@/services/api'
+import type {
+  AdminSkillDraftMergeOperation,
+  AdminSkillMutationEvent,
+} from '@/admin/skill-management'
 import type { AdminSkillAgentId, AdminSkillDetail, AdminSkillVersion } from '@/types'
 
 const props = defineProps<{
@@ -279,20 +271,17 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  back: []
-  updated: [skill: AdminSkillDetail]
+  'leave-requested': []
+  'draft-change': [dirty: boolean]
+  updated: [event: AdminSkillMutationEvent]
 }>()
 
 const { t, locale } = useI18n()
 const heading = ref<HTMLElement | null>(null)
 const activeTab = ref('content')
-const editorContent = ref('')
-const editorDirty = ref(false)
-const enabled = ref(false)
-const assignments = ref<AdminSkillAgentId[]>([])
+const draft = ref(createAdminSkillDraft(props.skill))
 const busy = ref<'' | 'save' | 'configure' | 'activate' | 'update' | 'archive' | 'restore'>('')
 const mutationError = ref('')
-const operationMessage = ref('')
 const archiveDialogOpen = ref(false)
 
 const VersionMetadata = defineComponent({
@@ -317,6 +306,22 @@ const stateLabel = computed(() => t(`admin.skills.states.${stateKey.value}`))
 const sortedVersions = computed(() => sortAdminSkillVersions(props.skill.versions).reverse())
 const canArchive = computed(() => skillActions(props.skill).includes('archive'))
 const canRestore = computed(() => skillActions(props.skill).includes('restore'))
+const editorDirty = computed(() => draft.value.contentDirty)
+const configurationDirty = computed(() => draft.value.configurationDirty)
+const hasDirtyDraft = computed(() => hasAdminSkillDraftChanges(draft.value))
+const editorContent = computed({
+  get: () => draft.value.editorContent,
+  set: (content: string) => {
+    draft.value = withAdminSkillDraftContent(draft.value, content)
+  },
+})
+const enabled = computed({
+  get: () => draft.value.enabled,
+  set: (value: boolean) => {
+    draft.value = withAdminSkillDraftConfiguration(draft.value, value, draft.value.agentIds)
+  },
+})
+const assignments = computed(() => draft.value.agentIds)
 const changes = computed(() => diffLines(
   props.skill.active_version?.content ?? '',
   props.skill.candidate_version?.content ?? '',
@@ -330,101 +335,126 @@ function formatDate(value: string): string {
   }).format(date)
 }
 
-const resetState = () => {
-  const editor = beginCandidateEdit(props.skill)
-  editorContent.value = editor.editorContent
-  editorDirty.value = editor.dirty
-  enabled.value = props.skill.enabled
-  assignments.value = [...props.skill.agent_ids]
-}
-
-watch(() => props.skill, resetState, { immediate: true })
 watch(() => props.skill.id, () => {
+  draft.value = createAdminSkillDraft(props.skill)
+  busy.value = ''
   mutationError.value = ''
-  operationMessage.value = ''
+  archiveDialogOpen.value = false
   activeTab.value = 'content'
 })
+watch(hasDirtyDraft, (dirty) => emit('draft-change', dirty), { immediate: true })
 
 const focusHeading = () => heading.value?.focus({ preventScroll: true })
-defineExpose({ focusHeading })
+const discardDraft = () => {
+  draft.value = createAdminSkillDraft(props.skill)
+  mutationError.value = ''
+  archiveDialogOpen.value = false
+}
+defineExpose({ focusHeading, discardDraft })
 
 const toggleAssignment = (agentId: AdminSkillAgentId, assigned: boolean) => {
-  assignments.value = setSkillAssignment(assignments.value, agentId, assigned)
+  draft.value = withAdminSkillDraftConfiguration(
+    draft.value,
+    draft.value.enabled,
+    setSkillAssignment(draft.value.agentIds, agentId, assigned),
+  )
 }
 
 const runMutation = async (
   operation: Exclude<typeof busy.value, ''>,
-  action: () => Promise<AdminSkillDetail>,
+  action: (originSkillId: string) => Promise<AdminSkillDetail>,
   successKey: string,
+  mergeOperation?: AdminSkillDraftMergeOperation,
 ): Promise<boolean> => {
   if (busy.value) return false
+  const originSkillId = props.skill.id
   busy.value = operation
   mutationError.value = ''
-  operationMessage.value = ''
   try {
-    const skill = await action()
-    operationMessage.value = t(successKey)
-    emit('updated', skill)
-    return true
+    const skill = await action(originSkillId)
+    const isCurrent = props.skill.id === originSkillId && skill.id === originSkillId
+    if (isCurrent) {
+      draft.value = mergeOperation
+        ? mergeAdminSkillDraft(draft.value, skill, mergeOperation)
+        : createAdminSkillDraft(skill)
+    }
+    emit('updated', { originSkillId, skill, messageKey: successKey })
+    return isCurrent
   } catch (error) {
     if (isAdminAuthError(error)) {
       props.onUnauthorized()
       return false
     }
-    mutationError.value = t(localizeAdminSkillError(error))
+    if (props.skill.id === originSkillId) {
+      mutationError.value = t(localizeAdminSkillError(error))
+    }
     return false
   } finally {
-    busy.value = ''
+    if (props.skill.id === originSkillId) busy.value = ''
   }
 }
 
 const saveCandidate = () => runMutation(
   'save',
-  async () => (await adminSaveSkillCandidate(props.skill.id, editorContent.value)).skill,
+  async (originSkillId) => (await adminSaveSkillCandidate(originSkillId, editorContent.value)).skill,
   'admin.skills.messages.candidateSaved',
+  'candidate',
 )
 
 const saveConfiguration = () => runMutation(
   'configure',
-  async () => (await adminConfigureSkill(props.skill.id, {
+  async (originSkillId) => (await adminConfigureSkill(originSkillId, {
     enabled: enabled.value,
     agent_ids: assignments.value,
   })).skill,
   'admin.skills.messages.configurationSaved',
+  'configure',
 )
 
-const activateCandidate = () => runMutation(
-  'activate',
-  async () => (await adminActivateSkill(props.skill.id, {
-    enabled: enabled.value,
-    agent_ids: assignments.value,
-  })).skill,
-  'admin.skills.messages.activated',
-)
+const activateCandidate = () => {
+  const candidateVersionId = props.skill.candidate_version?.id
+  if (!candidateVersionId || editorDirty.value) return Promise.resolve(false)
+  return runMutation(
+    'activate',
+    async (originSkillId) => (await adminActivateSkill(originSkillId, {
+      candidate_version_id: candidateVersionId,
+      enabled: enabled.value,
+      agent_ids: assignments.value,
+    })).skill,
+    'admin.skills.messages.activated',
+    'activate',
+  )
+}
 
 const checkUpdate = async () => {
   if (busy.value) return
+  const originSkillId = props.skill.id
   busy.value = 'update'
   mutationError.value = ''
-  operationMessage.value = ''
   try {
-    const response = await adminCheckSkillUpdate(props.skill.id)
-    operationMessage.value = t(response.changed
+    const response = await adminCheckSkillUpdate(originSkillId)
+    if (props.skill.id === originSkillId && response.skill.id === originSkillId) {
+      draft.value = mergeAdminSkillDraft(draft.value, response.skill, 'update')
+    }
+    emit('updated', {
+      originSkillId,
+      skill: response.skill,
+      messageKey: response.changed
       ? 'admin.skills.messages.updateCandidate'
-      : 'admin.skills.messages.updateUnchanged')
-    emit('updated', response.skill)
+      : 'admin.skills.messages.updateUnchanged',
+    })
   } catch (error) {
     if (isAdminAuthError(error)) props.onUnauthorized()
-    else mutationError.value = t(localizeAdminSkillError(error))
+    else if (props.skill.id === originSkillId) mutationError.value = t(localizeAdminSkillError(error))
   } finally {
-    busy.value = ''
+    if (props.skill.id === originSkillId) busy.value = ''
   }
 }
 
 const archiveSkill = async () => {
   const succeeded = await runMutation(
     'archive',
-    async () => (await adminArchiveSkill(props.skill.id)).skill,
+    async (originSkillId) => (await adminArchiveSkill(originSkillId)).skill,
     'admin.skills.messages.archived',
   )
   if (succeeded) archiveDialogOpen.value = false
@@ -432,7 +462,7 @@ const archiveSkill = async () => {
 
 const restoreSkill = () => runMutation(
   'restore',
-  async () => (await adminRestoreSkill(props.skill.id)).skill,
+  async (originSkillId) => (await adminRestoreSkill(originSkillId)).skill,
   'admin.skills.messages.restoredDisabled',
 )
 </script>
@@ -645,8 +675,6 @@ const restoreSkill = () => runMutation(
 .version-state { background: #f1efed; color: #5f5852; }
 
 .skill-command-bar { justify-content: flex-end; flex-wrap: wrap; padding-top: 18px; border-top: 1px solid #ece8e3; }
-.sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-
 @media (max-width: 900px) {
   .assignment-grid { grid-template-columns: 1fr; }
 }

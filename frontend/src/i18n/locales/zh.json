@@ -210,7 +210,6 @@
     },
     "skills": {
       "title": "技能管理",
-      "subtitle": "安装并审核旅行智能体使用的技能内容，控制启用状态和分配范围。",
       "backToList": "返回技能列表",
       "sources": {
         "builtin": "内置",
@@ -274,25 +273,20 @@
       },
       "content": {
         "activeTitle": "当前使用版本",
-        "activeHint": "在新版本审核通过前，智能体继续使用这里的内容。",
         "noActive": "尚无已启用版本。",
         "candidateTitle": "待审核版本",
-        "candidateHint": "编辑后先保存为待审核版本，不会立即替换当前使用版本。",
         "saveBeforeActivate": "内容有未保存的修改，请先保存为待审核版本，再保存配置或启用。",
         "builtinReadOnly": "内置技能内容只读，可调整启用状态和分配范围。",
         "editorLabel": "编辑待审核技能内容",
         "builtinNoCandidate": "当前没有待审核的内置版本。",
         "diffTitle": "内容变更",
-        "diffHint": "对比当前使用版本和待审核版本的完整内容。",
         "added": "新增",
         "removed": "删除",
         "unchanged": "未变更"
       },
       "assignments": {
         "globalTitle": "全局启用",
-        "globalHint": "停用后不会分配给任何智能体，再次启用时保留已选分配。",
-        "targetsTitle": "分配给智能体",
-        "targetsHint": "可选择零个或多个智能体。保存配置不会修改技能内容。"
+        "targetsTitle": "分配给智能体"
       },
       "agents": {
         "parent-assistant": { "name": "主助手", "description": "协调旅行规划与用户对话" },
@@ -304,7 +298,6 @@
       },
       "versions": {
         "title": "版本记录",
-        "hint": "按时间查看待审核、已启用和历史版本。",
         "version": "版本 {number}"
       },
       "versionStates": {
@@ -345,6 +338,19 @@
         "title": "归档技能？",
         "description": "归档“{name}”后，它将从常用列表中移除。恢复后仍保持停用。",
         "confirm": "确认归档"
+      },
+      "discard": {
+        "title": "放弃未保存的修改？",
+        "description": "“{name}”仍有未保存的修改。要放弃修改并继续吗？",
+        "confirm": "放弃修改"
+      },
+      "progress": {
+        "save": "正在保存待审核版本",
+        "configure": "正在保存配置",
+        "activate": "正在启用已审核版本",
+        "update": "正在检查 Git 更新",
+        "archive": "正在归档技能",
+        "restore": "正在恢复技能"
       },
       "messages": {
         "candidateSaved": "已保存待审核版本，当前使用版本未变更。",

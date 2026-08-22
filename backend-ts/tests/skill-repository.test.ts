@@ -92,7 +92,11 @@ describe("SkillCatalogRepository", () => {
     const { database, repository } = createRepository();
     try {
       const first = repository.createCustomSkill(candidate("museum-guide", "first"));
-      repository.activate(first.id, { enabled: true, agentIds: ["parent-assistant"] });
+      repository.activate(first.id, {
+        candidateVersionId: first.candidateVersion!.id,
+        enabled: true,
+        agentIds: ["parent-assistant"],
+      });
       const second = repository.createCustomSkill(candidate("city-guide", "second"));
 
       expect(() => database.raw.query(
@@ -126,6 +130,7 @@ describe("SkillCatalogRepository", () => {
     try {
       const skill = repository.createCustomSkill(candidate("museum-guide", "first"));
       repository.activate(skill.id, {
+        candidateVersionId: skill.candidateVersion!.id,
         enabled: true,
         agentIds: ["parent-assistant", "parent-assistant", "summary"],
       });
@@ -166,11 +171,13 @@ describe("SkillCatalogRepository", () => {
     try {
       const skill = repository.createCustomSkill(candidate("museum-guide", "first"));
       const active = repository.activate(skill.id, {
+        candidateVersionId: skill.candidateVersion!.id,
         enabled: true,
         agentIds: ["segment-planner"],
       });
 
       expect(() => repository.activate(skill.id, {
+        candidateVersionId: skill.candidateVersion!.id,
         enabled: false,
         agentIds: ["summary"],
       })).toThrowError(expect.objectContaining({ code: "skill_version_conflict" }));
@@ -182,6 +189,39 @@ describe("SkillCatalogRepository", () => {
       expect(unchanged.activeVersion?.id).toBe(active.activeVersion?.id);
       expect(unchanged.candidateVersion).toBeUndefined();
       expect(unchanged.versions.map((item) => item.state)).toEqual(["active"]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("activates only the exact candidate version reviewed by the caller", () => {
+    const { database, repository } = createRepository();
+    try {
+      const skill = repository.createCustomSkill(candidate("museum-guide", "first"));
+      const reviewedCandidateId = skill.candidateVersion!.id;
+      const replaced = repository.saveCandidate(skill.id, candidate("museum-guide", "second"));
+      const currentCandidateId = replaced.candidateVersion!.id;
+
+      expect(() => repository.activate(skill.id, {
+        candidateVersionId: reviewedCandidateId,
+        enabled: true,
+        agentIds: ["summary"],
+      })).toThrowError(expect.objectContaining({ code: "skill_version_conflict" }));
+
+      const unchanged = repository.get(skill.id)!;
+      expect(unchanged.activeVersion).toBeUndefined();
+      expect(unchanged.candidateVersion?.id).toBe(currentCandidateId);
+      expect(unchanged.enabled).toBe(false);
+      expect(unchanged.agentIds).toEqual([]);
+
+      const activated = repository.activate(skill.id, {
+        candidateVersionId: currentCandidateId,
+        enabled: true,
+        agentIds: ["summary"],
+      });
+      expect(activated.activeVersion?.id).toBe(currentCandidateId);
+      expect(activated.enabled).toBe(true);
+      expect(activated.agentIds).toEqual(["summary"]);
     } finally {
       database.close();
     }
@@ -204,6 +244,7 @@ describe("SkillCatalogRepository", () => {
       let failure: unknown;
       try {
         repository.activate(skill.id, {
+          candidateVersionId: danglingCandidateId,
           enabled: true,
           agentIds: ["segment-planner"],
         });
@@ -240,6 +281,7 @@ describe("SkillCatalogRepository", () => {
       `);
 
       expect(() => repository.activate(skill.id, {
+        candidateVersionId: skill.candidateVersion!.id,
         enabled: true,
         agentIds: ["parent-assistant"],
       })).toThrow("assignment rejected");

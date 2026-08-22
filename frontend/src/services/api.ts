@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type {
   AdminError,
+  AdminSkillActivationRequest,
   AdminSkillCheckUpdateResponse,
   AdminSkillCandidateRequest,
   AdminSkillConfigurationRequest,
@@ -488,12 +489,15 @@ export async function adminSaveSkillCandidate(
 
 export async function adminActivateSkill(
   skillId: string,
-  configuration: Readonly<AdminSkillConfigurationRequest>,
+  configuration: Readonly<AdminSkillActivationRequest>,
 ): Promise<AdminSkillMutationResponse> {
   return adminSkillRequest(async () => {
     const response = await apiClient.post<AdminSkillMutationResponse>(
       `${adminSkillPath(skillId)}/activate`,
-      configurationBody(configuration),
+      {
+        candidate_version_id: configuration.candidate_version_id,
+        ...configurationBody(configuration),
+      },
     )
     return response.data
   }, '激活技能失败')

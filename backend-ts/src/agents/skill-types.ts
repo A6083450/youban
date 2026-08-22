@@ -28,6 +28,10 @@ export interface SkillConfigurationInput {
   agentIds: readonly SkillAgentId[];
 }
 
+export interface SkillActivationInput extends SkillConfigurationInput {
+  candidateVersionId: string;
+}
+
 export interface CandidateWrite {
   content: string;
   description: string;

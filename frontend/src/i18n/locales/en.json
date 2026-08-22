@@ -210,7 +210,6 @@
     },
     "skills": {
       "title": "Skill Management",
-      "subtitle": "Install and review the instructions used by travel agents, then control availability and assignments.",
       "backToList": "Back to Skill list",
       "sources": {
         "builtin": "Built-in",
@@ -274,25 +273,20 @@
       },
       "content": {
         "activeTitle": "Current active version",
-        "activeHint": "Agents continue using this content until a reviewed version is activated.",
         "noActive": "No version has been activated yet.",
         "candidateTitle": "Pending review version",
-        "candidateHint": "Saving creates a review version and does not replace the active version.",
         "saveBeforeActivate": "Save content changes as a pending review version before saving configuration or activating.",
         "builtinReadOnly": "Built-in content is read-only. Availability and assignments can still be changed.",
         "editorLabel": "Edit Skill content pending review",
         "builtinNoCandidate": "No built-in update is pending review.",
         "diffTitle": "Content changes",
-        "diffHint": "Compare the complete active and pending review content.",
         "added": "Added",
         "removed": "Removed",
         "unchanged": "Unchanged"
       },
       "assignments": {
         "globalTitle": "Enable globally",
-        "globalHint": "When disabled, the Skill is withheld from every agent. Saved assignments remain selected.",
-        "targetsTitle": "Assign to agents",
-        "targetsHint": "Select zero or more agents. Saving configuration never changes Skill content."
+        "targetsTitle": "Assign to agents"
       },
       "agents": {
         "parent-assistant": { "name": "Main assistant", "description": "Coordinates travel planning and conversation" },
@@ -304,7 +298,6 @@
       },
       "versions": {
         "title": "Version history",
-        "hint": "Review pending, active, and previous versions in order.",
         "version": "Version {number}"
       },
       "versionStates": {
@@ -345,6 +338,19 @@
         "title": "Archive Skill?",
         "description": "Archiving “{name}” removes it from the regular list. It stays disabled after restoration.",
         "confirm": "Archive"
+      },
+      "discard": {
+        "title": "Discard unsaved changes?",
+        "description": "Changes to “{name}” have not been saved. Discard them and continue?",
+        "confirm": "Discard changes"
+      },
+      "progress": {
+        "save": "Saving pending review version",
+        "configure": "Saving configuration",
+        "activate": "Activating reviewed version",
+        "update": "Checking Git update",
+        "archive": "Archiving Skill",
+        "restore": "Restoring Skill"
       },
       "messages": {
         "candidateSaved": "Pending review version saved. The active version is unchanged.",

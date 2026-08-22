@@ -35,6 +35,26 @@ export interface AdminSkillCandidateEditorState {
   dirty: boolean
 }
 
+export interface AdminSkillDraftState {
+  skillId: string
+  baselineContent: string
+  editorContent: string
+  contentDirty: boolean
+  baselineEnabled: boolean
+  enabled: boolean
+  baselineAgentIds: AdminSkillAgentId[]
+  agentIds: AdminSkillAgentId[]
+  configurationDirty: boolean
+}
+
+export type AdminSkillDraftMergeOperation = 'candidate' | 'update' | 'configure' | 'activate'
+
+export interface AdminSkillMutationEvent {
+  originSkillId: string
+  skill: AdminSkillDetail
+  messageKey: string
+}
+
 export type AdminSkillFormError =
   | 'zip_required'
   | 'zip_single_file'
@@ -93,6 +113,85 @@ export function beginCandidateEdit(detail: AdminSkillDetail): AdminSkillCandidat
   }
 }
 
+const normalizeSkillAgentIds = (agentIds: readonly AdminSkillAgentId[]): AdminSkillAgentId[] =>
+  ADMIN_SKILL_AGENT_IDS.filter((agentId) => agentIds.includes(agentId))
+
+const sameSkillAgentIds = (
+  left: readonly AdminSkillAgentId[],
+  right: readonly AdminSkillAgentId[],
+): boolean => {
+  const normalizedLeft = normalizeSkillAgentIds(left)
+  const normalizedRight = normalizeSkillAgentIds(right)
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((agentId, index) => agentId === normalizedRight[index])
+}
+
+export function createAdminSkillDraft(detail: AdminSkillDetail): AdminSkillDraftState {
+  const content = detail.candidate_version?.content ?? detail.active_version?.content ?? ''
+  const agentIds = normalizeSkillAgentIds(detail.agent_ids)
+  return {
+    skillId: detail.id,
+    baselineContent: content,
+    editorContent: content,
+    contentDirty: false,
+    baselineEnabled: detail.enabled,
+    enabled: detail.enabled,
+    baselineAgentIds: [...agentIds],
+    agentIds: [...agentIds],
+    configurationDirty: false,
+  }
+}
+
+export function withAdminSkillDraftContent(
+  draft: Readonly<AdminSkillDraftState>,
+  editorContent: string,
+): AdminSkillDraftState {
+  return {
+    ...draft,
+    baselineAgentIds: [...draft.baselineAgentIds],
+    agentIds: [...draft.agentIds],
+    editorContent,
+    contentDirty: editorContent !== draft.baselineContent,
+  }
+}
+
+export function withAdminSkillDraftConfiguration(
+  draft: Readonly<AdminSkillDraftState>,
+  enabled: boolean,
+  agentIds: readonly AdminSkillAgentId[],
+): AdminSkillDraftState {
+  const normalizedAgentIds = normalizeSkillAgentIds(agentIds)
+  return {
+    ...draft,
+    baselineAgentIds: [...draft.baselineAgentIds],
+    enabled,
+    agentIds: normalizedAgentIds,
+    configurationDirty: enabled !== draft.baselineEnabled
+      || !sameSkillAgentIds(normalizedAgentIds, draft.baselineAgentIds),
+  }
+}
+
+export function mergeAdminSkillDraft(
+  draft: Readonly<AdminSkillDraftState>,
+  detail: AdminSkillDetail,
+  operation: AdminSkillDraftMergeOperation,
+): AdminSkillDraftState {
+  const serverDraft = createAdminSkillDraft(detail)
+  if (draft.skillId !== detail.id || operation === 'configure' || operation === 'activate') {
+    return serverDraft
+  }
+  return withAdminSkillDraftConfiguration(serverDraft, draft.enabled, draft.agentIds)
+}
+
+export const hasAdminSkillDraftChanges = (draft: Readonly<AdminSkillDraftState>): boolean =>
+  draft.contentDirty || draft.configurationDirty
+
+export const shouldApplySkillMutation = (
+  selectedSkillId: string | null,
+  originSkillId: string,
+  responseSkillId: string,
+): boolean => selectedSkillId === originSkillId && responseSkillId === originSkillId
+
 export function validateSkillArchive(skill: AdminSkillSummary): string | null {
   if (skill.kind === 'builtin') return 'builtin_skill_immutable'
   if (skill.enabled) return 'skill_must_be_disabled'
@@ -137,7 +236,7 @@ export function validateGitInstallInput(
   return null
 }
 
-const STABLE_ADMIN_SKILL_ERRORS = new Set([
+export const STABLE_ADMIN_SKILL_ERROR_CODES = [
   'skill_not_found',
   'skill_name_conflict',
   'builtin_skill_immutable',
@@ -183,7 +282,9 @@ const STABLE_ADMIN_SKILL_ERRORS = new Set([
   'invalid_source',
   'invalid_request',
   'internal_error',
-])
+] as const
+
+const STABLE_ADMIN_SKILL_ERRORS = new Set<string>(STABLE_ADMIN_SKILL_ERROR_CODES)
 
 export function localizeAdminSkillError(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error

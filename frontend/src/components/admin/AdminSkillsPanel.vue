@@ -1,11 +1,8 @@
 <template>
   <section class="admin-skills-panel" aria-labelledby="admin-skills-title">
     <header class="skills-header">
-      <div>
-        <h1 id="admin-skills-title">{{ t('admin.skills.title') }}</h1>
-        <p>{{ t('admin.skills.subtitle') }}</p>
-      </div>
-      <a-button type="primary" size="large" @click="installOpen = true">
+      <h1 id="admin-skills-title">{{ t('admin.skills.title') }}</h1>
+      <a-button type="primary" size="large" @click="requestInstall">
         <PlusOutlined aria-hidden="true" />
         {{ t('admin.skills.install.action') }}
       </a-button>
@@ -75,7 +72,7 @@
             :class="{ selected: selectedId === item.id }"
             role="option"
             :aria-selected="selectedId === item.id"
-            @click="selectSkill(item.id)"
+            @click="requestSelectSkill(item.id)"
           >
             <span class="skill-row-heading">
               <strong>{{ item.name }}</strong>
@@ -107,7 +104,8 @@
           ref="detailPanel"
           :skill="selectedSkill"
           :on-unauthorized="onUnauthorized"
-          @back="clearSelection"
+          @leave-requested="requestBack"
+          @draft-change="draftDirty = $event"
           @updated="handleUpdated"
         />
         <div v-else class="detail-state no-selection">
@@ -125,7 +123,18 @@
       @close="installOpen = false"
       @installed="handleInstalled"
     />
-    <div class="sr-status" aria-live="polite">{{ liveStatus }}</div>
+    <a-modal
+      :open="discardOpen"
+      :title="t('admin.skills.discard.title')"
+      :ok-text="t('admin.skills.discard.confirm')"
+      :cancel-text="t('common.cancel')"
+      ok-type="danger"
+      :mask-closable="false"
+      @ok="confirmDiscard"
+      @cancel="cancelDiscard"
+    >
+      <p>{{ t('admin.skills.discard.description', { name: selectedSkill?.name ?? '' }) }}</p>
+    </a-modal>
   </section>
 </template>
 
@@ -140,7 +149,13 @@ import {
   ToolOutlined,
   WarningOutlined,
 } from '@ant-design/icons-vue'
-import { adminSkillStateKey, filterAdminSkills, localizeAdminSkillError } from '@/admin/skill-management'
+import {
+  adminSkillStateKey,
+  filterAdminSkills,
+  localizeAdminSkillError,
+  shouldApplySkillMutation,
+} from '@/admin/skill-management'
+import type { AdminSkillMutationEvent } from '@/admin/skill-management'
 import { adminGetSkill, adminListSkills, isAdminAuthError } from '@/services/api'
 import type {
   AdminSkillCapabilities,
@@ -172,7 +187,15 @@ const loadingDetail = ref(false)
 const detailError = ref('')
 const installOpen = ref(false)
 const liveStatus = ref('')
+const draftDirty = ref(false)
+const discardOpen = ref(false)
 const detailPanel = ref<InstanceType<typeof SkillDetailPanel> | null>(null)
+type PendingTransition =
+  | { kind: 'select', skillId: string }
+  | { kind: 'back' }
+  | { kind: 'install' }
+  | { kind: 'installed', skill: AdminSkillDetail }
+const pendingTransition = ref<PendingTransition | null>(null)
 let listRequestId = 0
 let detailRequestId = 0
 
@@ -247,6 +270,9 @@ const loadDetail = async (skillId: string) => {
 }
 
 const selectSkill = (skillId: string) => {
+  if (selectedId.value === skillId && selectedSkill.value) return
+  liveStatus.value = ''
+  draftDirty.value = false
   selectedId.value = skillId
   selectedSkill.value = null
   void loadDetail(skillId)
@@ -257,6 +283,62 @@ const clearSelection = () => {
   selectedId.value = null
   selectedSkill.value = null
   detailError.value = ''
+  draftDirty.value = false
+}
+
+const performTransition = async (transition: PendingTransition) => {
+  if (transition.kind === 'select') {
+    selectSkill(transition.skillId)
+    return
+  }
+  if (transition.kind === 'back') {
+    liveStatus.value = ''
+    clearSelection()
+    return
+  }
+  if (transition.kind === 'install') {
+    liveStatus.value = ''
+    installOpen.value = true
+    return
+  }
+
+  installOpen.value = false
+  includeArchived.value = false
+  await loadSkills()
+  selectSkill(transition.skill.id)
+  selectedSkill.value = transition.skill
+  liveStatus.value = t('admin.skills.install.success')
+  await nextTick()
+  detailPanel.value?.focusHeading()
+}
+
+const requestTransition = (transition: PendingTransition) => {
+  if (draftDirty.value) {
+    pendingTransition.value = transition
+    discardOpen.value = true
+    return
+  }
+  void performTransition(transition)
+}
+
+const requestSelectSkill = (skillId: string) => {
+  if (skillId !== selectedId.value) requestTransition({ kind: 'select', skillId })
+}
+const requestBack = () => requestTransition({ kind: 'back' })
+const requestInstall = () => requestTransition({ kind: 'install' })
+
+const confirmDiscard = () => {
+  const transition = pendingTransition.value
+  detailPanel.value?.discardDraft()
+  draftDirty.value = false
+  discardOpen.value = false
+  pendingTransition.value = null
+  if (transition) void performTransition(transition)
+}
+
+const cancelDiscard = () => {
+  discardOpen.value = false
+  pendingTransition.value = null
 }
 
 const clearFilters = () => {
@@ -265,21 +347,18 @@ const clearFilters = () => {
   stateFilter.value = 'all'
 }
 
-const handleUpdated = async (skill: AdminSkillDetail) => {
-  selectedSkill.value = skill
-  liveStatus.value = t('admin.skills.messages.refreshed')
+const handleUpdated = async (event: AdminSkillMutationEvent) => {
+  const applies = shouldApplySkillMutation(selectedId.value, event.originSkillId, event.skill.id)
+  if (applies) {
+    selectedSkill.value = event.skill
+    liveStatus.value = t(event.messageKey)
+  }
   await loadSkills()
 }
 
 const handleInstalled = async (skill: AdminSkillDetail) => {
   installOpen.value = false
-  includeArchived.value = false
-  await loadSkills()
-  selectedId.value = skill.id
-  selectedSkill.value = skill
-  liveStatus.value = t('admin.skills.install.success')
-  await nextTick()
-  detailPanel.value?.focusHeading()
+  requestTransition({ kind: 'installed', skill })
 }
 
 onMounted(loadSkills)
@@ -302,13 +381,6 @@ onMounted(loadSkills)
   color: #332b25;
   font-size: 22px;
   line-height: 1.35;
-}
-
-.skills-header p {
-  max-width: 720px;
-  margin: 6px 0 0;
-  color: #746b64;
-  font-size: 13px;
 }
 
 .skills-toolbar {
@@ -454,15 +526,6 @@ onMounted(loadSkills)
 .detail-state strong { color: #443b34; font-size: 14px; }
 .list-state.error,
 .detail-state.error { color: #9a251d; }
-
-.sr-status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
 
 @media (max-width: 1180px) {
   .skills-toolbar {
