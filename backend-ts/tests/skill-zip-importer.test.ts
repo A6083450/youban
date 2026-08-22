@@ -96,8 +96,21 @@ describe("ZipSkillImporter", () => {
     ])), "invalid_zip_entry");
     await expectZipCode(importer.stage(createZipFixture([
       { name: "SKILL.md", content: validSkill },
-      { name: "hard-link", content: "target", extraFields: [{ id: 0x000d, data: Buffer.alloc(13) }] },
+      { name: "hard-link", content: "target", extraFields: [{ id: 0x000d, data: Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]) }] },
     ])), "invalid_zip_entry");
+  });
+
+  it("accepts fixed-only UNIX timestamp and uid/gid metadata", async () => {
+    const { importer } = createImporter();
+    const staged = await importer.stage(createZipFixture([
+      {
+        name: "SKILL.md",
+        content: validSkill,
+        extraFields: [{ id: 0x000d, data: Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) }],
+      },
+    ]));
+    expect(staged.document.name).toBe("museum-guide");
+    staged.cleanup();
   });
 
   it("rejects directories carrying declared data", async () => {
@@ -114,7 +127,19 @@ describe("ZipSkillImporter", () => {
     ])), "invalid_zip_entry");
   });
 
-  it.each(["C:skill/SKILL.md", "SKILL.md:payload", "CON/SKILL.md", "docs/name. /SKILL.md", "docs/name /SKILL.md"])(
+  it.each([
+    "C:skill/SKILL.md",
+    "SKILL.md:payload",
+    "CON/SKILL.md",
+    "COM¹/SKILL.md",
+    "COM²/SKILL.md",
+    "COM³/SKILL.md",
+    "LPT¹/SKILL.md",
+    "LPT²/SKILL.md",
+    "LPT³/SKILL.md",
+    "docs/name. /SKILL.md",
+    "docs/name /SKILL.md",
+  ])(
     "rejects non-portable Windows path %s",
     async (name) => {
       const { importer } = createImporter();
@@ -133,6 +158,16 @@ describe("ZipSkillImporter", () => {
 
     expect(() => new SkillPackageStore(linkedRoot)).toThrow("package root is not a directory");
     expect(statSync(target).mode & 0o777).toBe(0o755);
+  });
+
+  it("creates a nested absent package root with contained store directories", () => {
+    const parent = mkdtempSync(join(tmpdir(), "youban-skill-store-nested-"));
+    temporaryRoots.push(parent);
+    const store = new SkillPackageStore(join(parent, "missing", "ancestors", "packages"));
+
+    expect(statSync(store.stagingRoot).isDirectory()).toBe(true);
+    expect(statSync(store.packagesRoot).isDirectory()).toBe(true);
+    expect(statSync(store.archiveRoot).isDirectory()).toBe(true);
   });
 
   it("rejects symlinked staging components before writing through them", () => {

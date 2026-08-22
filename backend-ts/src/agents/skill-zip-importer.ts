@@ -50,7 +50,7 @@ function entryIsDirectory(entry: Entry, archivePath: string): boolean {
   const fileType = unixMode & 0o170000;
   const pathSaysDirectory = entry.fileNameRaw.toString("utf8").endsWith("/");
 
-  if (entry.extraFields.some((field) => field.id === 0x000d)) {
+  if (entry.extraFields.some((field) => field.id === 0x000d && field.data.length !== 12)) {
     zipError("invalid_zip_entry", `ZIP entry uses an unsupported Unix link encoding: ${archivePath}`);
   }
   if (fileType !== 0 && fileType !== 0o100000 && fileType !== 0o040000) {

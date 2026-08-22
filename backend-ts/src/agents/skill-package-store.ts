@@ -17,7 +17,9 @@ import type { ValidatedSkillDocument } from "./skill-document.ts";
 const WINDOWS_RESERVED_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL",
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "COM¹", "COM²", "COM³",
   "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  "LPT¹", "LPT²", "LPT³",
 ]);
 
 export interface StagedSkillPackage {
@@ -76,6 +78,27 @@ function ensureOwnedDirectory(path: string, label: string): void {
   }
 }
 
+function ensureOwnedDirectoryHierarchy(path: string, label: string): void {
+  const missingDirectories: string[] = [];
+  let current = path;
+  while (true) {
+    try {
+      assertOwnedDirectory(current, label);
+      break;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      missingDirectories.unshift(current);
+      current = parent;
+    }
+  }
+  for (const directory of missingDirectories) {
+    mkdirSync(directory, { mode: 0o700 });
+    assertOwnedDirectory(directory, label);
+  }
+}
+
 function assertRealContained(root: string, target: string, allowRoot = false): void {
   const rootRealPath = realpathSync(root);
   const targetRealPath = realpathSync(target);
@@ -92,7 +115,7 @@ export class SkillPackageStore {
 
   constructor(root: string) {
     const resolvedRoot = resolve(root);
-    ensureOwnedDirectory(resolvedRoot, "package root");
+    ensureOwnedDirectoryHierarchy(resolvedRoot, "package root");
     this.stagingRoot = this.createOwnedDirectory(resolvedRoot, "staging");
     this.packagesRoot = this.createOwnedDirectory(resolvedRoot, "packages");
     this.archiveRoot = this.createOwnedDirectory(resolvedRoot, "archive");
