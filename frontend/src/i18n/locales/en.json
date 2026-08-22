@@ -197,10 +197,17 @@
     "login": "Log In",
     "logout": "Log Out",
     "configTitle": "Runtime Settings",
+    "loading": "Loading",
     "loginFailed": "Login failed",
     "wrongPassword": "Incorrect password",
     "sessionExpired": "Session expired, please log in again",
     "backHome": "Back to Home",
+    "navigation": {
+      "label": "Admin navigation",
+      "settings": "Settings",
+      "skills": "Skills",
+      "trips": "Trips"
+    },
     "trips": {
       "title": "All Users' Trip Plans",
       "refresh": "Refresh",
@@ -211,6 +218,7 @@
       "searchPlaceholder": "Search user or destination",
       "statusAll": "All statuses",
       "allUsers": "All plans",
+      "userFilterLabel": "Filter plans by user",
       "colUser": "User",
       "colCity": "Trip",
       "colStatus": "Status",

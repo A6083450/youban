@@ -197,10 +197,17 @@
     "login": "登录",
     "logout": "退出登录",
     "configTitle": "运行时配置",
+    "loading": "正在加载",
     "loginFailed": "登录失败",
     "wrongPassword": "密码错误",
     "sessionExpired": "登录已失效，请重新登录",
     "backHome": "返回首页",
+    "navigation": {
+      "label": "后台管理导航",
+      "settings": "运行设置",
+      "skills": "技能管理",
+      "trips": "行程管理"
+    },
     "trips": {
       "title": "全部用户的游玩计划",
       "refresh": "刷新",
@@ -211,6 +218,7 @@
       "searchPlaceholder": "搜索用户或目的地",
       "statusAll": "全部状态",
       "allUsers": "全部计划",
+      "userFilterLabel": "按用户筛选计划",
       "colUser": "用户",
       "colCity": "行程",
       "colStatus": "状态",
