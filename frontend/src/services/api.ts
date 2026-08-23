@@ -661,15 +661,20 @@ export async function createConversation(
 export async function getConversationSession(
   sessionId: string,
   ownerId?: string,
+  signal?: AbortSignal,
 ): Promise<ConversationSessionDetail> {
   try {
     const response = await apiClient.get<ConversationSessionDetail>(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
-      ownerId ? { headers: { 'X-User-Id': ownerId } } : undefined,
+      {
+        ...(ownerId ? { headers: { 'X-User-Id': ownerId } } : {}),
+        ...(signal ? { signal } : {}),
+      },
     )
     return response.data
   } catch (error: any) {
     console.error('读取对话记录详情失败:', error)
+    if (error.response?.status === 404) throw new ConversationSessionNotFoundError()
     throw new Error(error.response?.data?.detail || error.message || '读取对话记录详情失败')
   }
 }
@@ -681,21 +686,33 @@ export class ConversationSessionRevisionConflictError extends Error {
   }
 }
 
+export class ConversationSessionNotFoundError extends Error {
+  constructor() {
+    super('对话记录不存在')
+    this.name = 'ConversationSessionNotFoundError'
+  }
+}
+
 export async function updateConversationSession(
   sessionId: string,
   input: UpdateConversationRequest,
   ownerId?: string,
+  signal?: AbortSignal,
 ): Promise<ConversationSessionDetail> {
   try {
     const response = await apiClient.put<ConversationSessionDetail>(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
       input,
-      ownerId ? { headers: { 'X-User-Id': ownerId } } : undefined,
+      {
+        ...(ownerId ? { headers: { 'X-User-Id': ownerId } } : {}),
+        ...(signal ? { signal } : {}),
+      },
     )
     return response.data
   } catch (error: any) {
     console.error('更新对话记录失败:', error)
     if (error.response?.status === 409) throw new ConversationSessionRevisionConflictError()
+    if (error.response?.status === 404) throw new ConversationSessionNotFoundError()
     throw new Error(error.response?.data?.detail || error.message || '更新对话记录失败')
   }
 }

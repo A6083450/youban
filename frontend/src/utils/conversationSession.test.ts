@@ -4,6 +4,7 @@ import {
   activeTaskFromConversation,
   captureConversationOperation,
   captureConversationPersistence,
+  captureConversationRestore,
   ConversationPersistenceQueue,
   conversationSelectionAction,
   conversationPersistenceStorageKey,
@@ -13,6 +14,7 @@ import {
   isLegacyImportEligible,
   isCurrentConversationSelection,
   isConversationOperationCurrent,
+  isConversationRestoreCurrent,
   legacyImportFollowUp,
   legacyImportMarkerKey,
   mergeRestoredActiveTask,
@@ -222,6 +224,29 @@ describe('conversation operation ownership', () => {
     expect(isConversationOperationCurrent(context, { ...current, sessionId: 'session-b' })).toBe(false)
     expect(isConversationOperationCurrent(context, { ...current, alive: false })).toBe(false)
   })
+
+  it('invalidates a restore when its request, operation, account, route, or component changes', () => {
+    const context = captureConversationRestore({
+      restoreToken: 4,
+      operationToken: 9,
+      ownerId: 'user-1',
+      sessionId: 'session-b',
+    })
+    const current = {
+      restoreToken: 4,
+      operationToken: 9,
+      ownerId: 'user-1',
+      selectedSessionId: 'session-b',
+      alive: true,
+    }
+
+    expect(isConversationRestoreCurrent(context, current)).toBe(true)
+    expect(isConversationRestoreCurrent(context, { ...current, restoreToken: 5 })).toBe(false)
+    expect(isConversationRestoreCurrent(context, { ...current, operationToken: 10 })).toBe(false)
+    expect(isConversationRestoreCurrent(context, { ...current, ownerId: 'user-2' })).toBe(false)
+    expect(isConversationRestoreCurrent(context, { ...current, selectedSessionId: 'session-c' })).toBe(false)
+    expect(isConversationRestoreCurrent(context, { ...current, alive: false })).toBe(false)
+  })
 })
 
 describe('conversation persistence queue', () => {
@@ -287,7 +312,7 @@ describe('conversation persistence queue', () => {
     ])
   })
 
-  it('retains a failed outgoing capture ahead of a later session until retry succeeds', async () => {
+  it('retains a transiently failed capture without blocking a later session', async () => {
     let shouldFail = true
     const seen: Array<{ sessionId: string | null; text: string }> = []
     const queue = new ConversationPersistenceQueue(async (capture) => {
@@ -295,7 +320,7 @@ describe('conversation persistence queue', () => {
         sessionId: capture.sessionId,
         text: String(capture.snapshot.items[0]?.text),
       })
-      if (shouldFail) return { retryPending: true }
+      if (shouldFail && capture.sessionId === 'session-a') return { retryPending: true }
       return { revision: capture.revision + 1 }
     })
     const snapshot = (text: string) => toServerSnapshot([
@@ -308,22 +333,118 @@ describe('conversation persistence queue', () => {
       revision: 2,
       snapshot: snapshot('会话 A'),
     }))
-    expect(await queue.flush()).toBe(false)
-
     queue.schedule(captureConversationPersistence({
       ownerId: 'user-1',
       sessionId: 'session-b',
       revision: 7,
       snapshot: snapshot('会话 B'),
     }))
+    expect(await queue.flush()).toBe(false)
+    expect(seen).toEqual([
+      { sessionId: 'session-a', text: '会话 A' },
+      { sessionId: 'session-b', text: '会话 B' },
+    ])
+
     shouldFail = false
     expect(await queue.flush()).toBe(true)
 
     expect(seen).toEqual([
       { sessionId: 'session-a', text: '会话 A' },
-      { sessionId: 'session-a', text: '会话 A' },
       { sessionId: 'session-b', text: '会话 B' },
+      { sessionId: 'session-a', text: '会话 A' },
     ])
+  })
+
+  it('drops a permanently deleted session and advances to the next session', async () => {
+    const seen: Array<string | null> = []
+    const queue = new ConversationPersistenceQueue(async (capture) => {
+      seen.push(capture.sessionId)
+      if (capture.sessionId === 'session-deleted') return { discardPendingForSession: true }
+      return { revision: capture.revision + 1 }
+    }, 0)
+    const snapshot = toServerSnapshot([
+      { id: 1, role: 'user', type: 'text', text: '内容' },
+    ], { ...stableState, pendingConfirmId: null, pendingDraft: null, nextId: 2 })
+
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-deleted',
+      revision: 1,
+      snapshot,
+    }))
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-live',
+      revision: 3,
+      snapshot,
+    }))
+
+    expect(await queue.flush()).toBe(true)
+    expect(seen).toEqual(['session-deleted', 'session-live'])
+  })
+
+  it('reports pending persistence per session after another session resolves authoritatively', async () => {
+    const queue = new ConversationPersistenceQueue(async (capture) => {
+      if (capture.sessionId === 'session-a') return { retryPending: true }
+      return { revision: 9, discardPendingForSession: true }
+    }, 0)
+    const snapshot = (text: string) => toServerSnapshot([
+      { id: 1, role: 'user', type: 'text', text },
+    ], { ...stableState, pendingConfirmId: null, pendingDraft: null, nextId: 2 })
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-a',
+      revision: 1,
+      snapshot: snapshot('会话 A 本地'),
+    }))
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-b',
+      revision: 4,
+      snapshot: snapshot('会话 B 旧本地'),
+    }))
+
+    expect(await queue.flush()).toBe(false)
+    expect(queue.hasPending('user-1', 'session-a')).toBe(true)
+    expect(queue.hasPending('user-1', 'session-b')).toBe(false)
+    const serverSnapshot = snapshot('会话 B 服务端权威内容')
+    const persistedSnapshot = snapshot('会话 B 旧本地')
+    const restored = queue.hasPending('user-1', 'session-b') ? persistedSnapshot : serverSnapshot
+    expect(restored.items[0]?.text).toBe('会话 B 服务端权威内容')
+  })
+
+  it('bounds a stalled write, aborts it, and still writes a later session', async () => {
+    const seen: Array<string | null> = []
+    let stalledSignal: AbortSignal | undefined
+    const queue = new ConversationPersistenceQueue(async (capture, signal) => {
+      seen.push(capture.sessionId)
+      if (capture.sessionId === 'session-stalled') {
+        stalledSignal = signal
+        return await new Promise(() => {})
+      }
+      return { revision: capture.revision + 1 }
+    }, 0, 5)
+    const snapshot = toServerSnapshot([
+      { id: 1, role: 'user', type: 'text', text: '内容' },
+    ], { ...stableState, pendingConfirmId: null, pendingDraft: null, nextId: 2 })
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-stalled',
+      revision: 1,
+      snapshot,
+    }))
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-live',
+      revision: 2,
+      snapshot,
+    }))
+
+    const startedAt = Date.now()
+    expect(await queue.flush()).toBe(false)
+    expect(Date.now() - startedAt).toBeLessThan(500)
+    expect(stalledSignal?.aborted).toBe(true)
+    expect(seen).toEqual(['session-stalled', 'session-live'])
   })
 })
 
@@ -386,6 +507,29 @@ describe('conversation persistence fallback envelope', () => {
 
     expect(values.has(legacyKey)).toBe(false)
     expect(values.has(conversationPersistenceStorageKey('user-1', 'session-1'))).toBe(true)
+  })
+
+  it('preserves the raw fallback when writing its durable envelope fails', () => {
+    const legacyKey = 'tripstar.chat_session.user-1'
+    const values = new Map([[legacyKey, 'recoverable raw snapshot']])
+    const storage = {
+      setItem: (key: string, value: string) => {
+        if (key !== legacyKey) throw new Error('quota exceeded')
+        values.set(key, value)
+      },
+      removeItem: (key: string) => { values.delete(key) },
+    }
+    const capture = captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-1',
+      revision: 1,
+      snapshot: toServerSnapshot([
+        { id: 1, role: 'user', type: 'text', text: '去新疆' },
+      ], { ...stableState, pendingConfirmId: null, pendingDraft: null, nextId: 2 }),
+    })
+
+    expect(() => persistConversationFallback(storage, legacyKey, capture)).toThrow('quota exceeded')
+    expect(values.get(legacyKey)).toBe('recoverable raw snapshot')
   })
 })
 

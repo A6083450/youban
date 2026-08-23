@@ -41,6 +41,21 @@ export interface ConversationOperationState extends ConversationOperationContext
   readonly alive: boolean
 }
 
+export interface ConversationRestoreContext {
+  readonly restoreToken: number
+  readonly operationToken: number
+  readonly ownerId: string
+  readonly sessionId: string
+}
+
+export interface ConversationRestoreState {
+  readonly restoreToken: number
+  readonly operationToken: number
+  readonly ownerId: string
+  readonly selectedSessionId: string
+  readonly alive: boolean
+}
+
 export interface ConversationPersistenceCapture {
   readonly ownerId: string
   readonly sessionId: string | null
@@ -56,6 +71,7 @@ export interface ConversationPersistenceResult {
 
 type ConversationPersistenceWriter = (
   capture: ConversationPersistenceCapture,
+  signal: AbortSignal,
 ) => Promise<ConversationPersistenceResult | void>
 
 export interface PendingConversationSubmission {
@@ -97,6 +113,7 @@ export interface ConversationFallbackStorage {
 
 const CONVERSATION_PERSISTENCE_ENVELOPE_VERSION = 1 as const
 const CONVERSATION_PERSISTENCE_STORAGE_PREFIX = 'tripstar.chat_persistence.'
+export const CONVERSATION_PERSISTENCE_WRITE_TIMEOUT_MS = 3_000
 
 const clone = <T>(value: T): T => structuredClone(value)
 
@@ -112,6 +129,21 @@ export const isConversationOperationCurrent = (
   && context.token === current.token
   && context.ownerId === current.ownerId
   && context.sessionId === current.sessionId,
+)
+
+export const captureConversationRestore = (
+  context: ConversationRestoreContext,
+): ConversationRestoreContext => ({ ...context })
+
+export const isConversationRestoreCurrent = (
+  context: ConversationRestoreContext,
+  current: ConversationRestoreState,
+): boolean => Boolean(
+  current.alive
+  && context.restoreToken === current.restoreToken
+  && context.operationToken === current.operationToken
+  && context.ownerId === current.ownerId
+  && context.sessionId === current.selectedSessionId,
 )
 
 export const captureConversationPersistence = (
@@ -168,11 +200,11 @@ export const persistConversationFallback = (
   capture: ConversationPersistenceCapture,
 ): void => {
   if (capture.sessionId) {
-    storage.removeItem(legacyKey)
     storage.setItem(
       conversationPersistenceStorageKey(capture.ownerId, capture.sessionId),
       serializeConversationPersistenceEnvelope(capture),
     )
+    storage.removeItem(legacyKey)
     return
   }
   if (capture.snapshot.items.length === 0 && !capture.snapshot.pendingUserText) {
@@ -191,6 +223,7 @@ export class ConversationPersistenceQueue {
   constructor(
     private readonly write: ConversationPersistenceWriter,
     private readonly debounceMs = 200,
+    private readonly writeTimeoutMs = CONVERSATION_PERSISTENCE_WRITE_TIMEOUT_MS,
   ) {}
 
   schedule(capture: ConversationPersistenceCapture): void {
@@ -218,6 +251,12 @@ export class ConversationPersistenceQueue {
     return succeeded
   }
 
+  hasPending(ownerId: string, sessionId: string | null): boolean {
+    return this.pending.some((capture) => (
+      capture.ownerId === ownerId && capture.sessionId === sessionId
+    ))
+  }
+
   private clearTimer(): void {
     if (!this.timer) return
     clearTimeout(this.timer)
@@ -225,30 +264,81 @@ export class ConversationPersistenceQueue {
   }
 
   private async drain(): Promise<boolean> {
+    const deferredSessionKeys = new Set<string>()
+    let succeeded = true
     while (this.pending.length > 0) {
       const pending = this.pending.shift()!
+      const persistenceKey = this.persistenceKey(pending)
+      if (deferredSessionKeys.has(persistenceKey)) {
+        this.pending.push(pending)
+        if (this.pending.every((capture) => deferredSessionKeys.has(this.persistenceKey(capture)))) break
+        continue
+      }
       const knownRevision = pending.sessionId
-        ? this.latestRevision.get(pending.sessionId) ?? pending.revision
+        ? this.latestRevision.get(persistenceKey) ?? pending.revision
         : pending.revision
       const capture = knownRevision === pending.revision
         ? pending
         : { ...pending, revision: knownRevision }
-      const result = await this.write(capture)
-      if (result?.retryPending) {
-        this.pending.unshift(capture)
-        return false
+      const outcome = await this.writeWithinBudget(capture)
+      const result = outcome.kind === 'result' ? outcome.result : undefined
+      if (outcome.kind !== 'result' || result?.retryPending) {
+        succeeded = false
+        deferredSessionKeys.add(persistenceKey)
+        this.retainLatestCapture(capture)
+        continue
       }
       if (!capture.sessionId || !result) continue
       if (Number.isFinite(result.revision)) {
-        this.latestRevision.set(capture.sessionId, Math.max(0, Math.trunc(result.revision ?? 0)))
+        this.latestRevision.set(persistenceKey, Math.max(0, Math.trunc(result.revision ?? 0)))
       }
       if (result.discardPendingForSession) {
         for (let index = this.pending.length - 1; index >= 0; index -= 1) {
-          if (this.pending[index]?.sessionId === capture.sessionId) this.pending.splice(index, 1)
+          if (this.persistenceKey(this.pending[index]!) === persistenceKey) this.pending.splice(index, 1)
         }
       }
     }
-    return true
+    return succeeded && this.pending.length === 0
+  }
+
+  private persistenceKey(capture: ConversationPersistenceCapture): string {
+    return `${capture.ownerId}\u0000${capture.sessionId ?? ''}`
+  }
+
+  private retainLatestCapture(capture: ConversationPersistenceCapture): void {
+    const persistenceKey = this.persistenceKey(capture)
+    let latest = capture
+    let foundQueuedCapture = false
+    for (let index = this.pending.length - 1; index >= 0; index -= 1) {
+      if (this.persistenceKey(this.pending[index]!) !== persistenceKey) continue
+      if (!foundQueuedCapture) {
+        latest = this.pending[index]!
+        foundQueuedCapture = true
+      }
+      this.pending.splice(index, 1)
+    }
+    this.pending.push(latest)
+  }
+
+  private async writeWithinBudget(capture: ConversationPersistenceCapture): Promise<
+    | { kind: 'result'; result: ConversationPersistenceResult | void }
+    | { kind: 'timeout' }
+    | { kind: 'error' }
+  > {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const timeout = new Promise<{ kind: 'timeout' }>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        resolve({ kind: 'timeout' })
+      }, Math.max(1, this.writeTimeoutMs))
+    })
+    const write = this.write(capture, controller.signal)
+      .then((result) => ({ kind: 'result' as const, result }))
+      .catch(() => ({ kind: 'error' as const }))
+    const outcome = await Promise.race([write, timeout])
+    if (timer) clearTimeout(timer)
+    return outcome
   }
 }
 

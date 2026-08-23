@@ -182,6 +182,7 @@ import PlanComposer from '@/components/PlanComposer.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import WorkProgress from '@/components/WorkProgress.vue'
 import {
+  ConversationSessionNotFoundError,
   ConversationSessionRevisionConflictError,
   confirmTripReplyStream,
   createConversation,
@@ -211,6 +212,7 @@ import {
   activeTaskFromConversation,
   captureConversationOperation,
   captureConversationPersistence,
+  captureConversationRestore,
   ConversationPersistenceQueue,
   conversationPersistenceStorageKey,
   conversationPersistenceStoragePrefix,
@@ -218,7 +220,7 @@ import {
   createConversationIdentity,
   firstUserMessage,
   isConversationOperationCurrent,
-  isCurrentConversationSelection,
+  isConversationRestoreCurrent,
   isLegacyImportEligible,
   legacyImportFollowUp,
   legacyImportMarkerKey,
@@ -507,6 +509,7 @@ const applyConversationDetail = (detail: ConversationSessionDetail): ChatSession
 
 const writeConversationPersistence = async (
   capture: ReturnType<typeof captureConversationPersistence>,
+  signal: AbortSignal,
 ) => {
   persistLocalChatSession(capture)
   const { ownerId, sessionId, snapshot } = capture
@@ -516,6 +519,7 @@ const writeConversationPersistence = async (
       sessionId,
       { revision: capture.revision, snapshot },
       ownerId,
+      signal,
     )
     if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
       acceptConversationRevision(conversationIdentity, sessionId, updated.revision)
@@ -526,15 +530,23 @@ const writeConversationPersistence = async (
   } catch (error: unknown) {
     if (error instanceof ConversationSessionRevisionConflictError) {
       try {
-        const current = await getConversationSession(sessionId, ownerId)
+        const current = await getConversationSession(sessionId, ownerId, signal)
         if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
           applyConversationDetail(current)
         }
         removePersistedConversationCapture(capture)
         return { revision: current.revision, discardPendingForSession: true }
-      } catch {
+      } catch (conflictError: unknown) {
+        if (conflictError instanceof ConversationSessionNotFoundError) {
+          removePersistedConversationCapture(capture)
+          return { discardPendingForSession: true }
+        }
         return { retryPending: true }
       }
+    }
+    if (error instanceof ConversationSessionNotFoundError) {
+      removePersistedConversationCapture(capture)
+      return { discardPendingForSession: true }
     }
     return { retryPending: true }
   }
@@ -917,31 +929,40 @@ const ensureServerConversation = async (firstMessageText: string): Promise<boole
 
 const restoreServerConversation = async (sessionId: string): Promise<void> => {
   const ownerId = userId()
-  const requestToken = ++restoreRequestToken
+  const restoreToken = ++restoreRequestToken
   const persistedCapture = readPersistedConversationCaptures(ownerId)
     .find((capture) => capture.sessionId === sessionId)
   invalidateOperations()
+  const restoreOperationToken = operationToken
+  const restoreContext = captureConversationRestore({
+    restoreToken,
+    operationToken: restoreOperationToken,
+    ownerId,
+    sessionId,
+  })
+  const restoreIsCurrent = (): boolean => isConversationRestoreCurrent(restoreContext, {
+    restoreToken: restoreRequestToken,
+    operationToken,
+    ownerId: userId(),
+    selectedSessionId: queryConversationId(route.query.conversation),
+    alive: isAlive,
+  })
   generating.value = false
-  busy.value = false
-  const outgoingPersisted = await flushCurrentPersistence()
-  if (requestToken !== restoreRequestToken || userId() !== ownerId) return
+  busy.value = true
+  let restoreOwnsBusy = true
   try {
-    const detail = await getConversationSession(sessionId)
-    if (!isCurrentConversationSelection({
-      expectedSessionId: sessionId,
-      selectedSessionId: queryConversationId(route.query.conversation),
-      expectedOwnerId: ownerId,
-      currentOwnerId: userId(),
-      requestToken,
-      currentToken: restoreRequestToken,
-    })) return
+    await flushCurrentPersistence()
+    if (!restoreIsCurrent()) return
+    const targetPersistencePending = persistenceQueue.hasPending(ownerId, sessionId)
+    const detail = await getConversationSession(sessionId, ownerId)
+    if (!restoreIsCurrent()) return
     if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
       removeRecord(conversationIdentity.pendingSessionId)
     }
     resetConversationIdentity(conversationIdentity)
     pendingSubmission = null
     conversationIdentity.pendingSessionId = sessionId
-    const snapshot = !outgoingPersisted && persistedCapture
+    const snapshot = targetPersistencePending && persistedCapture
       ? (() => {
           acceptConversationRevision(
             conversationIdentity,
@@ -955,6 +976,8 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
       : applyConversationDetail(detail)
     if (!snapshot) return
     persistSoon()
+    busy.value = false
+    restoreOwnsBusy = false
     const restoredActiveTask = activeTaskFromConversation(detail)
     if (restoredActiveTask) {
       const localActiveTask = readActiveTripTask(ownerId)
@@ -968,9 +991,11 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
       resumeInterruptedSnapshot(snapshot)
     }
   } catch (error: unknown) {
-    if (requestToken === restoreRequestToken && userId() === ownerId) {
+    if (restoreIsCurrent()) {
       message.error(error instanceof Error ? error.message : '读取对话记录失败')
     }
+  } finally {
+    if (restoreOwnsBusy && restoreIsCurrent()) busy.value = false
   }
 }
 

@@ -29,4 +29,20 @@ describe('chat lifecycle persistence boundaries', () => {
     )?.[0] ?? ''
     expect(ensureBody).toContain('removeLegacyChatSnapshot(ownerId)')
   })
+
+  it('blocks input and revalidates immutable restore ownership around each await', () => {
+    const restoreBody = chatHomeSource.match(
+      /const restoreServerConversation = async[\s\S]*?\n\}/,
+    )?.[0] ?? ''
+    const flushIndex = restoreBody.indexOf('await flushCurrentPersistence()')
+    const fetchIndex = restoreBody.indexOf('await getConversationSession')
+
+    expect(restoreBody.indexOf('busy.value = true')).toBeGreaterThanOrEqual(0)
+    expect(restoreBody.indexOf('busy.value = true')).toBeLessThan(flushIndex)
+    expect(restoreBody).toContain('captureConversationRestore')
+    expect(restoreBody).toContain('operationToken: restoreOperationToken')
+    expect(restoreBody.slice(flushIndex, fetchIndex)).toContain('restoreIsCurrent()')
+    expect(restoreBody.slice(fetchIndex)).toContain('restoreIsCurrent()')
+    expect(restoreBody).toContain('persistenceQueue.hasPending(ownerId, sessionId)')
+  })
 })
