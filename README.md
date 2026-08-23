@@ -163,7 +163,28 @@
 - **用户管理** - 查看和管理用户
 - **行程管理** - 管理所有行程数据
 - **系统配置** - 运行时配置调整
+- **Skills 管理** - 安装、审阅、分配、启用、版本更新、归档和恢复 Agent 指令
 - **数据统计** - 用户和行程统计
+
+#### Skills 管理
+
+启动服务后打开 `/admin`，输入 `DATA_DIR/admin_password.txt` 中的后台密码，然后选择始终可见的一级入口 **Skills**。首次启动会创建默认密码 `admin@123`；正式部署应立即修改该文件并限制读取权限。
+
+- **ZIP 安装**：上传包中必须恰好包含一个 `SKILL.md`，可以位于根目录或唯一的一层包目录。归档最多包含 100 个普通文件、10 MiB 未压缩数据，`SKILL.md` 最大 256 KiB。新安装只创建“候选版本”，默认保持停用。
+- **Git 安装**：只接受 HTTPS 仓库地址，可指定分支、标签、提交或 Skill 子目录。私有仓库凭据仅从服务端 `YOUBAN_SKILL_GIT_TOKEN` 读取，并且只有仓库主机与 `YOUBAN_SKILL_GIT_TOKEN_HOST` 精确匹配时才会发送；凭据不会写入浏览器、数据库、包文件或日志。
+- **审阅与激活**：候选版本先展示完整内容、SHA-256、来源和分配范围。只有显式激活后，新内容才进入运行时；在线编辑和 Git 更新期间，现有激活版本继续工作。Git 更新只能由管理员手动检查，不会定时拉取，也不会自动激活。
+- **Agent 分配**：支持且仅支持六个目标：`parent-assistant`、`destination-researcher`、`segment-planner`、`summary`、`itinerary-reviewer`、`plan-editor`。全局停用会覆盖分配关系，再次启用仍保留原分配。
+- **内置与自定义 Skill**：四个内置 Skill 可以查看、停用、启用和重新分配，但内容只读，不能编辑、归档、恢复或删除。自定义 Skill 必须先停用才能归档；恢复后保持停用，需要管理员再次启用。
+- **安全边界**：运行时只读取经过校验的 `SKILL.md` 文本。包中的脚本、依赖、清单、资源和引用仅作为惰性文件保留，系统不会执行脚本、安装依赖、加载扩展或扩大 Agent 工具权限。
+
+需要复现 Skills 页面验收环境时，先构建前端，再启动任务自有夹具：
+
+```bash
+cd frontend && bun run build
+cd ../backend-ts && bun run browser:skills-fixture
+```
+
+脚本会输出一行 JSON，其中包含 Admin URL、API URL、有效 ZIP 路径和清理标识；使用 `Ctrl+C` 停止后，只会删除该次运行创建的临时数据目录。
 
 ---
 
@@ -419,6 +440,13 @@ youban/
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 | `DATA_DIR` | 数据存储目录 | `./data` |
 
+### 私有 Git Skill 配置
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `YOUBAN_SKILL_GIT_TOKEN` | 私有 HTTPS Git 仓库访问令牌；不会返回给浏览器或持久化 | - |
+| `YOUBAN_SKILL_GIT_TOKEN_HOST` | 允许携带令牌的精确仓库主机名，例如 `git.example.com` | - |
+
 ---
 
 ## 📖 API 文档
@@ -441,6 +469,9 @@ youban/
 | `/api/chat/edit/stream` | POST | 流式修改已有计划 |
 | `/api/poi/search` | GET | POI 搜索 |
 | `/api/admin/settings` | GET/PUT | 管理员运行时配置 |
+| `/api/admin/skills` | GET | 查询 Skill 目录、状态与能力 |
+| `/api/admin/skills/upload` | POST | 上传 ZIP 并创建停用候选版本 |
+| `/api/admin/skills/git` | POST | 从受控 HTTPS Git 来源创建停用候选版本 |
 
 ---
 

@@ -11,6 +11,7 @@
     "test:parallel": "bun test --parallel=4 --isolate --timings=tests/timings.json --update-timings",
     "typecheck": "tsc --noEmit",
     "audit:python-tests": "bun run scripts/generate-python-test-disposition.ts --check",
+    "browser:skills-fixture": "bun run scripts/skill-admin-browser-fixture.ts",
     "bench:pi-subagents": "bun run scripts/benchmark-pi-subagents.ts",
     "profile:cpu": "bun --cpu-prof-md --cpu-prof-dir=profiles scripts/benchmark-pi-subagents.ts",
     "profile:heap": "bun --heap-prof-md --heap-prof-dir=profiles scripts/benchmark-pi-subagents.ts",
