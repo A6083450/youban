@@ -670,6 +670,13 @@ export async function getConversationSession(sessionId: string): Promise<Convers
   }
 }
 
+export class ConversationSessionRevisionConflictError extends Error {
+  constructor() {
+    super('对话记录已在其他页面更新')
+    this.name = 'ConversationSessionRevisionConflictError'
+  }
+}
+
 export async function updateConversationSession(
   sessionId: string,
   input: UpdateConversationRequest,
@@ -682,6 +689,7 @@ export async function updateConversationSession(
     return response.data
   } catch (error: any) {
     console.error('更新对话记录失败:', error)
+    if (error.response?.status === 409) throw new ConversationSessionRevisionConflictError()
     throw new Error(error.response?.data?.detail || error.message || '更新对话记录失败')
   }
 }

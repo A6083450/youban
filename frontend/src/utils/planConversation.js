@@ -1,5 +1,11 @@
 export const NEW_PLAN_EVENT = 'tripstar:new-plan'
 
+export function attachConversationSession(request, sessionId) {
+  const normalized = String(sessionId || '').trim()
+  if (!normalized) return request
+  return { ...request, session_id: normalized }
+}
+
 export function buildArchivedConversation(items) {
   return items
     .filter((item) => (item?.type === 'text' || item?.type === 'draft')

@@ -1,10 +1,28 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  attachConversationSession,
   buildArchivedConversation,
   canUseCachedPlan,
   completeTripPlanResponse,
 } from './planConversation.js'
+
+test('adds the durable conversation id to a confirmed plan request', () => {
+  const request = attachConversationSession({ city: '新疆', execution_token: 'signed' }, 'session-1')
+
+  assert.deepEqual(request, {
+    city: '新疆',
+    execution_token: 'signed',
+    session_id: 'session-1',
+  })
+})
+
+test('leaves a plan request unlinked when there is no durable conversation id', () => {
+  const request = { city: '新疆', execution_token: 'signed' }
+
+  assert.equal(attachConversationSession(request, ''), request)
+  assert.equal('session_id' in request, false)
+})
 
 test('archives all stable creation messages and excludes transient UI items', () => {
   const items = [

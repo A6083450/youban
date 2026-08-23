@@ -171,7 +171,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { Bubble, BubbleList, Prompts, Welcome } from 'vue-element-plus-x'
@@ -181,17 +181,49 @@ import dayjs from 'dayjs'
 import PlanComposer from '@/components/PlanComposer.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import WorkProgress from '@/components/WorkProgress.vue'
-import { parseTripTextStream, confirmTripReplyStream, generateTripPlan, retryTripPlan, watchTripTask } from '@/services/api'
+import {
+  ConversationSessionRevisionConflictError,
+  confirmTripReplyStream,
+  createConversation,
+  generateTripPlan,
+  getConversationSession,
+  parseTripTextStream,
+  retryTripPlan,
+  updateConversationSession,
+  watchTripTask,
+} from '@/services/api'
 import { getCurrentLocale } from '@/i18n'
 import { notifyPlansUpdated, plans, refreshPlans } from '@/stores/plans'
 import { currentUser } from '@/stores/auth'
 import { clearActiveTripTask, readActiveTripTask, saveActiveTripTask } from '@/stores/activeTripTask'
+import {
+  createOptimisticConversationRecord,
+  notifyRecordsUpdated,
+  removeRecord,
+  upsertRecord,
+  waitForConversationTitle,
+} from '@/stores/conversation-records'
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { formatChatDraft, migrateLegacyDraftItems, shouldShowDraftActions } from '@/utils/chatDraft.js'
-import { buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
+import {
+  acceptConversationRevision,
+  createConversationIdentity,
+  firstUserMessage,
+  isCurrentConversationSelection,
+  isLegacyImportEligible,
+  legacyImportMarkerKey,
+  normalizeServerSnapshot,
+  queryConversationId,
+  reserveConversationId,
+  resetConversationIdentity,
+  toServerSnapshot,
+  type ChatSessionSnapshot,
+  type SnapshotItem,
+} from '@/utils/conversationSession'
+import { attachConversationSession, buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
-import type { ChatMessage, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
+import type { ChatMessage, ConversationSessionDetail, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
 
 interface WorkProgressStatus {
   visible: boolean
@@ -223,6 +255,7 @@ type ChatItem = ChatItemData & { id: number }
 
 const { t, tm } = useI18n()
 const router = useRouter()
+const route = useRoute()
 
 // 行程期内(status=completed 且今日落在 start~end 之间)的进行中计划,首页空态直达今日视图
 const ongoingPlans = computed(() => {
@@ -257,7 +290,6 @@ let operationToken = 0
 let isAlive = true
 
 const userId = () => currentUser.value?.user_id || 'anonymous'
-const sessionOwnerId = userId()
 const ownsOperation = (token: number, ownerId: string) =>
   isAlive && token === operationToken && ownerId === userId()
 // 当前行程草稿的对话锚点:不完整时指向追问消息,完整时指向带操作按钮的草稿消息
@@ -267,6 +299,10 @@ const pendingReadinessToken = ref('')
 // 正在等待流式回复的用户消息;刷新时若非空,说明回复被打断,恢复后自动重发续上
 const pendingUserText = ref<string | null>(null)
 let nextId = 1
+const conversationIdentity = reactive(createConversationIdentity())
+let conversationFirstMessage = ''
+let restoreRequestToken = 0
+let routeRestoreReady = false
 
 // 首页示例建议:从 i18n 候选池里随机抽取一批展示,点"换一批"轮换,避免每次进入都是同一组。
 // 待 mem0 记忆架构落地后,改为按用户历史偏好个性化推荐,新用户仍回退到此热门列表。
@@ -365,33 +401,23 @@ const stageText = (stage: TripTaskStage) => {
   return t('home.loading.initializing')
 }
 
-// ─── 对话会话持久化:刷新后整段恢复;中途被打断那条自动重发续上 ───
-const chatSessionStorageKey = (): string => `tripstar.chat_session.${sessionOwnerId}`
+// ─── 对话会话持久化:本地兼容缓存 + 服务端 revision 快照 ───
+const chatSessionStorageKey = (ownerId = userId()): string => `tripstar.chat_session.${ownerId}`
 
-// 仅持久化稳定对话项;typing/streaming/progress 等瞬态不落盘
-type PersistItem = Extract<ChatItem, { type: 'text' | 'draft' | 'failed' | 'done' }>
-const isPersistable = (item: ChatItem): item is PersistItem =>
-  item.type === 'text' || item.type === 'draft' || item.type === 'failed' || item.type === 'done'
+const buildChatSnapshot = (): ChatSessionSnapshot => toServerSnapshot(
+  items.value as SnapshotItem[],
+  {
+    pendingConfirmId: pendingConfirmId.value,
+    pendingDraft: pendingDraft.value,
+    pendingReadinessToken: pendingReadinessToken.value,
+    pendingUserText: pendingUserText.value,
+    nextId,
+  },
+)
 
-interface ChatSessionSnapshot {
-  items: PersistItem[]
-  pendingConfirmId: number | null
-  pendingDraft: ParsedTripDraft | null
-  pendingReadinessToken?: string
-  pendingUserText: string | null
-  nextId: number
-}
-
-const persistChatSession = () => {
+const persistLocalChatSession = () => {
   try {
-    const snapshot: ChatSessionSnapshot = {
-      items: items.value.filter(isPersistable),
-      pendingConfirmId: pendingConfirmId.value,
-      pendingDraft: pendingDraft.value,
-      pendingReadinessToken: pendingReadinessToken.value,
-      pendingUserText: pendingUserText.value,
-      nextId,
-    }
+    const snapshot = buildChatSnapshot()
     // 没有任何有效对话时清掉,避免残留空会话
     if (snapshot.items.length === 0 && !snapshot.pendingUserText) {
       localStorage.removeItem(chatSessionStorageKey())
@@ -403,27 +429,96 @@ const persistChatSession = () => {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 let suppressChatPersistence = false
+let serverWriteInFlight = false
+let serverWritePending = false
+
+const applyChatSnapshot = (snapshot: ChatSessionSnapshot) => {
+  suppressChatPersistence = true
+  items.value = migrateLegacyDraftItems(snapshot.items, getCurrentLocale())
+    .map((item) => ({ ...item })) as ChatItem[]
+  nextId = Math.max(snapshot.nextId || 0, ...items.value.map((item) => item.id + 1), 1)
+  pendingDraft.value = snapshot.pendingDraft as ParsedTripDraft | null
+  pendingReadinessToken.value = snapshot.pendingReadinessToken
+  pendingUserText.value = snapshot.pendingUserText
+  const hasDraftAnchor = snapshot.pendingConfirmId != null
+    && items.value.some((item) => item.id === snapshot.pendingConfirmId && (item.type === 'text' || item.type === 'draft'))
+  pendingConfirmId.value = hasDraftAnchor ? snapshot.pendingConfirmId : null
+  scrollToBottom()
+  nextTick(() => { suppressChatPersistence = false })
+}
+
+const applyConversationDetail = (detail: ConversationSessionDetail): ChatSessionSnapshot | null => {
+  const snapshot = normalizeServerSnapshot(detail.snapshot)
+  if (!snapshot) return null
+  if (!acceptConversationRevision(conversationIdentity, detail.session_id || '', detail.revision)) return null
+  conversationFirstMessage = firstUserMessage(snapshot)
+  applyChatSnapshot(snapshot)
+  upsertRecord(detail)
+  return snapshot
+}
+
+const flushServerChatSession = async (): Promise<void> => {
+  const sessionId = conversationIdentity.sessionId
+  if (!sessionId || suppressChatPersistence) return
+  if (serverWriteInFlight) {
+    serverWritePending = true
+    return
+  }
+  serverWriteInFlight = true
+  const revision = conversationIdentity.revision
+  const snapshot = buildChatSnapshot()
+  try {
+    const updated = await updateConversationSession(sessionId, { revision, snapshot })
+    if (conversationIdentity.sessionId === sessionId) {
+      acceptConversationRevision(conversationIdentity, sessionId, updated.revision)
+      upsertRecord(updated)
+    }
+  } catch (error: unknown) {
+    if (error instanceof ConversationSessionRevisionConflictError
+      && conversationIdentity.sessionId === sessionId) {
+      try {
+        const current = await getConversationSession(sessionId)
+        if (conversationIdentity.sessionId === sessionId) applyConversationDetail(current)
+      } catch { /* 记录已删除或暂时不可用时保留当前本地内容 */ }
+    }
+  } finally {
+    serverWriteInFlight = false
+    if (serverWritePending) {
+      serverWritePending = false
+      void flushServerChatSession()
+    }
+  }
+}
+
 const persistSoon = () => {
   if (suppressChatPersistence) return
   if (persistTimer) clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
     persistTimer = null
-    if (!suppressChatPersistence) persistChatSession()
+    if (!suppressChatPersistence) {
+      persistLocalChatSession()
+      void flushServerChatSession()
+    }
   }, 200)
 }
 
 const clearChatSession = () => {
   suppressChatPersistence = true
+  restoreRequestToken += 1
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   try { localStorage.removeItem(chatSessionStorageKey()) } catch { /* ignore */ }
+  if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
+    removeRecord(conversationIdentity.pendingSessionId)
+  }
+  resetConversationIdentity(conversationIdentity)
+  conversationFirstMessage = ''
 }
 
 const readChatSession = (): ChatSessionSnapshot | null => {
   try {
     const raw = localStorage.getItem(chatSessionStorageKey())
     if (!raw) return null
-    const data = JSON.parse(raw)
-    return Array.isArray(data?.items) ? data : null
+    return normalizeServerSnapshot(JSON.parse(raw))
   } catch {
     return null
   }
@@ -505,6 +600,7 @@ const handlePlanResponse = (
       days: response.data.days.length,
     })
     clearChatSession()
+    notifyRecordsUpdated()
     void router.push(`/plan/${planId}`)
     return true
   } else {
@@ -540,10 +636,11 @@ const resetConversation = () => {
 }
 
 // 页面刷新后:若存在进行中任务,重建对话并重连订阅(后端会先推送当前快照)
-const resumeActiveTask = async () => {
+const resumeActiveTask = async (expectedTaskId = '') => {
   const ownerId = userId()
   const record = readActiveTripTask(ownerId)
   if (!record) return
+  if (expectedTaskId && record.taskId !== expectedTaskId) return
 
   const token = ++operationToken
   const restoredFailure = items.value.find(
@@ -582,6 +679,7 @@ const resumeActiveTask = async () => {
     })
     if (handlePlanResponse(response, progressId, token, ownerId)) {
       clearActiveTripTask(record.taskId, ownerId)
+      notifyRecordsUpdated()
     }
   } catch (error: unknown) {
     if (!ownsOperation(token, ownerId)) return
@@ -594,6 +692,7 @@ const resumeActiveTask = async () => {
       restoredFailure?.checkpointSummary,
     ))
     notifyPlansUpdated()
+    notifyRecordsUpdated()
   } finally {
     if (ownsOperation(token, ownerId)) {
       generating.value = false
@@ -646,7 +745,8 @@ const retryFailedItem = async (
     if (!ownsOperation(token, ownerId)) return
     if (!canClaimActive) throw new Error(t('home.messages.generateRetry'))
     replaceItem(item.id, { role: 'assistant', type: 'progress', status })
-    persistChatSession()
+    persistLocalChatSession()
+    void flushServerChatSession()
     const response = await watchTripTask(item.taskId, {
       onTaskEvent: (event) => {
         if (!ownsOperation(token, ownerId)) return
@@ -656,6 +756,7 @@ const retryFailedItem = async (
     }, task.ws_url)
     if (handlePlanResponse(response, item.id, token, ownerId)) {
       clearActiveTripTask(item.taskId, ownerId)
+      notifyRecordsUpdated()
     }
   } catch (error: unknown) {
     if (!ownsOperation(token, ownerId)) return
@@ -668,6 +769,7 @@ const retryFailedItem = async (
       item.checkpointSummary,
     ))
     notifyPlansUpdated()
+    notifyRecordsUpdated()
     focusFailedCard(item.taskId, token, ownerId)
   } finally {
     if (ownsOperation(token, ownerId)) {
@@ -677,40 +779,124 @@ const retryFailedItem = async (
   }
 }
 
-const restoreChatSession = () => {
-  const snap = readChatSession()
-  if (!snap || !snap.items.length) return
-  items.value = migrateLegacyDraftItems(snap.items, getCurrentLocale())
-    .map((it) => ({ ...it })) as ChatItem[]
-  nextId = Math.max(snap.nextId || 0, ...items.value.map((i) => i.id + 1), 1)
-  pendingDraft.value = snap.pendingDraft || null
-  pendingReadinessToken.value = typeof snap.pendingReadinessToken === 'string'
-    ? snap.pendingReadinessToken
-    : ''
-  // 草稿锚点可能是未完成时的追问,也可能是已完成的路线草稿;避免恢复悬空引用
-  const hasDraftAnchor =
-    snap.pendingConfirmId != null &&
-    items.value.some((i) => i.id === snap.pendingConfirmId && (i.type === 'text' || i.type === 'draft'))
-  pendingConfirmId.value = hasDraftAnchor ? snap.pendingConfirmId : null
-  scrollToBottom()
+const resumeInterruptedSnapshot = (snapshot: ChatSessionSnapshot) => {
+  if (!snapshot.pendingUserText || readActiveTripTask(userId())) return
+  const text = snapshot.pendingUserText
+  const lastUser = [...items.value].reverse().find((item) => item.role === 'user' && item.type === 'text')
+  const lastUserId = lastUser?.id ?? pushItem({ role: 'user', type: 'text', text })
+  if (pendingConfirmId.value !== null && pendingDraft.value) {
+    void handlePendingReply(text, pendingConfirmId.value, pendingDraft.value, lastUserId)
+  } else {
+    void runParseStream(text, lastUserId)
+  }
+}
 
-  // 被打断那条自动重发续上;生成中(存在 active_task)的恢复交给 resumeActiveTask,此处不重发
-  if (snap.pendingUserText && !readActiveTripTask(userId())) {
-    const lastUser = [...items.value].reverse().find((i) => i.role === 'user' && i.type === 'text')
-    const lastUserId = lastUser
-      ? lastUser.id
-      : pushItem({ role: 'user', type: 'text', text: snap.pendingUserText })
-    if (pendingConfirmId.value !== null && pendingDraft.value) {
-      void handlePendingReply(snap.pendingUserText, pendingConfirmId.value, pendingDraft.value, lastUserId)
-    } else {
-      void runParseStream(snap.pendingUserText, lastUserId)
+const updateConversationRoute = (sessionId: string) => {
+  if (queryConversationId(route.query.conversation) === sessionId) return
+  void router.replace({ path: '/', query: { ...route.query, conversation: sessionId } })
+}
+
+const ensureServerConversation = async (firstMessageText: string): Promise<boolean> => {
+  if (conversationIdentity.sessionId) return true
+  const ownerId = userId()
+  const snapshot = buildChatSnapshot()
+  const sessionId = reserveConversationId(conversationIdentity)
+  conversationFirstMessage ||= firstUserMessage(snapshot) || firstMessageText.trim()
+  createOptimisticConversationRecord({
+    sessionId,
+    firstMessage: conversationFirstMessage,
+    userId: userId(),
+  })
+
+  try {
+    const created = await createConversation({
+      session_id: sessionId,
+      first_message: conversationFirstMessage,
+      snapshot,
+    })
+    if (userId() !== ownerId || conversationIdentity.pendingSessionId !== sessionId) return false
+    if (!acceptConversationRevision(conversationIdentity, sessionId, created.revision)) return false
+    upsertRecord(created)
+    persistLocalChatSession()
+    notifyRecordsUpdated()
+    updateConversationRoute(sessionId)
+    void waitForConversationTitle(sessionId)
+    return true
+  } catch (error: unknown) {
+    if (userId() !== ownerId || conversationIdentity.pendingSessionId !== sessionId) return false
+    message.error(error instanceof Error ? error.message : '对话记录保存失败，请重试')
+    return false
+  }
+}
+
+const restoreServerConversation = async (sessionId: string): Promise<void> => {
+  const ownerId = userId()
+  const requestToken = ++restoreRequestToken
+  operationToken += 1
+  generating.value = false
+  busy.value = false
+  try {
+    const detail = await getConversationSession(sessionId)
+    if (!isCurrentConversationSelection({
+      expectedSessionId: sessionId,
+      selectedSessionId: queryConversationId(route.query.conversation),
+      expectedOwnerId: ownerId,
+      currentOwnerId: userId(),
+      requestToken,
+      currentToken: restoreRequestToken,
+    })) return
+    if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
+      removeRecord(conversationIdentity.pendingSessionId)
+    }
+    resetConversationIdentity(conversationIdentity)
+    conversationIdentity.pendingSessionId = sessionId
+    const snapshot = applyConversationDetail(detail)
+    if (!snapshot) return
+    persistLocalChatSession()
+    if (detail.task_id) void resumeActiveTask(detail.task_id)
+    else resumeInterruptedSnapshot(snapshot)
+  } catch (error: unknown) {
+    if (requestToken === restoreRequestToken && userId() === ownerId) {
+      message.error(error instanceof Error ? error.message : '读取对话记录失败')
     }
   }
 }
 
+const importLegacyConversation = async (): Promise<boolean> => {
+  const snapshot = readChatSession()
+  const markerKey = legacyImportMarkerKey(userId())
+  let importMarked = false
+  try { importMarked = localStorage.getItem(markerKey) === '1' } catch { /* ignore */ }
+  if (!isLegacyImportEligible({
+    activeSessionId: conversationIdentity.sessionId || '',
+    importMarked,
+    snapshot,
+  }) || !snapshot) return false
+
+  applyChatSnapshot(snapshot)
+  const initialMessage = firstUserMessage(snapshot)
+  if (!initialMessage) return false
+  const created = await ensureServerConversation(initialMessage)
+  if (created) {
+    try { localStorage.setItem(markerKey, '1') } catch { /* ignore */ }
+  }
+  if (readActiveTripTask(userId())) void resumeActiveTask()
+  else resumeInterruptedSnapshot(snapshot)
+  return true
+}
+
+const initializeConversationSelection = async () => {
+  const selected = queryConversationId(route.query.conversation)
+  if (selected) {
+    if (selected !== conversationIdentity.sessionId) await restoreServerConversation(selected)
+    return
+  }
+  if (!await importLegacyConversation()) void resumeActiveTask()
+}
+
 onMounted(() => {
-  restoreChatSession()
-  void resumeActiveTask()
+  routeRestoreReady = true
+  void initializeConversationSelection()
   if (!plans.value.length) void refreshPlans()
   window.addEventListener(NEW_PLAN_EVENT, resetConversation)
   // 浏览器滚动恢复与字体布局可能晚于首帧,短暂校正确保刷新也落在最新消息
@@ -728,14 +914,38 @@ onUnmounted(() => {
     window.history.scrollRestoration = previousScrollRestoration
   }
   if (persistTimer) clearTimeout(persistTimer)
+  restoreRequestToken += 1
 })
 
 // 对话状态变化后防抖落盘,供刷新恢复
 watch([items, pendingConfirmId, pendingDraft, pendingReadinessToken, pendingUserText], persistSoon, { deep: true })
+watch(() => route.query.conversation, (value) => {
+  if (!routeRestoreReady) return
+  const selected = queryConversationId(value)
+  if (selected === conversationIdentity.sessionId) return
+  if (selected) void restoreServerConversation(selected)
+})
 watch(() => currentUser.value?.user_id, () => {
   operationToken += 1
+  restoreRequestToken += 1
+  if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
+    removeRecord(conversationIdentity.pendingSessionId)
+  }
+  resetConversationIdentity(conversationIdentity)
+  conversationFirstMessage = ''
   generating.value = false
   busy.value = false
+  suppressChatPersistence = true
+  items.value = []
+  pendingConfirmId.value = null
+  pendingDraft.value = null
+  pendingReadinessToken.value = ''
+  pendingUserText.value = null
+  nextId = 1
+  nextTick(() => {
+    suppressChatPersistence = false
+    if (routeRestoreReady) void initializeConversationSelection()
+  })
 })
 watch(() => items.value.length, (length) => {
   if (length > 0) scrollToBottom(true)
@@ -955,6 +1165,16 @@ const handleUserSend = async (text: string) => {
   followingLatest.value = true
   const userItemId = pushItem({ role: 'user', type: 'text', text })
 
+  if (!conversationIdentity.sessionId) {
+    busy.value = true
+    const created = await ensureServerConversation(text)
+    busy.value = false
+    if (!created) {
+      await restoreComposerFocus()
+      return
+    }
+  }
+
   // 有行程草稿时,优先继续同一段对话;完整草稿也可用气泡下方的显式操作
   try {
     if (pendingConfirmId.value !== null && pendingDraft.value) {
@@ -973,11 +1193,12 @@ const onConfirmGenerate = async (
   executionToken: string
 ): Promise<PlanGenerationOutcome> => {
   if (generating.value) return { status: 'submit_failed' }
-  const requestData = buildTripPlanRequest(draft, executionToken, getCurrentLocale())
-  if (!requestData) {
+  const baseRequest = buildTripPlanRequest(draft, executionToken, getCurrentLocale())
+  if (!baseRequest) {
     message.warning(t('home.messages.travelDaysTooLong'))
     return { status: 'submit_failed' }
   }
+  const requestData = attachConversationSession(baseRequest, conversationIdentity.sessionId)
   requestData.conversation = buildArchivedConversation(items.value)
   const travelDays = requestData.travel_days
   const ownerId = userId()
@@ -1000,6 +1221,7 @@ const onConfirmGenerate = async (
     sessionStorage.removeItem('tripPlan')
     sessionStorage.removeItem('graphData')
     sessionStorage.removeItem('planId')
+    await flushServerChatSession()
 
     const response = await generateTripPlan(requestData, {
       onTaskCreated: (task) => {
@@ -1015,6 +1237,7 @@ const onConfirmGenerate = async (
           endDate: requestData.end_date,
         }, ownerId)
         notifyPlansUpdated()
+        notifyRecordsUpdated()
       },
       onTaskEvent: (event) => {
         if (!ownsOperation(token, ownerId)) return
@@ -1049,6 +1272,7 @@ const onConfirmGenerate = async (
           text: error instanceof Error ? error.message : t('home.messages.generateRetry'),
         })
     notifyPlansUpdated()
+    notifyRecordsUpdated()
     return createdTaskId
       ? { status: 'watch_failed', taskId: createdTaskId }
       : { status: 'submit_failed' }

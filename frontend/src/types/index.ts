@@ -235,6 +235,7 @@ export interface TripFormData {
   execution_token: string
   language?: string
   conversation?: ChatMessage[]
+  session_id?: string
 }
 
 export interface TripPlanResponse {

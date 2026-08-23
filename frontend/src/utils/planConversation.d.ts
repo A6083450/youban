@@ -2,6 +2,11 @@ import type { ChatMessage, TripPlanResponse } from '@/types'
 
 export const NEW_PLAN_EVENT: string
 
+export function attachConversationSession<T extends object>(
+  request: T,
+  sessionId?: string | null,
+): T | (T & { session_id: string })
+
 export function buildArchivedConversation(
   items: Array<{ role?: string; type?: string; text?: unknown }>
 ): ChatMessage[]
