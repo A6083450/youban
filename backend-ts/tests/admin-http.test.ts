@@ -244,14 +244,17 @@ describe("admin HTTP", () => {
     const firstDeletedBody = await deletedPage.json() as {
       items: Array<{ record_id: string }>;
       total: number;
+      snapshot_id: string;
     };
     const nextDeletedBody = await deletedNextPage.json() as {
       items: Array<{ record_id: string }>;
       total: number;
+      snapshot_id: string;
     };
     const allSecondBody = await allSecondPage.json() as {
       items: Array<{ record_id: string }>;
       total: number;
+      snapshot_id: string;
     };
     const firstDeletedItems = firstDeletedBody.items;
     const nextDeletedItems = nextDeletedBody.items;
@@ -260,6 +263,8 @@ describe("admin HTTP", () => {
     expect(firstDeletedBody.total).toBe(2);
     expect(nextDeletedBody.total).toBe(2);
     expect(allSecondBody.total).toBe(504);
+    expect(firstDeletedBody.snapshot_id).toMatch(/^[a-f0-9]{64}$/);
+    expect(nextDeletedBody.snapshot_id).toBe(firstDeletedBody.snapshot_id);
     expect(nextDeletedItems[0]?.record_id).not.toBe(firstDeletedItems[0]?.record_id);
     expect(allSecondBody.items).toEqual(
       expect.arrayContaining([
@@ -273,6 +278,58 @@ describe("admin HTTP", () => {
       undefined,
       "admin@123",
     )).status).toBe(422);
+    sessions.close();
+  });
+
+  it("changes the admin record snapshot after same-total replacement or visible content mutation", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    for (const sessionId of ["snapshot-a", "snapshot-b"]) {
+      sessions.create({
+        sessionId,
+        userId: aliceId,
+        firstMessage: sessionId,
+        snapshot: { version: 1, items: [] },
+      });
+    }
+    const readPage = async (offset: number) => {
+      const response = await call(
+        "GET",
+        `/api/admin/records?visibility=active&limit=1&offset=${offset}`,
+        undefined,
+        "admin@123",
+      );
+      expect(response.status).toBe(200);
+      return response.json() as Promise<{ total: number; snapshot_id: string }>;
+    };
+
+    const original = await readPage(0);
+    const unchangedNextPage = await readPage(1);
+    expect(unchangedNextPage.snapshot_id).toBe(original.snapshot_id);
+
+    expect(sessions.hardDelete("snapshot-a")).toBeTrue();
+    sessions.create({
+      sessionId: "snapshot-c",
+      userId: aliceId,
+      firstMessage: "snapshot-c",
+      snapshot: { version: 1, items: [] },
+    });
+    const replaced = await readPage(0);
+    expect(replaced.total).toBe(original.total);
+    expect(replaced.snapshot_id).not.toBe(original.snapshot_id);
+
+    sessions.database.raw.query(
+      "UPDATE conversation_sessions SET title = ?, title_status = ? WHERE session_id = ?",
+    ).run("内容已变化", "generated", "snapshot-c");
+    const contentChanged = await readPage(0);
+    expect(contentChanged.total).toBe(replaced.total);
+    expect(contentChanged.snapshot_id).not.toBe(replaced.snapshot_id);
+
+    runtime.users.database.raw.query(
+      "UPDATE users SET nickname = ?, nickname_key = ? WHERE user_id = ?",
+    ).run("新的昵称", "新的昵称", aliceId);
+    const nicknameChanged = await readPage(0);
+    expect(nicknameChanged.total).toBe(contentChanged.total);
+    expect(nicknameChanged.snapshot_id).not.toBe(contentChanged.snapshot_id);
     sessions.close();
   });
 

@@ -19,6 +19,7 @@ export interface AdminRecordPage {
 export interface AdminRecordPageResult {
   items: AdminConversationRecord[]
   total: number
+  snapshot_id: string
 }
 
 export type AdminRecordPageFetcher = (
@@ -76,6 +77,7 @@ export const loadAllAdminRecordPages = async (
   }
   const records = new Map<string, AdminConversationRecord>()
   let expectedTotal: number | null = null
+  let expectedSnapshotId: string | null = null
   let offset = 0
   for (let pageIndex = 0; pageIndex < ADMIN_RECORD_MAX_PAGE_REQUESTS; pageIndex += 1) {
     const page = await fetchPage(visibility, { limit: pageSize, offset })
@@ -83,8 +85,15 @@ export const loadAllAdminRecordPages = async (
     if (!Number.isSafeInteger(page.total) || page.total < 0) {
       throw new Error('Admin record total is invalid')
     }
+    if (typeof page.snapshot_id !== 'string' || !/^[a-f0-9]{64}$/.test(page.snapshot_id)) {
+      throw new Error('Admin record snapshot is invalid')
+    }
     if (expectedTotal === null) expectedTotal = page.total
     else if (page.total !== expectedTotal) throw new Error('Admin record total changed during pagination')
+    if (expectedSnapshotId === null) expectedSnapshotId = page.snapshot_id
+    else if (page.snapshot_id !== expectedSnapshotId) {
+      throw new Error('Admin record snapshot changed during pagination')
+    }
 
     let added = 0
     for (const record of page.items) {

@@ -892,11 +892,15 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const rawOffset = Number(query.offset ?? 0);
       const offset = Math.min(Math.trunc(rawOffset), Number.MAX_SAFE_INTEGER);
       const page = conversationRecords.listAdmin(query.visibility ?? "all", limit, offset);
+      const nicknames = page.userIds.map((userId) => [userId, users.get(userId)?.nickname ?? ""]);
+      const snapshotId = createHash("sha256")
+        .update(JSON.stringify([page.recordSnapshotId, nicknames]), "utf8")
+        .digest("hex");
       const items = page.items.map((item) => ({
         ...item,
         nickname: users.get(item.user_id)?.nickname ?? "",
       }));
-      return { success: true, items, total: page.total };
+      return { success: true, items, total: page.total, snapshot_id: snapshotId };
     }, {
       query: t.Object({
         visibility: t.Optional(t.Union([

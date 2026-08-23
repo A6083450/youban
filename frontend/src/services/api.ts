@@ -423,11 +423,16 @@ export async function adminGetConversationRecords(
       success: boolean
       items: AdminConversationRecord[]
       total: number
+      snapshot_id: string
     }>(
       '/api/admin/records',
       { headers: adminAuthHeaders(), params: { visibility, limit, offset } },
     )
-    return { items: response.data.items ?? [], total: response.data.total }
+    return {
+      items: response.data.items ?? [],
+      total: response.data.total,
+      snapshot_id: response.data.snapshot_id,
+    }
   } catch (error: any) {
     console.error('读取后台对话记录失败:', error)
     throw toAdminError(error, '读取记录列表失败')

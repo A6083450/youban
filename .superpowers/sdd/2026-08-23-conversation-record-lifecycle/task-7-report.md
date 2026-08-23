@@ -141,3 +141,37 @@
 - The 1,000-request guard can intentionally reject an exceptionally large result that cannot complete inside the bound, but it can no longer be mistaken for a complete list.
 - Namespaced IDs, encoded permanent-delete routing, processing-state protection, and local user/status/search projections are unchanged.
 - No unrelated worktree changes were staged; backend timings and the existing appearance, theme, and chat work remain untouched.
+
+## Review Fix Round 4: Stable Pagination Snapshots
+
+### RED/GREEN Evidence
+
+- RED backend: the admin pagination regressions expected a stable 64-character snapshot across offsets and a changed snapshot after same-total replacement or visible content mutation, but the route returned no snapshot.
+- RED frontend: missing and invalid snapshots resolved successfully, a same-total collection change from `[a,b,c,d]` to `[b,c,d,e]` was combined into a mixed result, and that result replaced the currently rendered records.
+- GREEN focused backend: `cd backend-ts && bun test tests/admin-http.test.ts` passed with 17 tests, 0 failures, and 110 assertions.
+- GREEN focused frontend: `cd frontend && bun test src/admin/conversation-records.test.ts src/admin/skill-management.test.ts` passed with 37 tests, 0 failures, and 372 assertions.
+
+### Implementation
+
+- Extended `GET /api/admin/records` compatibly with an additive `snapshot_id` SHA-256 fingerprint while retaining `success`, `items`, and `total`.
+- The backend computes the record fingerprint from a fixed-field canonical projection of the complete visibility-filtered, deterministically ordered result before page slicing. It covers record identity, content, lifecycle, owner, itinerary metadata, ordering fields, and nested city data with sorted object keys.
+- The HTTP response combines that record fingerprint with the sorted owner-nickname projection for the complete filtered result, so an admin-visible nickname change also invalidates the snapshot.
+- The frontend API DTO now carries `snapshot_id`. The complete-page loader requires a lowercase 64-character SHA-256 value on every page and one unchanged value for the entire load.
+- Missing, malformed, or changing snapshots throw through the existing current-load error path. The admin panel commits records only after a complete successful load, preserving its existing displayed data when a collection changes between pages.
+- Added coverage for stable snapshots across offsets, same-total delete/insert replacement, direct record-content mutation, nickname mutation, valid one-page results, invalid snapshots, the exact same-total mixed-page race, and UI-data preservation after rejection.
+
+### Verification
+
+- Full backend suite: `cd backend-ts && bun test --dots` passed with 459 tests, 0 failures, and 1903 assertions across 50 files.
+- Backend type check: `cd backend-ts && bun run typecheck` passed with no diagnostics.
+- Full frontend suite: `cd frontend && bun test src` passed with 169 tests, 0 failures, and 535 assertions across 25 files.
+- Frontend type check: `cd frontend && bunx vue-tsc --noEmit` passed with no diagnostics.
+- Production build: `cd frontend && bun run build` passed with only the existing unresolved static-resource and chunk-size warnings.
+- `git diff --check` passed.
+
+### Self-review and Concerns
+
+- The snapshot is deterministic and visibility-specific. It changes for any admin-visible record field, ordering change, collection replacement, or relevant nickname mutation without depending on locale comparison or wall-clock generation time.
+- A mutation between pages now produces an explicit retryable load failure rather than a successful mixed or truncated list; the previous complete UI result remains visible.
+- Namespaced IDs, encoded permanent-delete routing, delete/list generation guards, processing-state protection, and local user/status/search projections are unchanged.
+- No unrelated worktree changes were staged; backend timings and the existing appearance, theme, and chat work remain untouched.

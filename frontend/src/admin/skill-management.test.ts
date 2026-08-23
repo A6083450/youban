@@ -480,7 +480,9 @@ beforeAll(() => {
       })
 
       if (url.pathname === '/api/admin/skills') return json(listResponse)
-      if (url.pathname === '/api/admin/records') return json({ success: true, items: [], total: 0 })
+      if (url.pathname === '/api/admin/records') {
+        return json({ success: true, items: [], total: 0, snapshot_id: 'a'.repeat(64) })
+      }
       if (url.pathname.endsWith('/check-update')) return json(updateResponse)
       return json(mutationResponse, url.pathname.endsWith('/upload') || url.pathname.endsWith('/git') ? 201 : 200)
     },
@@ -655,6 +657,7 @@ describe('admin conversation record API client', () => {
     expect(await adminGetConversationRecords('user_deleted', { limit: 200, offset: 400 })).toEqual({
       items: [],
       total: 0,
+      snapshot_id: 'a'.repeat(64),
     })
 
     expect(requests).toHaveLength(1)

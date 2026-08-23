@@ -36,6 +36,15 @@ const record = (
   ...overrides,
 })
 
+const SNAPSHOT_A = 'a'.repeat(64)
+const SNAPSHOT_B = 'b'.repeat(64)
+
+const pageResult = (
+  items: AdminConversationRecord[],
+  total = items.length,
+  snapshot_id = SNAPSHOT_A,
+) => ({ items, total, snapshot_id })
+
 const records = [
   record(),
   record({
@@ -150,10 +159,7 @@ describe('admin conversation record projection', () => {
 
     const loaded = await loadAllAdminRecordPages('user_deleted', async (visibility, page) => {
       requests.push({ visibility, ...page })
-      return {
-        items: source.slice(page.offset, page.offset + page.limit),
-        total: 1_201,
-      }
+      return pageResult(source.slice(page.offset, page.offset + page.limit), 1_201)
     }, 500)
 
     expect(loaded).toHaveLength(1_201)
@@ -175,7 +181,7 @@ describe('admin conversation record projection', () => {
     const loading = loadAllAdminRecordPages('all', async () => {
       calls += 1
       if (calls > 4) throw new Error('pagination did not terminate')
-      return { items: repeatedPage, total: 1_000 }
+      return pageResult(repeatedPage, 1_000)
     })
 
     await expect(loading).rejects.toThrow('progress')
@@ -189,8 +195,8 @@ describe('admin conversation record projection', () => {
       calls += 1
       if (calls > 2) throw new Error('pagination did not terminate')
       return calls === 1
-        ? { items: [record({ record_id: 'session:first-of-many' })], total: 50_001 }
-        : { items: [], total: 50_001 }
+        ? pageResult([record({ record_id: 'session:first-of-many' })], 50_001)
+        : pageResult([], 50_001)
     }, 1)
 
     await expect(loading).rejects.toThrow('incomplete')
@@ -201,10 +207,7 @@ describe('admin conversation record projection', () => {
     let calls = 0
     const loading = loadAllAdminRecordPages('all', async () => {
       calls += 1
-      return {
-        items: [record({ record_id: `session:bounded-${calls}` })],
-        total: 1_001,
-      }
+      return pageResult([record({ record_id: `session:bounded-${calls}` })], 1_001)
     }, 1)
 
     await expect(loading).rejects.toThrow('request bound')
@@ -212,10 +215,9 @@ describe('admin conversation record projection', () => {
   })
 
   it('rejects a short page before the stable total is complete', async () => {
-    const loading = loadAllAdminRecordPages('active', async () => ({
-      items: [record({ record_id: 'session:only-one' })],
-      total: 3,
-    }), 2)
+    const loading = loadAllAdminRecordPages('active', async () => pageResult([
+      record({ record_id: 'session:only-one' }),
+    ], 3), 2)
 
     await expect(loading).rejects.toThrow('incomplete')
   })
@@ -225,6 +227,7 @@ describe('admin conversation record projection', () => {
       await expect(loadAllAdminRecordPages('all', async () => ({
         items: [],
         total: invalidTotal,
+        snapshot_id: SNAPSHOT_A,
       }))).rejects.toThrow('total')
     }
 
@@ -232,9 +235,65 @@ describe('admin conversation record projection', () => {
     await expect(loadAllAdminRecordPages('all', async () => {
       page += 1
       return page === 1
-        ? { items: [record({ record_id: 'session:first' })], total: 2 }
-        : { items: [record({ record_id: 'session:second' })], total: 3 }
+        ? pageResult([record({ record_id: 'session:first' })], 2)
+        : pageResult([record({ record_id: 'session:second' })], 3)
     }, 1)).rejects.toThrow('changed')
+  })
+
+  it('accepts a complete one-page response with a valid stable snapshot', async () => {
+    const only = record({ record_id: 'session:one-page' })
+
+    await expect(loadAllAdminRecordPages('all', async () => pageResult([only], 1))).resolves.toEqual([only])
+  })
+
+  it('rejects missing, invalid, or changing snapshots before returning mixed records', async () => {
+    for (const invalidSnapshot of [undefined, '', 'not-a-hash', 'A'.repeat(64)]) {
+      await expect(loadAllAdminRecordPages('all', async () => ({
+        items: [],
+        total: 0,
+        snapshot_id: invalidSnapshot,
+      }))).rejects.toThrow('snapshot')
+    }
+
+    const firstCollection = ['a', 'b', 'c', 'd'].map((id) => record({
+      record_id: `session:${id}`,
+      session_id: id,
+    }))
+    const replacedCollection = ['b', 'c', 'd', 'e'].map((id) => record({
+      record_id: `session:${id}`,
+      session_id: id,
+    }))
+    let calls = 0
+    const loading = loadAllAdminRecordPages('all', async (_visibility, page) => {
+      const collection = calls === 0 ? firstCollection : replacedCollection
+      const snapshotId = calls === 0 ? SNAPSHOT_A : SNAPSHOT_B
+      calls += 1
+      return pageResult(collection.slice(page.offset, page.offset + page.limit), 4, snapshotId)
+    }, 2)
+
+    await expect(loading).rejects.toThrow('snapshot')
+    expect(calls).toBe(2)
+  })
+
+  it('keeps the currently rendered records when a current snapshot load is rejected', async () => {
+    const existing = record({ record_id: 'session:existing' })
+    let calls = 0
+    const loader = createAdminRecordVisibilityLoader(async () => {
+      calls += 1
+      return calls === 1
+        ? pageResult([record({ record_id: 'session:a' })], 2, SNAPSHOT_A)
+        : pageResult([record({ record_id: 'session:b' })], 2, SNAPSHOT_B)
+    }, 1)
+    let rendered = [existing]
+
+    const result = await loader.load('all')
+    if (result.current && !result.error) rendered = result.records
+
+    expect(result).toEqual(expect.objectContaining({
+      current: true,
+      error: expect.objectContaining({ message: expect.stringContaining('snapshot') }),
+    }))
+    expect(rendered).toEqual([existing])
   })
 
   it('marks an older visibility request stale when a newer filter resolves first', async () => {
@@ -244,11 +303,10 @@ describe('admin conversation record projection', () => {
     })
     const loader = createAdminRecordVisibilityLoader(async (visibility) => (
       visibility === 'active'
-        ? activePage.then((items) => ({ items, total: items.length }))
-        : {
-            items: [record({ record_id: 'session:deleted-latest', user_deleted_at: '2026-08-24T11:00:00Z' })],
-            total: 1,
-          }
+        ? activePage.then((items) => pageResult(items))
+        : pageResult([
+            record({ record_id: 'session:deleted-latest', user_deleted_at: '2026-08-24T11:00:00Z' }),
+          ])
     ), 500)
 
     const older = loader.load('active')
@@ -280,9 +338,9 @@ describe('admin conversation record projection', () => {
         const items = await new Promise<AdminConversationRecord[]>((resolve) => {
           resolveOld = resolve
         })
-        return { items, total: items.length }
+        return pageResult(items)
       }
-      return { items: [], total: 0 }
+      return pageResult([])
     })
     let rendered = [deletedRecord]
     const commit = (result: Awaited<ReturnType<typeof loader.load>>) => {
@@ -315,7 +373,7 @@ describe('admin conversation record projection', () => {
     })
     const loader = createAdminRecordVisibilityLoader(async (visibility) => {
       if (visibility === 'active') return oldPage
-      if (visibility === 'user_deleted') return { items: [], total: 0 }
+      if (visibility === 'user_deleted') return pageResult([])
       throw new Error('current list failed')
     })
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ConversationTitle } from "../agents/conversation-title.ts";
@@ -42,6 +43,52 @@ export interface ConversationRecord {
 
 export interface ConversationSessionDetail extends ConversationRecord {
   snapshot: ConversationSessionSnapshot;
+}
+
+interface AdminConversationRecordPage {
+  items: ConversationRecord[];
+  total: number;
+  recordSnapshotId: string;
+  userIds: string[];
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, entry]) => [key, canonicalize(entry)]));
+  }
+  return value;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function adminRecordSnapshotId(records: readonly ConversationRecord[]): string {
+  const projection = records.map((record) => [
+    record.record_id,
+    record.kind,
+    record.session_id,
+    record.plan_id,
+    record.task_id,
+    record.title,
+    record.title_status,
+    record.state,
+    record.revision,
+    record.status,
+    record.user_id,
+    record.city,
+    canonicalize(record.cities),
+    record.start_date,
+    record.end_date,
+    record.travel_days,
+    record.updated_at,
+    record.overall_suggestions,
+    record.user_deleted_at,
+  ]);
+  return createHash("sha256").update(JSON.stringify(projection), "utf8").digest("hex");
 }
 
 function emptyPlanMetadata() {
@@ -138,7 +185,7 @@ export class ConversationRecordService {
     visibility: ConversationRecordVisibility,
     limit: number,
     offset = 0,
-  ): { items: ConversationRecord[]; total: number } {
+  ): AdminConversationRecordPage {
     const normalizedOffset = Math.max(0, Math.trunc(offset));
     const sessions = this.sessions.listAll();
     const history = this.tasks.listHistory({
@@ -172,12 +219,14 @@ export class ConversationRecordService {
       .filter((record) => visibility === "all"
         || (visibility === "active" ? record.user_deleted_at === null : record.user_deleted_at !== null))
       .sort((left, right) => (
-        right.updated_at.localeCompare(left.updated_at)
-        || left.record_id.localeCompare(right.record_id)
+        compareText(right.updated_at, left.updated_at)
+        || compareText(left.record_id, right.record_id)
       ));
     return {
       items: filtered.slice(normalizedOffset, normalizedOffset + limit),
       total: filtered.length,
+      recordSnapshotId: adminRecordSnapshotId(filtered),
+      userIds: [...new Set(filtered.map((record) => record.user_id))].sort(compareText),
     };
   }
 
