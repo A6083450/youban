@@ -542,6 +542,38 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
   });
 
+  it("accepts the visible Chinese and English detailed-itinerary commands", async () => {
+    const draft = {
+      city: "北京",
+      cities: [{ city: "北京", days: 3 }],
+      start_date: "2026-10-01",
+      end_date: "2026-10-03",
+      travel_days: 3,
+    };
+
+    for (const [text, language] of [
+      ["生成详细行程", "zh-CN"],
+      ["Generate detailed itinerary", "en-US"],
+    ] as const) {
+      const output = JSON.stringify({
+        action: "ask_confirmation",
+        confidence: 0.2,
+        message: "需要确认吗？",
+      });
+      const { runtime, ledger } = makeRuntime([[output]]);
+      const response = await post(runtime.app, "/api/trip/confirm-reply", {
+        text,
+        draft,
+        language,
+      });
+      const result = await response.json() as Record<string, any>;
+
+      expect(result.action).toBe("confirm");
+      expect(result.execution_token).not.toBe("");
+      expect(ledger.validate(result.execution_token, { ...draft, language }).valid).toBeTrue();
+    }
+  });
+
   it("never treats a negated confirmation phrase as explicit authorization", async () => {
     const output = JSON.stringify({
       action: "ask_confirmation",

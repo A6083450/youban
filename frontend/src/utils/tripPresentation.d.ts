@@ -54,6 +54,7 @@ export type TimelineEntry =
   | MealTimelineEntry
 
 export function normalizeReferenceTime(value: unknown): string | null
+export function normalizeTripCityNames(value: unknown, fallback?: unknown): string[]
 export function parseTripDate(value: unknown): Date | null
 export function resolveItineraryDisplayMode(dayCount: number): ItineraryDisplayMode
 export function groupItineraryDays(days: DayPlan[], mode: ItineraryDisplayMode): ItineraryDayGroup[]

@@ -86,10 +86,13 @@ function nonBlank(value: unknown, fallback: string): string {
 
 function isExplicitExecutionAuthorization(value: unknown): boolean {
   const text = String(value ?? "").replace(/\s+/g, "").trim();
+  const lower = text.toLowerCase();
   if (!text
     || /[?？]/.test(text)
-    || /(不(?:确认|确定|同意|要|想)|不要|先不|别|取消|稍等|等等|修改|改成|暂不)/.test(text)) return false;
-  if (/^(确认|确定|开始吧|就这样|按这个来)$/.test(text)) return true;
+    || /(不(?:确认|确定|同意|要|想)|不要|先不|别|取消|稍等|等等|修改|改成|暂不)/.test(text)
+    || /(don't|dont|donot|notyet|cancel|stop|change|modify)/.test(lower)) return false;
+  if (/^(确认|确定|开始吧|就这样|按这个来|生成详细行程)$/.test(text)) return true;
+  if (/^(generatedetaileditinerary|createdetaileditinerary|startplanning)$/.test(lower)) return true;
   const confirms = /(确认|确定|同意|就按|照.+执行|立即.+生成)/.test(text);
   const executes = /(方案|生成|执行|开始)/.test(text);
   return confirms && executes;

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMarqueeDrag } from '@/composables/useMarqueeDrag'
 import type { TripPlan } from '@/types'
-import { resolveTripBlueprint } from '@/utils/tripPresentation.js'
+import { normalizeTripCityNames, resolveTripBlueprint } from '@/utils/tripPresentation.js'
 
 const props = defineProps<{ tripPlan: TripPlan; attractionPhotos: Record<string, string> }>()
 const emit = defineEmits<{ (event: 'select-day', dayArrayIndex: number): void }>()
@@ -17,10 +17,7 @@ type TripDay = TripPlan['days'][number]
 const days = computed<TripDay[]>(() => (Array.isArray(props.tripPlan?.days) ? props.tripPlan.days : []))
 const blueprint = computed(() => resolveTripBlueprint(props.tripPlan))
 
-const cities = computed(() => {
-  const list = props.tripPlan?.cities?.length ? props.tripPlan.cities : [props.tripPlan?.city || '']
-  return list.filter(Boolean)
-})
+const cities = computed(() => normalizeTripCityNames(props.tripPlan?.cities, props.tripPlan?.city))
 const title = computed(() => (
   blueprint.value.title
   || t('result.graph.journeyTitle', { days: days.value.length, cities: cities.value.join(' → ') })

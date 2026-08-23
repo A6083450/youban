@@ -123,6 +123,7 @@ test('update replaces the draft without generating', () => {
       action: 'update',
       message: '已更新住宿。',
       trip: updatedDraft,
+      ready_to_generate: true,
       execution_token: 'must-not-be-used',
     }),
     {
@@ -130,9 +131,22 @@ test('update replaces the draft without generating', () => {
       draft: updatedDraft,
       cardId: 7,
       message: '已更新住宿。',
+      readyToGenerate: true,
       keepDraft: true,
     }
   )
+})
+
+test('incomplete update keeps actions hidden', () => {
+  const effect = reduceConfirmationDecision(state, {
+    action: 'update',
+    message: '还需要确认出发日期。',
+    trip: { ...draft, inferred_fields: ['dates'] },
+    ready_to_generate: false,
+  })
+
+  assert.equal(effect.type, 'update')
+  assert.equal(effect.readyToGenerate, false)
 })
 
 test('cancel clears the draft without generating', () => {

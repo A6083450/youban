@@ -7,7 +7,7 @@ export interface ConfirmationState {
 
 export type ConfirmationEffect =
   | { type: 'message'; message: string; keepDraft: true }
-  | { type: 'update'; draft: ParsedTripDraft; cardId: number; message: string; keepDraft: true }
+  | { type: 'update'; draft: ParsedTripDraft; cardId: number; message: string; readyToGenerate?: boolean; keepDraft: true }
   | { type: 'cancel'; message: string; cardId: number; keepDraft: false }
   | { type: 'error'; message: string; keepDraft: true }
   | { type: 'generate'; draft: ParsedTripDraft; token: string; keepDraft: false }

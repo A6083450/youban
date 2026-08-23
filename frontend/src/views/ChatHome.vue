@@ -33,15 +33,40 @@
             </template>
             <template #content>
               <div v-if="item.type === 'text' && item.role === 'user'" class="user-message">{{ item.text }}</div>
-              <MarkdownRenderer
-                v-else-if="item.type === 'text'"
-                class="assistant-markdown"
-                :markdown="item.text"
-                :allow-html="false"
-                :enable-shiki="false"
-                :enable-mermaid="false"
-                :style="markdownStyle"
-              />
+              <div v-else-if="item.type === 'text' || item.type === 'draft'" class="assistant-message">
+                <MarkdownRenderer
+                  class="assistant-markdown"
+                  :markdown="item.text"
+                  :allow-html="false"
+                  :enable-shiki="false"
+                  :enable-mermaid="false"
+                  :style="markdownStyle"
+                />
+                <div
+                  v-if="item.type === 'draft' && canActOnDraft(item)"
+                  class="draft-actions"
+                  :aria-label="t('composer.draftActions')"
+                >
+                  <button
+                    type="button"
+                    class="draft-action primary"
+                    :disabled="busy"
+                    @click="generateDetailedTrip(item)"
+                  >
+                    <CircleCheckFilled aria-hidden="true" />
+                    <span>{{ t('composer.generateDetailed') }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="draft-action"
+                    :disabled="busy"
+                    @click="adjustTripDraft"
+                  >
+                    <EditPen aria-hidden="true" />
+                    <span>{{ t('composer.adjustDraft') }}</span>
+                  </button>
+                </div>
+              </div>
               <div v-else-if="item.type === 'streaming'" class="streaming-message" aria-live="polite">
                 <MarkdownRenderer
                   v-if="item.text"
@@ -55,7 +80,6 @@
                 <span v-if="item.text" class="stream-caret" aria-hidden="true"></span>
                 <span v-else class="stream-wait">{{ t('composer.parsing') }}</span>
               </div>
-              <TripDraftConfirmCard v-else-if="item.type === 'confirm'" :draft="item.draft" />
               <WorkProgress
                 v-else-if="item.type === 'progress'"
                 class="progress-wrap"
@@ -151,11 +175,10 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { Bubble, BubbleList, Prompts, Welcome } from 'vue-element-plus-x'
-import { CircleCheckFilled, Compass, UserFilled } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Compass, EditPen, UserFilled } from '@element-plus/icons-vue'
 import { MarkdownRenderer } from 'x-markdown-vue'
 import dayjs from 'dayjs'
 import PlanComposer from '@/components/PlanComposer.vue'
-import TripDraftConfirmCard from '@/components/TripDraftConfirmCard.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import WorkProgress from '@/components/WorkProgress.vue'
 import { parseTripTextStream, confirmTripReplyStream, generateTripPlan, retryTripPlan, watchTripTask } from '@/services/api'
@@ -165,6 +188,7 @@ import { currentUser } from '@/stores/auth'
 import { clearActiveTripTask, readActiveTripTask, saveActiveTripTask } from '@/stores/activeTripTask'
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
+import { formatChatDraft, migrateLegacyDraftItems, shouldShowDraftActions } from '@/utils/chatDraft.js'
 import { buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
 import type { ChatMessage, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
@@ -182,7 +206,7 @@ type ChatItemData =
   | { role: 'assistant'; type: 'text'; text: string }
   | { role: 'assistant'; type: 'typing' }
   | { role: 'assistant'; type: 'streaming'; text: string }
-  | { role: 'assistant'; type: 'confirm'; draft: ParsedTripDraft }
+  | { role: 'assistant'; type: 'draft'; text: string; draft: ParsedTripDraft; ready: boolean }
   | { role: 'assistant'; type: 'progress'; status: WorkProgressStatus }
   | {
       role: 'assistant'
@@ -236,7 +260,7 @@ const userId = () => currentUser.value?.user_id || 'anonymous'
 const sessionOwnerId = userId()
 const ownsOperation = (token: number, ownerId: string) =>
   isAlive && token === operationToken && ownerId === userId()
-// 待确认的行程卡片:用户可直接在输入框里回复"确定/再想想/补充修改",不必点卡片按钮
+// 当前行程草稿的对话锚点:不完整时指向追问消息,完整时指向带操作按钮的草稿消息
 const pendingConfirmId = ref<number | null>(null)
 const pendingDraft = ref<ParsedTripDraft | null>(null)
 // 正在等待流式回复的用户消息;刷新时若非空,说明回复被打断,恢复后自动重发续上
@@ -260,7 +284,7 @@ const promptItems = computed(() => suggestions.value.map((suggestion) => ({
 })))
 
 const isStructuredItem = (item: ChatItem): boolean =>
-  item.type === 'confirm' || item.type === 'progress' || item.type === 'failed' || item.type === 'done'
+  item.type === 'progress' || item.type === 'failed' || item.type === 'done'
 
 const shuffle = (arr: string[]): string[] => {
   const a = [...arr]
@@ -344,9 +368,9 @@ const stageText = (stage: TripTaskStage) => {
 const chatSessionStorageKey = (): string => `tripstar.chat_session.${sessionOwnerId}`
 
 // 仅持久化稳定对话项;typing/streaming/progress 等瞬态不落盘
-type PersistItem = Extract<ChatItem, { type: 'text' | 'confirm' | 'failed' | 'done' }>
+type PersistItem = Extract<ChatItem, { type: 'text' | 'draft' | 'failed' | 'done' }>
 const isPersistable = (item: ChatItem): item is PersistItem =>
-  item.type === 'text' || item.type === 'confirm' || item.type === 'failed' || item.type === 'done'
+  item.type === 'text' || item.type === 'draft' || item.type === 'failed' || item.type === 'done'
 
 interface ChatSessionSnapshot {
   items: PersistItem[]
@@ -652,14 +676,15 @@ const retryFailedItem = async (
 const restoreChatSession = () => {
   const snap = readChatSession()
   if (!snap || !snap.items.length) return
-  items.value = snap.items.map((it) => ({ ...it })) as ChatItem[]
+  items.value = migrateLegacyDraftItems(snap.items, getCurrentLocale())
+    .map((it) => ({ ...it })) as ChatItem[]
   nextId = Math.max(snap.nextId || 0, ...items.value.map((i) => i.id + 1), 1)
   pendingDraft.value = snap.pendingDraft || null
-  // 仅当该卡片确实在恢复的对话里时才认它,避免悬空引用
-  const hasCard =
+  // 草稿锚点可能是未完成时的追问,也可能是已完成的路线草稿;避免恢复悬空引用
+  const hasDraftAnchor =
     snap.pendingConfirmId != null &&
-    items.value.some((i) => i.id === snap.pendingConfirmId && i.type === 'confirm')
-  pendingConfirmId.value = hasCard ? snap.pendingConfirmId : null
+    items.value.some((i) => i.id === snap.pendingConfirmId && (i.type === 'text' || i.type === 'draft'))
+  pendingConfirmId.value = hasDraftAnchor ? snap.pendingConfirmId : null
   scrollToBottom()
 
   // 被打断那条自动重发续上;生成中(存在 active_task)的恢复交给 resumeActiveTask,此处不重发
@@ -714,7 +739,7 @@ const clearPendingConfirm = () => {
   pendingDraft.value = null
 }
 
-// 给 agent 的最近对话历史:包含确认卡片语义,排除本轮刚加入的用户消息
+// 给 agent 的最近对话历史:包含可见的路线草稿文本,排除本轮刚加入的用户消息
 const getConversationHistory = (currentUserItemId: number) =>
   buildConversationHistory(items.value, currentUserItemId)
 
@@ -732,7 +757,20 @@ const formatAgentReply = (res: TripParseApiResponse): string => {
   return parts.filter(Boolean).join('\n\n') || res.clarify_question || t('composer.clarifyFallback')
 }
 
-// 待确认卡片期间的所有回复都交给后端 Agent 决策,前端只解释结构化 action
+const pushDraftMessage = (draft: ParsedTripDraft): number => pushItem({
+  role: 'assistant',
+  type: 'draft',
+  text: formatChatDraft(draft, getCurrentLocale()),
+  draft,
+  ready: true,
+})
+
+const canActOnDraft = (item: ChatItem): boolean =>
+  item.type === 'draft'
+  && item.id === pendingConfirmId.value
+  && shouldShowDraftActions(item.ready)
+
+// 草稿对话期间的所有回复都交给后端 Agent 决策,前端只解释结构化 action
 const handlePendingReply = async (
   text: string,
   cardId: number,
@@ -779,13 +817,11 @@ const handlePendingReply = async (
       removeItem(streamId)
       clearPendingConfirm()
       if (result.pending) {
-        pendingConfirmId.value = result.pending.cardId
         pendingDraft.value = result.pending.draft
-        replaceItem(result.pending.cardId, {
-          role: 'assistant',
-          type: 'confirm',
-          draft: result.pending.draft,
-        })
+        const anchor = items.value.find((item) => item.id === result.pending?.cardId)
+        pendingConfirmId.value = anchor?.type === 'draft'
+          ? anchor.id
+          : pushDraftMessage(result.pending.draft)
       }
     } else if (effect.type === 'update') {
       replaceItem(streamId, {
@@ -793,17 +829,17 @@ const handlePendingReply = async (
         type: 'text',
         text: effect.message || t('composer.clarifyFallback'),
       })
-      pendingConfirmId.value = effect.cardId
       pendingDraft.value = effect.draft
-      replaceItem(effect.cardId, { role: 'assistant', type: 'confirm', draft: effect.draft })
+      pendingConfirmId.value = effect.readyToGenerate
+        ? pushDraftMessage(effect.draft)
+        : streamId
     } else if (effect.type === 'cancel') {
-      removeItem(streamId)
-      clearPendingConfirm()
-      replaceItem(effect.cardId, {
+      replaceItem(streamId, {
         role: 'assistant',
         type: 'text',
         text: effect.message || t('composer.canceled'),
       })
+      clearPendingConfirm()
     } else {
       // chat / ask_confirmation:流式气泡定格为最终回复
       replaceItem(streamId, {
@@ -813,6 +849,8 @@ const handlePendingReply = async (
           ? t('composer.parseFailed')
           : t('composer.clarifyFallback')),
       })
+      const anchor = items.value.find((item) => item.id === cardId)
+      if (anchor?.type !== 'draft') pendingConfirmId.value = streamId
     }
   } finally {
     pendingUserText.value = null
@@ -845,15 +883,12 @@ const runParseStream = async (text: string, userItemId: number) => {
       // 逐字流出的是 reply;final 到达后补全为完整回复(含推荐列表/追问)
       replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
     } else {
-      // 任何 plan 都必须进入确认卡片;先保留 agent 的自然回应,再展示草稿卡片
-      if (res.reply?.trim()) {
-        replaceItem(streamId, { role: 'assistant', type: 'text', text: res.reply.trim() })
-        pendingConfirmId.value = pushItem({ role: 'assistant', type: 'confirm', draft: res.trip })
-      } else {
-        replaceItem(streamId, { role: 'assistant', type: 'confirm', draft: res.trip })
-        pendingConfirmId.value = streamId
-      }
+      // 未完整时继续用普通对话追问;完整后再补一条带常驻操作的路线草稿消息
+      replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
       pendingDraft.value = res.trip
+      pendingConfirmId.value = res.ready_to_generate === true
+        ? pushDraftMessage(res.trip)
+        : streamId
     }
   } catch (error: any) {
     replaceItem(streamId, {
@@ -873,13 +908,31 @@ const restoreComposerFocus = async (): Promise<void> => {
   if (!busy.value) composerRef.value?.focus()
 }
 
+const generateDetailedTrip = async (item: ChatItem) => {
+  if (busy.value || item.type !== 'draft' || !canActOnDraft(item)) return
+  followingLatest.value = true
+  const command = t('composer.generateDetailed')
+  const userItemId = pushItem({ role: 'user', type: 'text', text: command })
+  try {
+    await handlePendingReply(command, item.id, item.draft, userItemId)
+  } finally {
+    await restoreComposerFocus()
+  }
+}
+
+const adjustTripDraft = async () => {
+  followingLatest.value = true
+  await nextTick()
+  composerRef.value?.focus()
+}
+
 const handleUserSend = async (text: string) => {
   if (busy.value) return
   // 用户主动发送新消息时重新跟随最新对话
   followingLatest.value = true
   const userItemId = pushItem({ role: 'user', type: 'text', text })
 
-  // 有待确认的行程卡片时,优先用对话方式处理,不要求用户点卡片按钮
+  // 有行程草稿时,优先继续同一段对话;完整草稿也可用气泡下方的显式操作
   try {
     if (pendingConfirmId.value !== null && pendingDraft.value) {
       await handlePendingReply(text, pendingConfirmId.value, pendingDraft.value, userItemId)
@@ -1062,6 +1115,69 @@ const onConfirmGenerate = async (
   font-size: 14px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+.assistant-message {
+  min-width: 0;
+}
+
+.draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.draft-action {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.draft-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.draft-action:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--surface-soft);
+}
+
+.draft-action.primary {
+  border-color: var(--accent-primary);
+  color: #fff;
+  background: var(--accent-primary);
+}
+
+.draft-action.primary:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent-strong);
+}
+
+.draft-action:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.draft-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 :deep(.assistant-markdown > :first-child) {

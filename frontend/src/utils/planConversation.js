@@ -2,7 +2,8 @@ export const NEW_PLAN_EVENT = 'tripstar:new-plan'
 
 export function buildArchivedConversation(items) {
   return items
-    .filter((item) => item?.type === 'text' && (item.role === 'user' || item.role === 'assistant'))
+    .filter((item) => (item?.type === 'text' || item?.type === 'draft')
+      && (item.role === 'user' || item.role === 'assistant'))
     .map((item) => ({ role: item.role, content: String(item.text ?? '').trim() }))
     .filter((message) => message.content)
 }

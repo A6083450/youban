@@ -30,6 +30,9 @@ export function reduceConfirmationDecision(state, response) {
       draft: response.trip,
       cardId: state.cardId,
       message: response.message || '',
+      ...(typeof response.ready_to_generate === 'boolean'
+        ? { readyToGenerate: response.ready_to_generate }
+        : {}),
       keepDraft: true,
     }
   }

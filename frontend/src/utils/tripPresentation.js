@@ -31,6 +31,22 @@ export function normalizeReferenceTime(value) {
   return REFERENCE_TIME_PATTERN.test(normalized) ? normalized : null
 }
 
+export function normalizeTripCityNames(value, fallback = '') {
+  const cities = Array.isArray(value) ? value : []
+  const names = cities
+    .map((entry) => {
+      if (typeof entry === 'string') return entry.trim()
+      if (entry && typeof entry === 'object' && typeof entry.city === 'string') {
+        return entry.city.trim()
+      }
+      return ''
+    })
+    .filter(Boolean)
+  if (names.length) return names
+  const fallbackName = typeof fallback === 'string' ? fallback.trim() : ''
+  return fallbackName ? [fallbackName] : []
+}
+
 export function parseTripDate(value) {
   if (typeof value !== 'string') return null
 

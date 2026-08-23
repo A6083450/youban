@@ -3,12 +3,23 @@ import assert from 'node:assert/strict'
 import {
   buildDayTimeline,
   groupItineraryDays,
+  normalizeTripCityNames,
   normalizeReferenceTime,
   resolveItineraryDisplayMode,
   resolveTripBlueprint,
 } from './tripPresentation.js'
 
 process.env.TZ = 'UTC'
+
+test('normalizes legacy city strings and current city-stay objects for display', () => {
+  assert.deepEqual(normalizeTripCityNames([
+    '乌鲁木齐',
+    { city: '阿勒泰', days: 5 },
+    { city: '  ' },
+    null,
+  ], '新疆'), ['乌鲁木齐', '阿勒泰'])
+  assert.deepEqual(normalizeTripCityNames([], '新疆'), ['新疆'])
+})
 
 const days = [
   { day_index: 0, city: '上海', attractions: [{ name: '外滩' }], meals: [] },
