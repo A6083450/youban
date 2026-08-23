@@ -531,12 +531,13 @@ export interface TripParseApiResponse {
 
 export type TripConfirmReplyAction = 'confirm' | 'cancel' | 'update' | 'chat' | 'ask_confirmation'
 
-// 待确认卡片期间,后端 Agent 对用户回复的决策结果
+// 对话草稿期间,后端 Agent 对用户回复的决策结果
 export interface TripConfirmReplyResponse {
   success: boolean
   action: TripConfirmReplyAction
   confidence: number
   message: string
+  ready_to_generate?: boolean
   trip?: ParsedTripDraft | null
   decision_id?: string
   execution_token?: string

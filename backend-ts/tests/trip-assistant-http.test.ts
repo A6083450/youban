@@ -428,6 +428,66 @@ describe("trip parse/confirm HTTP and SSE", () => {
     }));
   });
 
+  it("keeps an updated draft conversational while required details are still missing", async () => {
+    const output = JSON.stringify({
+      action: "update",
+      confidence: 0.92,
+      message: "三天记下了。你大概什么时候出发？",
+      cities: [{ city: "北京", days: 3 }],
+      traveler_count: 1,
+      ready_to_generate: false,
+      inferred_fields: ["dates", "transportation", "accommodation"],
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "玩三天",
+      draft: { cities: [{ city: "北京", days: 1 }] },
+      language: "zh-CN",
+      today: "2026-08-23",
+    });
+
+    expect(await response.json()).toEqual(expect.objectContaining({
+      action: "update",
+      ready_to_generate: false,
+      message: "三天记下了。你大概什么时候出发？",
+      trip: expect.objectContaining({ travel_days: 3 }),
+    }));
+  });
+
+  it("marks an updated draft ready only when the intake Agent says it is complete", async () => {
+    const output = JSON.stringify({
+      action: "update",
+      confidence: 0.96,
+      message: "信息齐了，我先给你一份路线初稿。",
+      cities: [{ city: "北京", days: 3 }],
+      start_date: "2026-10-01",
+      transportation: "公共交通",
+      accommodation: "舒适型酒店",
+      traveler_count: 2,
+      room_count: 1,
+      preferences: ["历史文化"],
+      ready_to_generate: true,
+      inferred_fields: [],
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "国庆出发，两个人，喜欢历史文化",
+      draft: { cities: [{ city: "北京", days: 3 }] },
+      language: "zh-CN",
+      today: "2026-08-23",
+    });
+
+    expect(await response.json()).toEqual(expect.objectContaining({
+      action: "update",
+      ready_to_generate: true,
+      trip: expect.objectContaining({
+        start_date: "2026-10-01",
+        traveler_count: 2,
+        inferred_fields: [],
+      }),
+    }));
+  });
+
   it("honors an explicit execution command even when the model asks for confirmation again", async () => {
     const draft = {
       city: "乌鲁木齐",
@@ -444,6 +504,33 @@ describe("trip parse/confirm HTTP and SSE", () => {
     const { runtime, ledger } = makeRuntime([[output]]);
     const response = await post(runtime.app, "/api/trip/confirm-reply", {
       text: "确认，立即按这个方案生成",
+      draft,
+      language: "zh-CN",
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.action).toBe("confirm");
+    expect(result.confidence).toBe(1);
+    expect(result.execution_token).not.toBe("");
+    expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
+  });
+
+  it("treats a short affirmative as explicit authorization for a present draft", async () => {
+    const draft = {
+      city: "北京",
+      cities: [{ city: "北京", days: 3 }],
+      start_date: "2026-10-01",
+      end_date: "2026-10-03",
+      travel_days: 3,
+    };
+    const output = JSON.stringify({
+      action: "ask_confirmation",
+      confidence: 0.2,
+      message: "你要开始生成吗？",
+    });
+    const { runtime, ledger } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "确定",
       draft,
       language: "zh-CN",
     });

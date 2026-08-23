@@ -89,6 +89,7 @@ function isExplicitExecutionAuthorization(value: unknown): boolean {
   if (!text
     || /[?？]/.test(text)
     || /(不(?:确认|确定|同意|要|想)|不要|先不|别|取消|稍等|等等|修改|改成|暂不)/.test(text)) return false;
+  if (/^(确认|确定|开始吧|就这样|按这个来)$/.test(text)) return true;
   const confirms = /(确认|确定|同意|就按|照.+执行|立即.+生成)/.test(text);
   const executes = /(方案|生成|执行|开始)/.test(text);
   return confirms && executes;
@@ -371,8 +372,8 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     const prompt = `你是旅行规划助手的意图判断模块。今天是 ${today}。
 当前草稿：${JSON.stringify(draft)}
 最近对话：\n${historyText(input.history)}
-只输出严格 JSON，action=confirm|update|cancel|chat|ask_confirmation，包含 confidence 和 message。
-只有用户明确授权执行且 confidence>=0.85 才能 confirm；疑问属于 chat；修改时返回完整行程字段。
+只输出严格 JSON，action=confirm|update|cancel|chat|ask_confirmation，包含 confidence、message 和 ready_to_generate。
+只有用户明确授权执行且 confidence>=0.85 才能 confirm；疑问属于 chat；修改时返回完整行程字段。信息仍不完整时 ready_to_generate=false，并在 message 里只追问一个最重要的问题；完整时才为 true。
 用户最新回复：${input.text}`;
     let data: Record<string, unknown>;
     try {
@@ -385,6 +386,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
           action: "confirm",
           confidence: 1,
           message: "已确认，正在按当前方案生成行程。",
+          ready_to_generate: true,
           trip: draft,
           decision_id: decision.decisionId,
           execution_token: decision.token,
@@ -395,6 +397,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
         action: "ask_confirmation",
         confidence: 0,
         message: fallback,
+        ready_to_generate: false,
         trip: Object.keys(draft).length > 0 ? draft : null,
         decision_id: "",
         execution_token: "",
@@ -418,6 +421,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     let trip: Record<string, unknown> | null = Object.keys(draft).length > 0 ? draft : null;
     if (action === "update") trip = this.updatedTrip(data, draft, today);
     if (action === "update" && !trip) action = "chat";
+    const readyToGenerate = action === "confirm" || data.ready_to_generate === true;
 
     let decisionId = "";
     let token = "";
@@ -431,6 +435,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       action,
       confidence,
       message,
+      ready_to_generate: readyToGenerate,
       trip,
       decision_id: decisionId,
       execution_token: token,
