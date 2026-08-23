@@ -33,6 +33,12 @@ interface RunOptions {
 const ACTIONS = new Set(["plan", "clarify", "recommend", "chat"]);
 const EMOTIONS = new Set(["neutral", "uncertain", "frustrated", "excited", "anxious"]);
 const CONFIRM_ACTIONS = new Set(["confirm", "cancel", "update", "chat", "ask_confirmation"]);
+const INTAKE_SYSTEM_PROMPT = [
+  "你是游伴的轻量旅行接待 Agent。",
+  "只负责对话澄清、目的地推荐和结构化旅行草稿。",
+  "不调用工具，不启动子 Agent，不生成详细日程。",
+  "严格遵循本轮提示，只输出一个 JSON 对象。",
+].join("");
 const INFERRED_FIELDS = new Set([
   "dates",
   "transportation",
@@ -187,6 +193,26 @@ export class TripAssistant {
     field: string,
     options: RunOptions,
   ): Promise<Record<string, unknown>> {
+    if (this.dependencies.llm.agentComplete) {
+      let buffer = "";
+      let emitted = 0;
+      const output = await this.dependencies.llm.agentComplete(prompt, {
+        systemPrompt: INTAKE_SYSTEM_PROMPT,
+        sessionId: options.scope?.key,
+        temperature: 0.1,
+        disableThinking: true,
+        signal: options.signal,
+        onDelta: options.onDelta ? async (chunk) => {
+          buffer += chunk;
+          const current = streamExtractStringField(buffer, field).value;
+          if (current.length > emitted) {
+            await options.onDelta!(current.slice(emitted));
+            emitted = current.length;
+          }
+        } : undefined,
+      });
+      return parseJsonObject(output);
+    }
     if (this.dependencies.parentAgent) {
       let buffer = "";
       let emitted = 0;

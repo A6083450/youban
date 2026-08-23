@@ -5,6 +5,7 @@ import {
   type Model,
   type Models,
 } from "@earendil-works/pi-ai";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { getSettings, onSettingsReset } from "../../config/settings.ts";
@@ -28,18 +29,80 @@ export interface LlmCallOptions {
   signal?: AbortSignal;
 }
 
+export interface PiAgentCallOptions extends LlmCallOptions {
+  systemPrompt: string;
+  sessionId?: string;
+  onDelta?: (text: string) => void | Promise<void>;
+}
+
 export interface LlmClient {
   readonly model: Model<Api>;
   stream(prompt: string, options?: LlmCallOptions): AsyncIterable<string>;
   complete(prompt: string, options?: LlmCallOptions): Promise<string>;
+  agentComplete?(prompt: string, options: PiAgentCallOptions): Promise<string>;
 }
 
-class PiLlmClient implements LlmClient {
+export interface PiAgentLlmClient extends LlmClient {
+  agentComplete(prompt: string, options: PiAgentCallOptions): Promise<string>;
+}
+
+class PiLlmClient implements PiAgentLlmClient {
   constructor(
     private readonly models: Models,
     readonly model: Model<Api>,
     private readonly timeoutMs: number,
   ) {}
+
+  async agentComplete(prompt: string, options: PiAgentCallOptions): Promise<string> {
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("LLM request aborted");
+    const streamFn: StreamFn = (model, context, streamOptions = {}) => this.models.streamSimple(
+      model,
+      context,
+      {
+        ...streamOptions,
+        temperature: options.temperature ?? 0.1,
+        maxTokens: options.maxTokens,
+        timeoutMs: this.timeoutMs,
+        maxRetries: 1,
+        headers: { ...streamOptions.headers, "User-Agent": BROWSER_USER_AGENT },
+      },
+    );
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: options.systemPrompt,
+        model: this.model,
+        thinkingLevel: "off",
+        tools: [],
+      },
+      streamFn,
+      sessionId: options.sessionId,
+    });
+    let output = "";
+    const unsubscribe = agent.subscribe(async (event) => {
+      if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
+      const delta = event.assistantMessageEvent.delta;
+      if (!delta) return;
+      output += delta;
+      await options.onDelta?.(delta);
+    });
+    const abort = () => agent.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      try {
+        await agent.prompt(prompt);
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error;
+        throw error;
+      }
+      if (options.signal?.aborted) throw options.signal.reason ?? new Error("LLM request aborted");
+      if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+      return output;
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
+      unsubscribe();
+      agent.reset();
+    }
+  }
 
   async *stream(prompt: string, options: LlmCallOptions = {}): AsyncIterable<string> {
     const stream = this.models.streamSimple(
@@ -71,7 +134,7 @@ class PiLlmClient implements LlmClient {
   }
 }
 
-export function createPiLlmClient(config: PiLlmConfig): LlmClient {
+export function createPiLlmClient(config: PiLlmConfig): PiAgentLlmClient {
   const api = config.apiStyle === "responses" ? "openai-responses" : "openai-completions";
   const model: Model<Api> = {
     id: config.model,

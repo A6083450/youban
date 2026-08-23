@@ -218,7 +218,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     assistant = options.assistant ?? new TripAssistant({
       llm: getPiLlmClient(),
       ledger: confirmationLedger,
-      parentAgent,
     });
     const plannerOptions: DefaultTripPlannerOptions = {
       cwd: repoRoot,
@@ -414,7 +413,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           nextAssistant = options.assistant ?? new TripAssistant({
             llm: candidateLlm,
             ledger: confirmationLedger,
-            parentAgent: nextParent,
           });
           const plannerOptions: DefaultTripPlannerOptions = {
             cwd: repoRoot,

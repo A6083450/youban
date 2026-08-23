@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmCallOptions, LlmClient } from "../src/agents/llm/providers.ts";
+import type { LlmCallOptions, LlmClient, PiAgentCallOptions } from "../src/agents/llm/providers.ts";
 import type {
   ParentAgentCompletion,
   ParentAgentScope,
@@ -58,6 +58,33 @@ class AbortAwareLlm implements LlmClient {
 
   async complete(): Promise<string> {
     throw new Error("unexpected non-stream completion");
+  }
+}
+
+class AgentOnlyLlm implements LlmClient {
+  readonly model = new FakeLlmClient([]).model;
+  readonly calls: Array<{ prompt: string; options: PiAgentCallOptions }> = [];
+
+  constructor(private readonly outputs: string[][]) {}
+
+  stream(): AsyncIterable<string> {
+    throw new Error("unexpected direct stream");
+  }
+
+  async complete(): Promise<string> {
+    throw new Error("unexpected direct completion");
+  }
+
+  async agentComplete(prompt: string, options: PiAgentCallOptions): Promise<string> {
+    this.calls.push({ prompt, options });
+    const chunks = this.outputs.shift();
+    if (!chunks) throw new Error("no fake Pi Agent output queued");
+    let output = "";
+    for (const chunk of chunks) {
+      output += chunk;
+      await options.onDelta?.(chunk);
+    }
+    return output;
   }
 }
 
@@ -446,21 +473,21 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(result.execution_token).toBe("");
   });
 
-  it("routes parse and confirm through the same authenticated persistent parent scope", async () => {
+  it("routes parse and confirm through lightweight Pi Agent turns without invoking the full parent", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-parent-http-"));
     tempDirs.push(dataDir);
-    const parent = new FakeParentAgent([
-      JSON.stringify({
+    const parent = new FakeParentAgent([]);
+    const llm = new AgentOnlyLlm([
+      [JSON.stringify({
         action: "plan",
         emotion: "neutral",
         reply: "草稿已整理。",
         cities: [{ city: "北京", days: 1 }],
         start_date: "2026-10-01",
         ready_to_generate: true,
-      }),
-      JSON.stringify({ action: "confirm", confidence: 0.95, message: "开始生成。" }),
+      })],
+      [JSON.stringify({ action: "confirm", confidence: 0.95, message: "开始生成。" })],
     ]);
-    const llm = new FakeLlmClient([]);
     const assistant = new TripAssistant({
       llm,
       ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 7) }),
@@ -477,7 +504,11 @@ describe("trip parse/confirm HTTP and SSE", () => {
     }, "user-parent");
 
     expect(confirmed.status).toBe(200);
-    expect(parent.scopes.map((scope) => scope.key)).toEqual(["user:user-parent", "user:user-parent"]);
-    expect(llm.prompts).toEqual([]);
+    expect(llm.calls.map((call) => call.options.sessionId)).toEqual([
+      "user:user-parent",
+      "user:user-parent",
+    ]);
+    expect(llm.calls.every((call) => call.options.systemPrompt.length < 500)).toBeTrue();
+    expect(parent.scopes).toEqual([]);
   });
 });
