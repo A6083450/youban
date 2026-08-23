@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import {
   CURRENT_SCHEMA_VERSION,
+  CONVERSATION_SESSIONS_SCHEMA_SQL,
   INITIAL_SCHEMA_SQL,
   SKILL_CATALOG_SCHEMA_SQL,
   schema,
@@ -44,6 +45,7 @@ export class YoubanDatabase {
     const migrations: Readonly<Record<number, () => void>> = {
       1: () => this.migrateVersionOne(),
       2: () => this.migrateVersionTwo(),
+      3: () => this.migrateVersionThree(),
     };
     const migrate = this.raw.transaction(() => {
       for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {
@@ -62,6 +64,10 @@ export class YoubanDatabase {
 
   private migrateVersionTwo(): void {
     this.raw.exec(SKILL_CATALOG_SCHEMA_SQL);
+  }
+
+  private migrateVersionThree(): void {
+    this.raw.exec(CONVERSATION_SESSIONS_SCHEMA_SQL);
   }
 
   quickCheck(): string {

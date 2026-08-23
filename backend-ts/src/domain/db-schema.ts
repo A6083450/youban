@@ -8,6 +8,7 @@ export const tasksTable = sqliteTable(
     userId: text("user_id").notNull().default(""),
     status: text("status").notNull(),
     shareToken: text("share_token").notNull().default(""),
+    userDeletedAt: text("user_deleted_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     payload: text("payload").notNull(),
@@ -24,6 +25,28 @@ export const conversationsTable = sqliteTable("conversations", {
   payload: text("payload").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const conversationSessionsTable = sqliteTable(
+  "conversation_sessions",
+  {
+    sessionId: text("session_id").primaryKey(),
+    userId: text("user_id").notNull(),
+    title: text("title").notNull(),
+    titleStatus: text("title_status").notNull(),
+    state: text("state").notNull(),
+    planId: text("plan_id"),
+    snapshot: text("snapshot").notNull(),
+    firstMessage: text("first_message").notNull(),
+    revision: integer("revision").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    uniqueIndex("conversation_sessions_plan_id_idx").on(table.planId),
+    index("conversation_sessions_user_deleted_updated_idx").on(table.userId, table.deletedAt, table.updatedAt),
+  ],
+);
 
 export const usersTable = sqliteTable(
   "users",
@@ -109,6 +132,7 @@ export const skillAuditEventsTable = sqliteTable(
 export const schema = {
   tasks: tasksTable,
   conversations: conversationsTable,
+  conversationSessions: conversationSessionsTable,
   users: usersTable,
   managedSkills: managedSkillsTable,
   skillVersions: skillVersionsTable,
@@ -118,7 +142,7 @@ export const schema = {
 
 export type YoubanSchema = typeof schema;
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 // Referencing the drizzle schema here keeps migration DDL and typed queries aligned.
 export const INITIAL_SCHEMA_SQL = `
@@ -215,4 +239,27 @@ export const SKILL_CATALOG_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS skill_audit_events_skill_created_idx
     ON skill_audit_events(skill_id, created_at);
+`;
+
+export const CONVERSATION_SESSIONS_SCHEMA_SQL = `
+  ALTER TABLE tasks ADD COLUMN user_deleted_at TEXT;
+
+  CREATE TABLE IF NOT EXISTS conversation_sessions (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    title_status TEXT NOT NULL CHECK (title_status IN ('pending', 'generated', 'fallback')),
+    state TEXT NOT NULL CHECK (state IN ('chatting', 'generating', 'planned')),
+    plan_id TEXT,
+    snapshot TEXT NOT NULL,
+    first_message TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS conversation_sessions_plan_id_idx
+    ON conversation_sessions(plan_id) WHERE plan_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS conversation_sessions_user_deleted_updated_idx
+    ON conversation_sessions(user_id, deleted_at, updated_at);
 `;

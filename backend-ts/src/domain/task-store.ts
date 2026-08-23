@@ -203,6 +203,17 @@ export class SqliteTaskStore {
     return existed;
   }
 
+  softDelete(taskId: string): boolean {
+    if (this.closed) throw new Error("task store is closed");
+    this.flush(taskId);
+    const result = this.database.raw.query(`
+      UPDATE tasks
+      SET user_deleted_at = COALESCE(user_deleted_at, ?)
+      WHERE task_id = ?
+    `).run(nowIso(), taskId);
+    return result.changes === 1;
+  }
+
   save(task: TripTaskState, options: SaveOptions = {}): void {
     if (this.closed) throw new Error("task store is closed");
     const snapshot = clone(task);
@@ -282,12 +293,19 @@ export class SqliteTaskStore {
     for (const listener of this.subscribers.get(task.task_id) ?? []) listener(event);
   }
 
-  listHistory(options: { userId: string; limit: number; allUsers?: boolean }): TripHistoryItem[] {
+  listHistory(options: {
+    userId: string;
+    limit: number;
+    allUsers?: boolean;
+    includeUserDeleted?: boolean;
+  }): TripHistoryItem[] {
     this.flush();
     const rows = this.database.orm.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt)).all();
     const items: TripHistoryItem[] = [];
+    const includeUserDeleted = options.includeUserDeleted ?? options.allUsers === true;
     for (const row of rows) {
       if (!options.allUsers && row.userId !== options.userId) continue;
+      if (!includeUserDeleted && row.userDeletedAt !== null) continue;
       const task = JSON.parse(row.payload) as TripTaskState;
       const item = historyItem(task, row.updatedAt);
       if (item) items.push(item);

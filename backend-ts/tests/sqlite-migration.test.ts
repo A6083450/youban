@@ -68,7 +68,7 @@ describe("JSON to SQLite migration", () => {
     const result = migrateJsonToSqlite({ dataDir, dryRun: true });
 
     expect(existsSync(join(dataDir, "youban.db"))).toBe(false);
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
     expect(result.source.tasks).toEqual(expect.objectContaining({ valid: 1, invalid: 1 }));
     expect(result.source.users.valid).toBe(1);
     expect(result.source.conversations.valid).toBe(1);

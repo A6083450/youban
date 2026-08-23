@@ -8,7 +8,7 @@ import {
   createTaskState,
   type TripTaskState,
 } from "../src/domain/task-store.ts";
-import { INITIAL_SCHEMA_SQL } from "../src/domain/db-schema.ts";
+import { INITIAL_SCHEMA_SQL, SKILL_CATALOG_SCHEMA_SQL } from "../src/domain/db-schema.ts";
 import { YoubanDatabase } from "../src/domain/database.ts";
 
 const tempDirs: string[] = [];
@@ -30,32 +30,40 @@ describe("SqliteTaskStore", () => {
     store.close();
 
     const db = new Database(path, { readonly: true });
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     expect(db.query("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
     ).toEqual(expect.arrayContaining([
       { name: "conversations" },
+      { name: "conversation_sessions" },
       { name: "tasks" },
       { name: "users" },
     ]));
     db.close();
   });
 
-  it("migrates a version-one database without losing tasks", () => {
+  it("migrates a version-two database without losing tasks or its existing rows", () => {
     const path = databasePath();
     const now = "2026-08-22T00:00:00.000Z";
     const database = new Database(path);
     database.exec(INITIAL_SCHEMA_SQL);
-    database.exec("PRAGMA user_version = 1");
+    database.exec(SKILL_CATALOG_SCHEMA_SQL);
+    database.exec("PRAGMA user_version = 2");
     database.query(
       "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run("t1", "t1", "u1", "completed", "", now, now, "{}");
     database.close();
 
     const migrated = new YoubanDatabase(path);
-    expect(migrated.raw.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(migrated.raw.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     expect(migrated.raw.query("SELECT task_id FROM tasks").get()).toEqual({ task_id: "t1" });
+    expect(migrated.raw.query("SELECT user_deleted_at FROM tasks WHERE task_id = 't1'").get()).toEqual({
+      user_deleted_at: null,
+    });
+    expect(
+      migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'conversation_sessions'").get(),
+    ).toBeDefined();
     expect(
       migrated.raw.query("SELECT name FROM sqlite_master WHERE name = 'managed_skills'").get(),
     ).toBeDefined();
@@ -200,6 +208,27 @@ describe("SqliteTaskStore", () => {
     ]);
     expect(store.listHistory({ userId: "", limit: 10 })).toEqual([
       expect.objectContaining({ task_id: "legacy", city: "成都", status: "processing" }),
+    ]);
+    store.close();
+  });
+
+  it("hides user-soft-deleted tasks from owners while retaining them for administrators", () => {
+    const path = databasePath();
+    const store = new SqliteTaskStore(path);
+    const task = createTaskState("hidden-task", {
+      user_id: "owner-1",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      request_payload: { city: "北京", travel_days: 3 },
+      result: { data: { city: "北京", days: [] } },
+    });
+    store.save(task, { immediate: true });
+
+    expect(store.softDelete(task.task_id)).toBe(true);
+    expect(store.listHistory({ userId: "owner-1", limit: 10 })).toEqual([]);
+    expect(store.listHistory({ userId: "", limit: 10, allUsers: true })).toEqual([
+      expect.objectContaining({ task_id: task.task_id }),
     ]);
     store.close();
   });
