@@ -6,15 +6,15 @@ import {
   fstatSync,
   lstatSync,
   mkdtempSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { isIP } from "node:net";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { SkillValidationError, validateSkillDocument } from "./skill-document.ts";
 import {
   normalizeSkillPackagePath,
@@ -465,33 +465,87 @@ function validateCommit(commit: string): string {
   return commit;
 }
 
-function resolveContainedDirectory(cloneDir: string, subdirectory: string | undefined): string {
-  if (!subdirectory) return cloneDir;
-  let current = cloneDir;
-  for (const component of subdirectory.split("/")) {
-    current = join(current, component);
-    let stat: ReturnType<typeof lstatSync>;
-    try {
-      stat = lstatSync(current);
-    } catch {
-      gitError("invalid_git_subdirectory", "Git skill subdirectory does not exist");
-    }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      gitError("invalid_git_subdirectory", "Git skill subdirectory must be a real directory");
-    }
-  }
-  const cloneReal = realpathSync(cloneDir);
-  const currentReal = realpathSync(current);
-  const pathRelative = relative(cloneReal, currentReal);
-  if (pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative)) {
-    gitError("invalid_git_subdirectory", "Git skill subdirectory escapes the repository");
-  }
-  return current;
-}
-
 interface PackageEntry {
   path: string;
   content: Buffer;
+}
+
+interface GitTreeEntry {
+  mode: string;
+  type: string;
+  objectId: string;
+  path: string;
+  size?: bigint;
+}
+
+function parseTreeEntries(output: string, includeSizes: boolean): GitTreeEntry[] {
+  if (output && !output.endsWith("\0")) gitError("git_failed", "Git tree listing was incomplete");
+  return output.split("\0").filter(Boolean).map((record) => {
+    const separator = record.indexOf("\t");
+    if (separator < 0) gitError("git_failed", "Git tree listing was invalid");
+    const metadata = record.slice(0, separator).trim().split(/\s+/);
+    const expectedFields = includeSizes ? 4 : 3;
+    if (metadata.length !== expectedFields || !COMMIT_PATTERN.test(metadata[2])) {
+      gitError("git_failed", "Git tree listing was invalid");
+    }
+    let size: bigint | undefined;
+    if (includeSizes) {
+      if (!/^\d+$/.test(metadata[3])) gitError("git_failed", "Git tree size listing was invalid");
+      size = BigInt(metadata[3]);
+    }
+    return {
+      mode: metadata[0],
+      type: metadata[1],
+      objectId: metadata[2],
+      path: record.slice(separator + 1),
+      size,
+    };
+  });
+}
+
+function validateSelectedTree(entries: readonly GitTreeEntry[]): void {
+  if (entries.length > MAX_REGULAR_FILES) {
+    gitError("skill_package_too_large", "Git skill package exceeds the package limits");
+  }
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
+      gitError("invalid_git_package", "Git skill package contains a non-regular file");
+    }
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeSkillPackagePath(entry.path);
+    } catch {
+      gitError("invalid_git_package", "Git skill package contains a non-portable path");
+    }
+    if (normalizedPath !== entry.path || paths.has(normalizedPath)) {
+      gitError("invalid_git_package", "Git skill package contains an ambiguous path");
+    }
+    paths.add(normalizedPath);
+  }
+  const skillDocuments = entries.filter(({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"));
+  if (skillDocuments.length !== 1 || skillDocuments[0].path !== "SKILL.md") {
+    gitError("invalid_git_package", "Git skill package must contain one root SKILL.md");
+  }
+}
+
+function validateSelectedTreeSizes(
+  entries: readonly GitTreeEntry[],
+  sizedEntries: readonly GitTreeEntry[],
+): void {
+  if (sizedEntries.length !== entries.length) gitError("git_failed", "Git tree size listing was inconsistent");
+  let remainingBytes = BigInt(MAX_PACKAGE_BYTES);
+  entries.forEach((entry, index) => {
+    const sized = sizedEntries[index];
+    if (
+      sized.mode !== entry.mode || sized.type !== entry.type || sized.objectId !== entry.objectId ||
+      sized.path !== entry.path || sized.size === undefined
+    ) gitError("git_failed", "Git tree size listing was inconsistent");
+    if (sized.size > remainingBytes) {
+      gitError("skill_package_too_large", "Git skill package exceeds the package limits");
+    }
+    remainingBytes -= sized.size;
+  });
 }
 
 function collectRegularFiles(root: string): PackageEntry[] {
@@ -595,27 +649,62 @@ export class GitSkillImporter {
     const acquisition = classifyRefAcquisition(ref);
     const checkoutRoot = mkdtempSync(join(tmpdir(), "youban-skill-git-checkout-"));
     const cloneDir = join(checkoutRoot, "repository");
+    const secureRemoteEnvironment = remoteEnvironment(repositoryUrl, pinnedAddresses);
 
     try {
-      const cloneArgs = ["clone", "--depth=1", "--filter=blob:none", "--no-tags"];
+      const cloneArgs = ["clone", "--depth=1", "--filter=blob:none", "--no-tags", "--no-checkout"];
       if (acquisition.kind === "branch-or-tag") cloneArgs.push("--branch", acquisition.branchArgument);
-      if (acquisition.kind === "explicit") cloneArgs.push("--no-checkout");
       cloneArgs.push(repositoryUrl.href, cloneDir);
-      await this.runGit(cloneArgs, undefined, remoteEnvironment(repositoryUrl, pinnedAddresses));
+      await this.runGit(cloneArgs, undefined, secureRemoteEnvironment);
 
+      let revision = "HEAD";
       if (acquisition.kind === "explicit") {
         await this.runGit(
-          ["fetch", "--depth=1", "origin", acquisition.fetchRef],
+          ["fetch", "--depth=1", "--filter=blob:none", "origin", acquisition.fetchRef],
           cloneDir,
-          remoteEnvironment(repositoryUrl, pinnedAddresses),
+          secureRemoteEnvironment,
         );
-        await this.runGit(["checkout", "--detach", "FETCH_HEAD"], cloneDir);
+        revision = "FETCH_HEAD";
       }
 
-      const resolved = await this.runGit(["rev-parse", "HEAD"], cloneDir);
+      const resolved = await this.runGit(["rev-parse", "--verify", `${revision}^{commit}`], cloneDir);
       const commit = validateCommit(resolved.stdout.trim());
-      rmSync(join(cloneDir, ".git"), { recursive: true, force: true });
-      const packageRoot = resolveContainedDirectory(cloneDir, subdirectory);
+      let selectedTree = commit;
+      if (subdirectory) {
+        const directory = await this.runGit([
+          "ls-tree",
+          "-z",
+          "--full-tree",
+          commit,
+          "--",
+          `:(top,literal)${subdirectory}`,
+        ], cloneDir);
+        const directoryEntries = parseTreeEntries(directory.stdout, false);
+        if (
+          directoryEntries.length !== 1 || directoryEntries[0].path !== subdirectory ||
+          directoryEntries[0].mode !== "040000" || directoryEntries[0].type !== "tree"
+        ) gitError("invalid_git_subdirectory", "Git skill subdirectory must be a real directory");
+        selectedTree = directoryEntries[0].objectId;
+      }
+
+      const listed = await this.runGit(["ls-tree", "-r", "-z", selectedTree], cloneDir);
+      const treeEntries = parseTreeEntries(listed.stdout, false);
+      validateSelectedTree(treeEntries);
+      const sized = await this.runGit(
+        ["ls-tree", "-r", "-z", "-l", selectedTree],
+        cloneDir,
+        secureRemoteEnvironment,
+      );
+      validateSelectedTreeSizes(treeEntries, parseTreeEntries(sized.stdout, true));
+
+      const packageRoot = join(checkoutRoot, "package");
+      mkdirSync(packageRoot, { mode: 0o700 });
+      await this.runGit(["read-tree", selectedTree], cloneDir);
+      await this.runGit(
+        ["checkout-index", "--force", "--all", `--prefix=${packageRoot}/`],
+        cloneDir,
+        secureRemoteEnvironment,
+      );
       const entries = collectRegularFiles(packageRoot);
       const skillEntries = entries.filter(({ path }) => path === "SKILL.md");
       const allSkillDocuments = entries.filter(({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"));

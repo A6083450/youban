@@ -25,6 +25,7 @@ import { createTaskState, SqliteTaskStore } from "../src/domain/task-store.ts";
 import { SqliteUserRepository } from "../src/domain/users.ts";
 import type { AdminSkillService } from "../src/http/admin-skills.ts";
 import { createHttpRuntime } from "../src/http/app.ts";
+import type { UserMemoryItem, UserMemoryService } from "../src/services/hermes-memory.ts";
 import {
   installMemoryPressureHandler,
   listenProductionHttpServer,
@@ -87,6 +88,19 @@ class ClosablePlanner implements TripPlanner {
     this.closeCount += 1;
     return this.onClose();
   }
+}
+
+class BorrowedMemory implements UserMemoryService {
+  closed = false;
+
+  async recall(): Promise<string> { return ""; }
+  async remember(): Promise<boolean> { return true; }
+  async list(_userId: string): Promise<UserMemoryItem[]> {
+    if (this.closed) throw new Error("borrowed memory was closed");
+    return [];
+  }
+  async remove(): Promise<boolean> { return false; }
+  close(): void { this.closed = true; }
 }
 
 function observeConstructionStoreCloses() {
@@ -155,12 +169,14 @@ describe("Bun server lifecycle", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-construction-parent-failure-"));
     const stores = observeConstructionStoreCloses();
     let ownedSkills: AdminSkillService | undefined;
+    let ownedMemory: UserMemoryService | undefined;
     let skillCloseCount = 0;
     try {
       expect(() => createHttpRuntime({
         dataDir,
         serviceFactories: {
           parentAgent(options: DefaultParentAgentOptions) {
+            ownedMemory = options.memory;
             ownedSkills = options.skillCatalog as AdminSkillService;
             const close = ownedSkills.close.bind(ownedSkills);
             ownedSkills.close = () => {
@@ -175,6 +191,7 @@ describe("Bun server lifecycle", () => {
       await waitUntil(() => skillCloseCount === 1);
       expect(stores.counts).toEqual({ tasks: 1, users: 1, conversations: 1 });
       expect(() => ownedSkills!.list()).toThrowError(expect.objectContaining({ code: "skill_service_closed" }));
+      await expect(ownedMemory!.list("after-construction-failure")).rejects.toThrow("closed");
       await flushAsyncWork();
       expect(skillCloseCount).toBe(1);
       expect(stores.counts).toEqual({ tasks: 1, users: 1, conversations: 1 });
@@ -320,6 +337,7 @@ describe("Bun server lifecycle", () => {
     parent.close = async () => { parentCloseCount += 1; };
     const planner = new ClosablePlanner();
     const chat = new TripChatService({ llm: new HangingLlm(), mode: "simple", parentAgent: parent });
+    const memory = new BorrowedMemory();
     let chatCloseCount = 0;
     chat.close = () => { chatCloseCount += 1; };
     let runtime: ReturnType<typeof createHttpRuntime> | undefined;
@@ -330,17 +348,42 @@ describe("Bun server lifecycle", () => {
         parentAgent: parent,
         planner,
         chatService: chat,
+        memory,
       });
       await runtime.close();
       expect(skillCloseCount).toBe(0);
       expect(parentCloseCount).toBe(0);
       expect(planner.closeCount).toBe(0);
       expect(chatCloseCount).toBe(0);
+      expect(memory.closed).toBe(false);
+      expect(await memory.list("still-owned-by-caller")).toEqual([]);
     } finally {
       await runtime?.close();
       originalSkillClose();
       rmSync(dataDir, { recursive: true, force: true });
       rmSync(skillRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("closes the default memory service owned by the HTTP runtime", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-shutdown-owned-memory-"));
+    let ownedMemory: UserMemoryService | undefined;
+    const runtime = createHttpRuntime({
+      dataDir,
+      serviceFactories: {
+        parentAgent(options) {
+          ownedMemory = options.memory;
+          return new ReleasableParent();
+        },
+      },
+    });
+    try {
+      await runtime.close();
+      expect(ownedMemory).toBeDefined();
+      await expect(ownedMemory!.list("after-close")).rejects.toThrow("closed");
+    } finally {
+      await runtime.close();
+      rmSync(dataDir, { recursive: true, force: true });
     }
   });
 

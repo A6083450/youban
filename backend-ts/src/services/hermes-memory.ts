@@ -18,19 +18,29 @@ export interface UserMemoryService extends TripMemory {
   remove(userId: string, memoryId: string): Promise<boolean>;
 }
 
-interface HermesMemoryBridgeOptions {
+export interface HermesMemoryBridgeOptions {
   dataDir: string;
   timeoutMs?: number;
+  terminationGraceMs?: number;
+  workerPath?: string;
 }
 
 export class HermesMemoryBridge implements UserMemoryService {
   private readonly timeoutMs: number;
+  private readonly terminationGraceMs: number;
+  private readonly activeCalls = new Set<Promise<void>>();
+  private readonly activeWorkers = new Set<ReturnType<typeof Bun.spawn>>();
+  private readonly terminations = new WeakMap<ReturnType<typeof Bun.spawn>, Promise<void>>();
+  private closed = false;
+  private closePromise: Promise<void> | undefined;
 
   constructor(private readonly options: HermesMemoryBridgeOptions) {
     this.timeoutMs = options.timeoutMs ?? 8_000;
+    this.terminationGraceMs = options.terminationGraceMs ?? 250;
   }
 
   async recall(userId: string, query: string): Promise<string> {
+    this.assertOpen();
     const normalizedUser = userId.trim();
     const normalizedQuery = query.trim();
     if (!normalizedUser || !normalizedQuery) return "";
@@ -47,6 +57,7 @@ export class HermesMemoryBridge implements UserMemoryService {
   }
 
   async remember(userId: string, content: string): Promise<boolean> {
+    this.assertOpen();
     const normalizedUser = userId.trim();
     const normalizedContent = content.trim();
     if (!normalizedUser || !normalizedContent) return false;
@@ -54,6 +65,7 @@ export class HermesMemoryBridge implements UserMemoryService {
   }
 
   async list(userId: string): Promise<UserMemoryItem[]> {
+    this.assertOpen();
     const normalizedUser = userId.trim();
     if (!normalizedUser) return [];
     const result = await this.run(normalizedUser, { action: "list" });
@@ -61,13 +73,42 @@ export class HermesMemoryBridge implements UserMemoryService {
   }
 
   async remove(userId: string, memoryId: string): Promise<boolean> {
+    this.assertOpen();
     const normalizedUser = userId.trim();
     const normalizedId = memoryId.trim();
     if (!normalizedUser || !normalizedId) return false;
     return (await this.run(normalizedUser, { action: "remove", memoryId: normalizedId })).ok;
   }
 
-  private async run(
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.closePromise = (async () => {
+      await Promise.allSettled([...this.activeWorkers].map((worker) => this.terminate(worker)));
+      await Promise.allSettled([...this.activeCalls]);
+    })();
+    return this.closePromise;
+  }
+
+  private run(
+    userId: string,
+    input:
+      | { action: "remember" | "recall"; text: string }
+      | { action: "list" }
+      | { action: "remove"; memoryId: string },
+  ): Promise<{ ok: boolean; output: string; items: UserMemoryItem[] }> {
+    this.assertOpen();
+    const operation = this.runWorker(userId, input);
+    const drain = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.activeCalls.add(drain);
+    void drain.then(() => this.activeCalls.delete(drain));
+    return operation;
+  }
+
+  private async runWorker(
     userId: string,
     input:
       | { action: "remember" | "recall"; text: string }
@@ -76,7 +117,7 @@ export class HermesMemoryBridge implements UserMemoryService {
   ): Promise<{ ok: boolean; output: string; items: UserMemoryItem[] }> {
     const userRoot = this.userRoot(userId);
     const worker = Bun.spawn(
-      [process.execPath, join(import.meta.dir, "hermes-memory-worker.mjs"), userRoot],
+      [process.execPath, this.options.workerPath ?? join(import.meta.dir, "hermes-memory-worker.mjs"), userRoot],
       {
         cwd: join(import.meta.dir, "..", ".."),
         env: { ...process.env },
@@ -85,20 +126,31 @@ export class HermesMemoryBridge implements UserMemoryService {
         stderr: "pipe",
       },
     );
-    worker.stdin.write(JSON.stringify(input));
-    worker.stdin.end();
+    this.activeWorkers.add(worker);
+    const stdout = new Response(worker.stdout).text();
+    const stderr = new Response(worker.stderr).text();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const expired = new Promise<never>((_, reject) => {
+      worker.stdin.write(JSON.stringify(input));
+      worker.stdin.end();
+      const expired = new Promise<"expired">((resolve) => {
         timeout = setTimeout(() => {
-          worker.kill();
-          reject(new Error("Hermes memory worker timed out"));
+          resolve("expired");
         }, this.timeoutMs);
       });
-      const exitCode = await Promise.race([worker.exited, expired]);
+      const completed = Promise.all([worker.exited, stdout, stderr] as const);
+      const outcome = await Promise.race([
+        completed.then((result) => ({ type: "completed" as const, result })),
+        expired.then(() => ({ type: "expired" as const })),
+      ]);
+      if (outcome.type === "expired") {
+        await this.terminate(worker);
+        await Promise.allSettled([completed]);
+        return { ok: false, output: "", items: [] };
+      }
+      const [exitCode, output] = outcome.result;
       if (exitCode !== 0) return { ok: false, output: "", items: [] };
-      const stdout = await new Response(worker.stdout).text();
-      const lastLine = stdout.trim().split(/\r?\n/).at(-1) ?? "";
+      const lastLine = output.trim().split(/\r?\n/).at(-1) ?? "";
       const result = JSON.parse(lastLine) as Record<string, unknown>;
       const items = Array.isArray(result.items)
         ? result.items.flatMap((item): UserMemoryItem[] => {
@@ -114,10 +166,48 @@ export class HermesMemoryBridge implements UserMemoryService {
         : [];
       return { ok: result.ok === true, output: String(result.output ?? ""), items };
     } catch {
+      await this.terminate(worker);
+      await Promise.allSettled([stdout, stderr]);
       return { ok: false, output: "", items: [] };
     } finally {
       if (timeout) clearTimeout(timeout);
+      this.activeWorkers.delete(worker);
     }
+  }
+
+  private terminate(worker: ReturnType<typeof Bun.spawn>): Promise<void> {
+    const active = this.terminations.get(worker);
+    if (active) return active;
+    const termination = (async () => {
+      const exited = worker.exited.then(() => undefined, () => undefined);
+      try {
+        worker.kill("SIGTERM");
+      } catch {
+        // The worker already exited.
+      }
+      let escalation: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        exited,
+        new Promise<void>((resolve) => {
+          escalation = setTimeout(() => {
+            try {
+              worker.kill("SIGKILL");
+            } catch {
+              // The worker exited during the grace period.
+            }
+            resolve();
+          }, this.terminationGraceMs);
+        }),
+      ]);
+      if (escalation) clearTimeout(escalation);
+      await exited;
+    })();
+    this.terminations.set(worker, termination);
+    return termination;
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("Hermes memory bridge is closed");
   }
 
   private userRoot(userId: string): string {

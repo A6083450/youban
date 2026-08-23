@@ -284,10 +284,11 @@ export function migrateJsonToSqlite(options: MigrationOptions): MigrationReport 
     users: source.users.map((entry) => entry.user).sort((a, b) => a.user_id.localeCompare(b.user_id)),
   };
   const databasePath = join(options.dataDir, "youban.db");
+  const hasSourceIssues = source.invalidRecords.length > 0 || source.duplicateRecords.length > 0;
   let backupDir: string | null = null;
   let quickCheck = "not-run";
 
-  if (!options.dryRun) {
+  if (!options.dryRun && !hasSourceIssues) {
     if (!options.skipBackup) backupDir = backupSources(options.dataDir);
     const database = new YoubanDatabase(databasePath);
     try {

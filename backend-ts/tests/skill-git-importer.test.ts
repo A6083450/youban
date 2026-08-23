@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
-  chmodSync,
   closeSync,
   existsSync,
   ftruncateSync,
@@ -11,16 +10,18 @@ import {
   readdirSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   BunGitRunner,
   GitSkillImporter,
+  SkillGitImportError,
   type GitInvocation,
   type GitResult,
+  type GitRunner,
 } from "../src/agents/skill-git-importer.ts";
 import { SkillPackageStore } from "../src/agents/skill-package-store.ts";
 import { FakeGitRunner } from "./helpers/fake-git.ts";
@@ -53,19 +54,6 @@ function temporaryRoot(prefix: string): string {
   return root;
 }
 
-function createCheckout(destination: string, files: Readonly<Record<string, string>> = {
-  "SKILL.md": VALID_SKILL,
-  "scripts/run.sh": "exit 99",
-}): void {
-  mkdirSync(join(destination, ".git"), { recursive: true });
-  writeFileSync(join(destination, ".git", "config"), "credential = private-secret\n");
-  for (const [path, content] of Object.entries(files)) {
-    const target = join(destination, ...path.split("/"));
-    mkdirSync(join(target, ".."), { recursive: true });
-    writeFileSync(target, content, { mode: path.endsWith(".sh") ? 0o755 : 0o600 });
-  }
-}
-
 function successfulFake(options: {
   commit?: string;
   files?: Readonly<Record<string, string>>;
@@ -73,15 +61,55 @@ function successfulFake(options: {
   cloneResult?: GitResult;
 } = {}): FakeGitRunner {
   const commit = options.commit ?? COMMIT_40;
+  const repositoryFiles = options.files ?? {
+    "SKILL.md": VALID_SKILL,
+    "scripts/run.sh": "exit 99",
+  };
+  let selectedFiles = repositoryFiles;
   return new FakeGitRunner(async (invocation) => {
     options.onInvocation?.(invocation);
     if (invocation.args[0] === "clone") {
       if (options.cloneResult) return options.cloneResult;
-      createCheckout(invocation.args.at(-1)!, options.files);
+      const destination = invocation.args.at(-1)!;
+      mkdirSync(join(destination, ".git"), { recursive: true });
+      writeFileSync(join(destination, ".git", "config"), "credential = private-secret\n");
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (invocation.args[0] === "rev-parse") {
       return { exitCode: 0, stdout: `${commit}\n`, stderr: "" };
+    }
+    if (invocation.args[0] === "ls-tree") {
+      if (!invocation.args.includes("-r")) {
+        const pathspec = invocation.args.at(-1)!;
+        const subdirectory = pathspec.replace(/^:\(top,literal\)/, "");
+        selectedFiles = Object.fromEntries(Object.entries(repositoryFiles)
+          .filter(([path]) => path.startsWith(`${subdirectory}/`))
+          .map(([path, content]) => [path.slice(subdirectory.length + 1), content]));
+        const exists = Object.keys(selectedFiles).length > 0;
+        return {
+          exitCode: 0,
+          stdout: exists ? `040000 tree ${commit}\t${subdirectory}\0` : "",
+          stderr: "",
+        };
+      }
+      const includeSizes = invocation.args.includes("-l");
+      const stdout = Object.entries(selectedFiles).sort(([left], [right]) => left.localeCompare(right))
+        .map(([path, content]) => [
+          `100${path.endsWith(".sh") ? "755" : "644"} blob ${commit}`,
+          includeSizes ? ` ${Buffer.byteLength(content)}` : "",
+          `\t${path}\0`,
+        ].join(""))
+        .join("");
+      return { exitCode: 0, stdout, stderr: "" };
+    }
+    if (invocation.args[0] === "checkout-index") {
+      const prefix = invocation.args.find((argument) => argument.startsWith("--prefix="))!.slice("--prefix=".length);
+      for (const [path, content] of Object.entries(selectedFiles)) {
+        const target = join(prefix, ...path.split("/"));
+        mkdirSync(join(target, ".."), { recursive: true });
+        writeFileSync(target, content, { mode: path.endsWith(".sh") ? 0o755 : 0o600 });
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (invocation.args[0] === "ls-remote") {
       const advertisedRef = invocation.args.includes("HEAD")
@@ -92,6 +120,63 @@ function successfulFake(options: {
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   });
+}
+
+function runFixtureGit(cwd: string, args: readonly string[]): void {
+  const result = Bun.spawnSync({
+    cmd: ["git", ...args],
+    cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(new TextDecoder().decode(result.stderr));
+  }
+}
+
+function createRepositoryWithOversizedUnselectedFile(): string {
+  const repository = join(temporaryRoot("youban-skill-git-source-"), "repository");
+  mkdirSync(repository);
+  runFixtureGit(repository, ["init", "--quiet"]);
+  runFixtureGit(repository, ["config", "user.email", "skills@example.com"]);
+  runFixtureGit(repository, ["config", "user.name", "Skill Fixture"]);
+  mkdirSync(join(repository, "skills", "museum"), { recursive: true });
+  writeFileSync(join(repository, "skills", "museum", "SKILL.md"), VALID_SKILL);
+  const oversized = openSync(join(repository, "outside.bin"), "w");
+  ftruncateSync(oversized, 10 * 1024 * 1024 + 1);
+  closeSync(oversized);
+  runFixtureGit(repository, ["add", "."]);
+  runFixtureGit(repository, ["commit", "--quiet", "-m", "fixture"]);
+  runFixtureGit(repository, ["config", "uploadpack.allowFilter", "true"]);
+  runFixtureGit(repository, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+  runFixtureGit(repository, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
+  return pathToFileURL(repository).href;
+}
+
+class RejectOutsideMaterializationRunner implements GitRunner {
+  private readonly actual = new BunGitRunner();
+  private checkoutDirectory: string | undefined;
+
+  constructor(
+    private readonly requestedUrl: string,
+    private readonly fixtureUrl: string,
+  ) {}
+
+  async run(invocation: GitInvocation): Promise<GitResult> {
+    const result = await this.actual.run({
+      ...invocation,
+      args: invocation.args.map((argument) => argument === this.requestedUrl ? this.fixtureUrl : argument),
+    });
+    if (invocation.args[0] === "clone") this.checkoutDirectory = invocation.args.at(-1);
+    if (this.checkoutDirectory && existsSync(join(this.checkoutDirectory, "outside.bin"))) {
+      throw new SkillGitImportError(
+        "skill_package_too_large",
+        "Git materialized oversized content outside the selected skill directory",
+      );
+    }
+    return result;
+  }
 }
 
 function createImporter(
@@ -180,6 +265,14 @@ describe("GitSkillImporter source and credential boundaries", () => {
       "GIT_CONFIG_KEY_2",
       "credential.helper",
     ]);
+    const lazyFetchInvocations = exactRunner.invocations.filter(({ args }) =>
+      (args[0] === "ls-tree" && args.includes("-l")) || args[0] === "checkout-index"
+    );
+    expect(lazyFetchInvocations).toHaveLength(2);
+    expect(lazyFetchInvocations.every(({ authorizationHeaderKeys }) => authorizationHeaderKeys.length === 1)).toBe(true);
+    expect(lazyFetchInvocations.every(({ env, envKeys }) => envKeys.some(
+      (key) => env[key]?.endsWith(".curloptResolve"),
+    ))).toBe(true);
     expect(exactRunner.invocations[0].args.join(" ")).not.toContain(secret);
     expect(JSON.stringify(exactRunner.invocations)).not.toContain(secret);
     staged.cleanup();
@@ -485,6 +578,26 @@ describe("BunGitRunner process boundaries", () => {
 });
 
 describe("GitSkillImporter staging", () => {
+  it("does not materialize an oversized file outside the selected subdirectory", async () => {
+    const repositoryUrl = "https://git.example.com/org/repo.git";
+    const runner = new RejectOutsideMaterializationRunner(
+      repositoryUrl,
+      createRepositoryWithOversizedUnselectedFile(),
+    );
+    const root = temporaryRoot("youban-skill-git-");
+    const importer = new GitSkillImporter(new SkillPackageStore(root), runner, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    const staged = await importer.stage({
+      repositoryUrl,
+      subdirectory: "skills/museum",
+    });
+
+    expect(staged.files).toEqual(["SKILL.md"]);
+    staged.cleanup();
+  });
+
   it("clones a branch or tag request with hardened acquisition arguments", async () => {
     const { importer, runner } = createImporter();
     const staged = await importer.stage({
@@ -497,6 +610,7 @@ describe("GitSkillImporter staging", () => {
       "--depth=1",
       "--filter=blob:none",
       "--no-tags",
+      "--no-checkout",
       "--branch",
       "release-v2",
       "https://git.example.com/org/repo.git",
@@ -517,8 +631,8 @@ describe("GitSkillImporter staging", () => {
 
     expect(runner.invocations[0].args).toContain("--no-checkout");
     expect(runner.invocations[0].args).not.toContain("--branch");
-    expect(runner.invocations[1].args).toEqual(["fetch", "--depth=1", "origin", ref]);
-    expect(runner.invocations[2].args).toEqual(["checkout", "--detach", "FETCH_HEAD"]);
+    expect(runner.invocations[1].args).toEqual(["fetch", "--depth=1", "--filter=blob:none", "origin", ref]);
+    expect(runner.invocations[2].args).toEqual(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     staged.cleanup();
   });
 
@@ -556,8 +670,10 @@ describe("GitSkillImporter staging", () => {
 
     expect(runner.invocations[0].args).toContain("--no-checkout");
     expect(runner.invocations[0].args).not.toContain("--branch");
-    expect(runner.invocations[1].args).toEqual(["fetch", "--depth=1", "origin", customRef]);
-    expect(runner.invocations[2].args).toEqual(["checkout", "--detach", "FETCH_HEAD"]);
+    expect(runner.invocations[1].args).toEqual([
+      "fetch", "--depth=1", "--filter=blob:none", "origin", customRef,
+    ]);
+    expect(runner.invocations[2].args).toEqual(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     staged.cleanup();
   });
 
@@ -572,8 +688,11 @@ describe("GitSkillImporter staging", () => {
     expect(runner.invocations.map(({ args }) => args[0])).toEqual([
       "clone",
       "fetch",
-      "checkout",
       "rev-parse",
+      "ls-tree",
+      "ls-tree",
+      "read-tree",
+      "checkout-index",
     ]);
     expect(runner.invocations[1].args.at(-1)).toBe(COMMIT_64);
     expect(staged.sourceCommit).toBe(COMMIT_64);
@@ -628,14 +747,18 @@ describe("GitSkillImporter staging", () => {
 
   it("rejects symlinks and cleans only the failed operation staging directory", async () => {
     const runner = new FakeGitRunner((invocation) => {
-      if (invocation.args[0] === "clone") {
-        const destination = invocation.args.at(-1)!;
-        createCheckout(destination, { "SKILL.md": VALID_SKILL });
-        symlinkSync("SKILL.md", join(destination, "linked-skill"));
-        return { exitCode: 0, stdout: "", stderr: "" };
-      }
       if (invocation.args[0] === "rev-parse") {
         return { exitCode: 0, stdout: `${COMMIT_40}\n`, stderr: "" };
+      }
+      if (invocation.args[0] === "ls-tree" && invocation.args.includes("-r")) {
+        return {
+          exitCode: 0,
+          stdout: [
+            `100644 blob ${COMMIT_40}\tSKILL.md\0`,
+            `120000 blob ${COMMIT_40}\tlinked-skill\0`,
+          ].join(""),
+          stderr: "",
+        };
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     });
@@ -643,6 +766,7 @@ describe("GitSkillImporter staging", () => {
     mkdirSync(join(root, "packages", "preserved"));
 
     await expectGitCode(importer.stage({ repositoryUrl: "https://git.example.com/org/repo.git" }), "invalid_git_package");
+    expect(runner.invocations.some(({ args }) => args[0] === "checkout-index")).toBe(false);
     expect(readdirSync(join(root, "staging"))).toEqual([]);
     expect(existsSync(join(root, "packages", "preserved"))).toBe(true);
   });
@@ -658,19 +782,21 @@ describe("GitSkillImporter staging", () => {
     expect(readdirSync(join(root, "staging"))).toEqual([]);
   });
 
-  it("rejects an oversized regular file from metadata before attempting to read it", async () => {
+  it("rejects an oversized regular file from tree metadata before materializing it", async () => {
     const runner = new FakeGitRunner((invocation) => {
-      if (invocation.args[0] === "clone") {
-        const destination = invocation.args.at(-1)!;
-        createCheckout(destination, { "SKILL.md": VALID_SKILL });
-        const oversized = join(destination, "oversized.bin");
-        const descriptor = openSync(oversized, "w");
-        ftruncateSync(descriptor, 10 * 1024 * 1024 + 1);
-        closeSync(descriptor);
-        chmodSync(oversized, 0o000);
-      }
       if (invocation.args[0] === "rev-parse") {
         return { exitCode: 0, stdout: `${COMMIT_40}\n`, stderr: "" };
+      }
+      if (invocation.args[0] === "ls-tree" && invocation.args.includes("-r")) {
+        const includeSizes = invocation.args.includes("-l");
+        return {
+          exitCode: 0,
+          stdout: [
+            `100644 blob ${COMMIT_40}${includeSizes ? ` ${Buffer.byteLength(VALID_SKILL)}` : ""}\tSKILL.md\0`,
+            `100644 blob ${COMMIT_40}${includeSizes ? " 10485761" : ""}\toversized.bin\0`,
+          ].join(""),
+          stderr: "",
+        };
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     });
@@ -680,6 +806,7 @@ describe("GitSkillImporter staging", () => {
       importer.stage({ repositoryUrl: "https://git.example.com/org/repo.git" }),
       "skill_package_too_large",
     );
+    expect(runner.invocations.some(({ args }) => args[0] === "checkout-index")).toBe(false);
     expect(readdirSync(join(root, "staging"))).toEqual([]);
   });
 

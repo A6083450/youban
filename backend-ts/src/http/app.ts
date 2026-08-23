@@ -183,7 +183,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const tasks = new SqliteTaskStore(databasePath);
   const users = new SqliteUserRepository(databasePath);
   const conversations = new ConversationRepository(databasePath);
-  const memory = options.memory ?? new HermesMemoryBridge({ dataDir: options.dataDir });
+  const ownedMemory = options.memory ? undefined : new HermesMemoryBridge({ dataDir: options.dataDir });
+  const memory = options.memory ?? ownedMemory!;
   const settings = getSettings();
   const repoRoot = getRepoRoot();
   const skills = options.skillService ?? new SkillManagementService({
@@ -268,7 +269,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         ? [settleResourceClose(() => parentAgent.close())]
         : []),
     ];
-    void Promise.allSettled(generatedResourceCloses).then(() => {
+    void Promise.allSettled(generatedResourceCloses).then(async () => {
+      if (ownedMemory) await settleResourceClose(() => ownedMemory.close());
       if (options.skillService) return;
       try {
         skills.close();
@@ -1572,6 +1574,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           ...(!options.chatService ? [settleResourceClose(() => chatService.close())] : []),
           ...(!options.parentAgent ? [settleResourceClose(() => parentAgent.close())] : []),
         ]);
+        if (ownedMemory) await settleResourceClose(() => ownedMemory.close());
         if (!options.skillService) skills.close();
       };
       closePromise = activeRuns.size === 0

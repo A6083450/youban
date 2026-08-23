@@ -1,10 +1,38 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface ExportOptions {
   databasePath: string;
   outputDir: string;
+}
+
+function identifierHash(identifier: string): string {
+  return new Bun.CryptoHasher("sha256").update(identifier).digest("hex");
+}
+
+function portableStem(identifier: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(identifier)
+    ? identifier
+    : `id-${identifierHash(identifier)}`;
+}
+
+function exportPath(directory: string, identifier: string, usedNames: Set<string>): string {
+  const stem = portableStem(identifier);
+  const hash = identifierHash(identifier);
+  let filename = `${stem}.json`;
+  let sequence = 1;
+  const collisionKey = (name: string) => name.normalize("NFC").toLocaleLowerCase("und");
+  while (usedNames.has(collisionKey(filename))) {
+    filename = `${stem}-${hash}${sequence === 1 ? "" : `-${sequence}`}.json`;
+    sequence += 1;
+  }
+  usedNames.add(collisionKey(filename));
+
+  const resolvedDirectory = resolve(directory);
+  const path = resolve(resolvedDirectory, filename);
+  if (dirname(path) !== resolvedDirectory) throw new Error(`unsafe export identifier: ${identifier}`);
+  return path;
 }
 
 export function exportSqliteToJson(options: ExportOptions): {
@@ -23,20 +51,25 @@ export function exportSqliteToJson(options: ExportOptions): {
       task_id: string;
       payload: string;
     }>;
+    const taskNames = new Set<string>();
     for (const row of taskRows) {
-      writeFileSync(join(tasksDir, `${row.task_id}.json`), `${JSON.stringify(JSON.parse(row.payload), null, 2)}\n`);
+      writeFileSync(
+        exportPath(tasksDir, row.task_id, taskNames),
+        `${JSON.stringify(JSON.parse(row.payload), null, 2)}\n`,
+      );
     }
 
     const conversationRows = db.query(
       "SELECT plan_id, user_id, payload FROM conversations ORDER BY plan_id",
     ).all() as Array<{ plan_id: string; user_id: string; payload: string }>;
+    const conversationNames = new Set<string>();
     for (const row of conversationRows) {
       const payload: unknown = JSON.parse(row.payload);
       const messages = payload && typeof payload === "object" && !Array.isArray(payload)
         ? (payload as Record<string, unknown>).messages
         : payload;
       writeFileSync(
-        join(conversationsDir, `${row.plan_id}.json`),
+        exportPath(conversationsDir, row.plan_id, conversationNames),
         `${JSON.stringify({ plan_id: row.plan_id, user_id: row.user_id, messages }, null, 2)}\n`,
       );
     }
