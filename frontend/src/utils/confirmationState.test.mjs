@@ -112,6 +112,25 @@ test('ask_confirmation returns a message and keeps the draft', () => {
   )
 })
 
+test('ask_confirmation can refresh readiness without granting execution', () => {
+  assert.deepEqual(
+    reduceConfirmationDecision(state, {
+      action: 'ask_confirmation',
+      message: '草稿仍然完整，请再确认一次。',
+      ready_to_generate: true,
+      readiness_token: 'refreshed-ready-token',
+      execution_token: '',
+    }),
+    {
+      type: 'message',
+      message: '草稿仍然完整，请再确认一次。',
+      readyToGenerate: true,
+      readinessToken: 'refreshed-ready-token',
+      keepDraft: true,
+    }
+  )
+})
+
 test('update replaces the draft without generating', () => {
   const updatedDraft = {
     ...draft,
@@ -124,6 +143,7 @@ test('update replaces the draft without generating', () => {
       message: '已更新住宿。',
       trip: updatedDraft,
       ready_to_generate: true,
+      readiness_token: 'updated-ready-token',
       execution_token: 'must-not-be-used',
     }),
     {
@@ -132,6 +152,7 @@ test('update replaces the draft without generating', () => {
       cardId: 7,
       message: '已更新住宿。',
       readyToGenerate: true,
+      readinessToken: 'updated-ready-token',
       keepDraft: true,
     }
   )
@@ -143,10 +164,12 @@ test('incomplete update keeps actions hidden', () => {
     message: '还需要确认出发日期。',
     trip: { ...draft, inferred_fields: ['dates'] },
     ready_to_generate: false,
+    readiness_token: '',
   })
 
   assert.equal(effect.type, 'update')
   assert.equal(effect.readyToGenerate, false)
+  assert.equal(effect.readinessToken, '')
 })
 
 test('cancel clears the draft without generating', () => {

@@ -263,6 +263,7 @@ const ownsOperation = (token: number, ownerId: string) =>
 // 当前行程草稿的对话锚点:不完整时指向追问消息,完整时指向带操作按钮的草稿消息
 const pendingConfirmId = ref<number | null>(null)
 const pendingDraft = ref<ParsedTripDraft | null>(null)
+const pendingReadinessToken = ref('')
 // 正在等待流式回复的用户消息;刷新时若非空,说明回复被打断,恢复后自动重发续上
 const pendingUserText = ref<string | null>(null)
 let nextId = 1
@@ -376,6 +377,7 @@ interface ChatSessionSnapshot {
   items: PersistItem[]
   pendingConfirmId: number | null
   pendingDraft: ParsedTripDraft | null
+  pendingReadinessToken?: string
   pendingUserText: string | null
   nextId: number
 }
@@ -386,6 +388,7 @@ const persistChatSession = () => {
       items: items.value.filter(isPersistable),
       pendingConfirmId: pendingConfirmId.value,
       pendingDraft: pendingDraft.value,
+      pendingReadinessToken: pendingReadinessToken.value,
       pendingUserText: pendingUserText.value,
       nextId,
     }
@@ -526,6 +529,7 @@ const resetConversation = () => {
   items.value = []
   pendingConfirmId.value = null
   pendingDraft.value = null
+  pendingReadinessToken.value = ''
   pendingUserText.value = null
   nextId = 1
   composerRef.value?.setText('')
@@ -680,6 +684,9 @@ const restoreChatSession = () => {
     .map((it) => ({ ...it })) as ChatItem[]
   nextId = Math.max(snap.nextId || 0, ...items.value.map((i) => i.id + 1), 1)
   pendingDraft.value = snap.pendingDraft || null
+  pendingReadinessToken.value = typeof snap.pendingReadinessToken === 'string'
+    ? snap.pendingReadinessToken
+    : ''
   // 草稿锚点可能是未完成时的追问,也可能是已完成的路线草稿;避免恢复悬空引用
   const hasDraftAnchor =
     snap.pendingConfirmId != null &&
@@ -724,7 +731,7 @@ onUnmounted(() => {
 })
 
 // 对话状态变化后防抖落盘,供刷新恢复
-watch([items, pendingConfirmId, pendingDraft, pendingUserText], persistSoon, { deep: true })
+watch([items, pendingConfirmId, pendingDraft, pendingReadinessToken, pendingUserText], persistSoon, { deep: true })
 watch(() => currentUser.value?.user_id, () => {
   operationToken += 1
   generating.value = false
@@ -737,6 +744,7 @@ watch(() => items.value.length, (length) => {
 const clearPendingConfirm = () => {
   pendingConfirmId.value = null
   pendingDraft.value = null
+  pendingReadinessToken.value = ''
 }
 
 // 给 agent 的最近对话历史:包含可见的路线草稿文本,排除本轮刚加入的用户消息
@@ -768,7 +776,7 @@ const pushDraftMessage = (draft: ParsedTripDraft): number => pushItem({
 const canActOnDraft = (item: ChatItem): boolean =>
   item.type === 'draft'
   && item.id === pendingConfirmId.value
-  && shouldShowDraftActions(item.ready)
+  && shouldShowDraftActions(item.ready, pendingReadinessToken.value)
 
 // 草稿对话期间的所有回复都交给后端 Agent 决策,前端只解释结构化 action
 const handlePendingReply = async (
@@ -783,15 +791,16 @@ const handlePendingReply = async (
   const streamId = pushItem({ role: 'assistant', type: 'streaming', text: '' })
   let acc = ''
   // 流式版 confirmReply:过程逐字更新气泡,拿到完整结构化结果后 resolve,
-  // 仍交给既有编排逻辑决策(确认/修改/取消/闲聊),编排本身无需改动
+  // 仍交给编排逻辑决策确认、修改、取消和闲聊
   const streamingConfirmReply = (
     replyText: string,
     replyDraft: ParsedTripDraft,
     language: string,
-    history: ChatMessage[]
+    history: ChatMessage[],
+    readinessToken: string
   ): Promise<TripConfirmReplyResponse> =>
     new Promise((resolve, reject) => {
-      confirmTripReplyStream(replyText, replyDraft, language, history, {
+      confirmTripReplyStream(replyText, replyDraft, language, history, readinessToken, {
         onDelta: (d) => { acc += d; setStreamingText(streamId, acc) },
         onFinal: (payload) => resolve(payload),
         onError: (msg) => reject(new Error(msg)),
@@ -805,6 +814,7 @@ const handlePendingReply = async (
         cardId,
         language: getCurrentLocale(),
         history: getConversationHistory(currentUserItemId),
+        readinessToken: pendingReadinessToken.value,
       },
       {
         confirmReply: streamingConfirmReply,
@@ -818,6 +828,7 @@ const handlePendingReply = async (
       clearPendingConfirm()
       if (result.pending) {
         pendingDraft.value = result.pending.draft
+        pendingReadinessToken.value = result.pending.readinessToken
         const anchor = items.value.find((item) => item.id === result.pending?.cardId)
         pendingConfirmId.value = anchor?.type === 'draft'
           ? anchor.id
@@ -830,7 +841,8 @@ const handlePendingReply = async (
         text: effect.message || t('composer.clarifyFallback'),
       })
       pendingDraft.value = effect.draft
-      pendingConfirmId.value = effect.readyToGenerate
+      pendingReadinessToken.value = effect.readinessToken
+      pendingConfirmId.value = effect.readyToGenerate && effect.readinessToken
         ? pushDraftMessage(effect.draft)
         : streamId
     } else if (effect.type === 'cancel') {
@@ -850,7 +862,17 @@ const handlePendingReply = async (
           : t('composer.clarifyFallback')),
       })
       const anchor = items.value.find((item) => item.id === cardId)
-      if (anchor?.type !== 'draft') pendingConfirmId.value = streamId
+      if ('readinessToken' in effect) pendingReadinessToken.value = effect.readinessToken || ''
+      if (effect.type === 'message'
+        && effect.readyToGenerate
+        && effect.readinessToken
+        && pendingDraft.value) {
+        pendingConfirmId.value = anchor?.type === 'draft' && anchor.ready
+          ? anchor.id
+          : pushDraftMessage(pendingDraft.value)
+      } else if (anchor?.type !== 'draft') {
+        pendingConfirmId.value = streamId
+      }
     }
   } finally {
     pendingUserText.value = null
@@ -886,7 +908,8 @@ const runParseStream = async (text: string, userItemId: number) => {
       // 未完整时继续用普通对话追问;完整后再补一条带常驻操作的路线草稿消息
       replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
       pendingDraft.value = res.trip
-      pendingConfirmId.value = res.ready_to_generate === true
+      pendingReadinessToken.value = res.readiness_token || ''
+      pendingConfirmId.value = res.ready_to_generate === true && pendingReadinessToken.value
         ? pushDraftMessage(res.trip)
         : streamId
     }

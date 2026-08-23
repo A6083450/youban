@@ -88,8 +88,8 @@ export function formatChatDraft(draft, locale = 'zh-CN') {
   return lines.join('\n')
 }
 
-export function shouldShowDraftActions(readyToGenerate) {
-  return readyToGenerate === true
+export function shouldShowDraftActions(readyToGenerate, readinessToken) {
+  return readyToGenerate === true && typeof readinessToken === 'string' && readinessToken.length > 0
 }
 
 export function migrateLegacyDraftItems(items, locale = 'zh-CN') {
@@ -99,7 +99,7 @@ export function migrateLegacyDraftItems(items, locale = 'zh-CN') {
       ...item,
       type: 'draft',
       text: formatChatDraft(item.draft, locale),
-      ready: true,
+      ready: false,
     }
   })
 }

@@ -6,10 +6,10 @@ export interface ConfirmationState {
 }
 
 export type ConfirmationEffect =
-  | { type: 'message'; message: string; keepDraft: true }
-  | { type: 'update'; draft: ParsedTripDraft; cardId: number; message: string; readyToGenerate?: boolean; keepDraft: true }
+  | { type: 'message'; message: string; readyToGenerate?: boolean; readinessToken?: string; keepDraft: true }
+  | { type: 'update'; draft: ParsedTripDraft; cardId: number; message: string; readyToGenerate?: boolean; readinessToken: string; keepDraft: true }
   | { type: 'cancel'; message: string; cardId: number; keepDraft: false }
-  | { type: 'error'; message: string; keepDraft: true }
+  | { type: 'error'; message: string; readyToGenerate?: boolean; readinessToken?: string; keepDraft: true }
   | { type: 'generate'; draft: ParsedTripDraft; token: string; keepDraft: false }
 
 export function reduceConfirmationDecision(

@@ -185,6 +185,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
       success: true,
       action: "plan",
       ready_to_generate: true,
+      readiness_token: expect.any(String),
       trip: expect.objectContaining({
         city: "大理",
         travel_days: 7,
@@ -195,6 +196,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
         suggestions: [],
       }),
     }));
+    expect(result.readiness_token).not.toBe("");
     expect(llm.prompts[0]).toContain("国庆帮我安排大理七天");
   });
 
@@ -392,12 +394,14 @@ describe("trip parse/confirm HTTP and SSE", () => {
       '生成","cities":[]}',
     ];
     const { runtime, ledger } = makeRuntime([chunks]);
+    const readinessToken = ledger.attestReady({ ...draft, language: "zh-CN" });
     const response = await post(runtime.app, "/api/trip/confirm-reply/stream", {
       text: "照这个执行",
       draft,
       language: "zh-CN",
       today: "2026-08-21",
       history: [],
+      readiness_token: readinessToken,
     });
     const events = sseEvents(await response.text());
     const deltas = events.filter((event): event is Record<string, any> => event !== "done" && event.type === "delta");
@@ -425,6 +429,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
       confidence: 0.5,
       decision_id: "",
       execution_token: "",
+      readiness_token: "",
     }));
   });
 
@@ -449,6 +454,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(await response.json()).toEqual(expect.objectContaining({
       action: "update",
       ready_to_generate: false,
+      readiness_token: "",
       message: "三天记下了。你大概什么时候出发？",
       trip: expect.objectContaining({ travel_days: 3 }),
     }));
@@ -477,15 +483,18 @@ describe("trip parse/confirm HTTP and SSE", () => {
       today: "2026-08-23",
     });
 
-    expect(await response.json()).toEqual(expect.objectContaining({
+    const result = await response.json() as Record<string, any>;
+    expect(result).toEqual(expect.objectContaining({
       action: "update",
       ready_to_generate: true,
+      readiness_token: expect.any(String),
       trip: expect.objectContaining({
         start_date: "2026-10-01",
         traveler_count: 2,
         inferred_fields: [],
       }),
     }));
+    expect(result.readiness_token).not.toBe("");
   });
 
   it("honors an explicit execution command even when the model asks for confirmation again", async () => {
@@ -502,10 +511,12 @@ describe("trip parse/confirm HTTP and SSE", () => {
       message: "还需要确认吗？",
     });
     const { runtime, ledger } = makeRuntime([[output]]);
+    const readinessToken = ledger.attestReady({ ...draft, language: "zh-CN" });
     const response = await post(runtime.app, "/api/trip/confirm-reply", {
       text: "确认，立即按这个方案生成",
       draft,
       language: "zh-CN",
+      readiness_token: readinessToken,
     });
     const result = await response.json() as Record<string, any>;
 
@@ -515,7 +526,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
   });
 
-  it("treats a short affirmative as explicit authorization for a present draft", async () => {
+  it("does not authorize a short affirmative for a draft without a readiness attestation", async () => {
     const draft = {
       city: "北京",
       cities: [{ city: "北京", days: 3 }],
@@ -528,7 +539,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
       confidence: 0.2,
       message: "你要开始生成吗？",
     });
-    const { runtime, ledger } = makeRuntime([[output]]);
+    const { runtime } = makeRuntime([[output]]);
     const response = await post(runtime.app, "/api/trip/confirm-reply", {
       text: "确定",
       draft,
@@ -536,13 +547,57 @@ describe("trip parse/confirm HTTP and SSE", () => {
     });
     const result = await response.json() as Record<string, any>;
 
-    expect(result.action).toBe("confirm");
-    expect(result.confidence).toBe(1);
-    expect(result.execution_token).not.toBe("");
-    expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
+    expect(result.action).toBe("ask_confirmation");
+    expect(result.execution_token).toBe("");
+    expect(result.readiness_token).toBe("");
   });
 
-  it("accepts the visible Chinese and English detailed-itinerary commands", async () => {
+  it("re-attests a complete draft after readiness expires without executing in the same turn", async () => {
+    const draft = {
+      city: "北京",
+      cities: [{ city: "北京", days: 3 }],
+      start_date: "2026-10-01",
+      end_date: "2026-10-03",
+      travel_days: 3,
+    };
+    const { runtime, ledger } = makeRuntime([
+      [JSON.stringify({
+        action: "confirm",
+        confidence: 0.96,
+        message: "草稿完整，可以开始生成。",
+      })],
+      [JSON.stringify({ action: "ask_confirmation", confidence: 0.2, message: "再确认一次？" })],
+    ]);
+
+    const refreshed = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "确定",
+      draft,
+      language: "zh-CN",
+      readiness_token: "expired-or-restarted-token",
+    });
+    const refreshedResult = await refreshed.json() as Record<string, any>;
+
+    expect(refreshedResult.action).toBe("ask_confirmation");
+    expect(refreshedResult.execution_token).toBe("");
+    expect(refreshedResult.ready_to_generate).toBeTrue();
+    expect(refreshedResult.readiness_token).not.toBe("");
+    expect(ledger.validateReady(
+      refreshedResult.readiness_token,
+      { ...draft, language: "zh-CN" },
+    ).valid).toBeTrue();
+
+    const confirmed = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "确定",
+      draft,
+      language: "zh-CN",
+      readiness_token: refreshedResult.readiness_token,
+    });
+    const confirmedResult = await confirmed.json() as Record<string, any>;
+    expect(confirmedResult.action).toBe("confirm");
+    expect(confirmedResult.execution_token).not.toBe("");
+  });
+
+  it("accepts visible Chinese and English authorization commands for an attested draft", async () => {
     const draft = {
       city: "北京",
       cities: [{ city: "北京", days: 3 }],
@@ -554,6 +609,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
     for (const [text, language] of [
       ["生成详细行程", "zh-CN"],
       ["Generate detailed itinerary", "en-US"],
+      ["confirm", "en-US"],
     ] as const) {
       const output = JSON.stringify({
         action: "ask_confirmation",
@@ -561,10 +617,12 @@ describe("trip parse/confirm HTTP and SSE", () => {
         message: "需要确认吗？",
       });
       const { runtime, ledger } = makeRuntime([[output]]);
+      const readinessToken = ledger.attestReady({ ...draft, language });
       const response = await post(runtime.app, "/api/trip/confirm-reply", {
         text,
         draft,
         language,
+        readiness_token: readinessToken,
       });
       const result = await response.json() as Record<string, any>;
 
@@ -616,10 +674,12 @@ describe("trip parse/confirm HTTP and SSE", () => {
     runtimes.push(runtime);
 
     const parsed = await post(runtime.app, "/api/trip/parse", { text: "去北京一天" }, "user-parent");
-    const draft = (await parsed.json() as Record<string, any>).trip;
+    const parsedResult = await parsed.json() as Record<string, any>;
+    const draft = parsedResult.trip;
     const confirmed = await post(runtime.app, "/api/trip/confirm-reply", {
       text: "开始吧",
       draft,
+      readiness_token: parsedResult.readiness_token,
     }, "user-parent");
 
     expect(confirmed.status).toBe(200);

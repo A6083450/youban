@@ -68,4 +68,26 @@ describe("ConfirmationLedger", () => {
     now = 1_010_250;
     expect(ledger.validate(token, DRAFT)).toEqual({ valid: false, reason: "expired" });
   });
+
+  it("attests ready drafts without granting execution and binds the attestation to the draft", () => {
+    const ledger = new ConfirmationLedger({ secret: Buffer.alloc(32, 10) });
+    const token = ledger.attestReady(DRAFT);
+
+    expect(token).not.toBe("");
+    expect(ledger.validateReady(token, DRAFT)).toEqual({ valid: true, reason: "ok" });
+    expect(ledger.validate(token, DRAFT).valid).toBeFalse();
+    expect(ledger.validateReady(token, { ...DRAFT, travel_days: 5 })).toEqual({
+      valid: false,
+      reason: "draft_mismatch",
+    });
+  });
+
+  it("expires ready-draft attestations at the exact deadline", () => {
+    let now = 2_000_000;
+    const ledger = new ConfirmationLedger({ now: () => now, secret: Buffer.alloc(32, 12) });
+    const token = ledger.attestReady(DRAFT, 10);
+    now = 2_010_000;
+
+    expect(ledger.validateReady(token, DRAFT)).toEqual({ valid: false, reason: "expired" });
+  });
 });

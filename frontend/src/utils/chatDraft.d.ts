@@ -10,5 +10,5 @@ export interface ConversationalDraftItem {
 }
 
 export function formatChatDraft(draft: ParsedTripDraft, locale?: string): string
-export function shouldShowDraftActions(readyToGenerate?: boolean): boolean
+export function shouldShowDraftActions(readyToGenerate?: boolean, readinessToken?: string): boolean
 export function migrateLegacyDraftItems<T>(items: T[], locale?: string): Array<T | ConversationalDraftItem>

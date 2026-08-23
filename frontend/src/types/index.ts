@@ -197,7 +197,7 @@ export interface WeatherInfo {
 
 export interface TripPlan {
   city: string
-  cities?: string[]
+  cities?: Array<string | CityStay>
   start_date: string
   end_date: string
   traveler_count?: number
@@ -524,6 +524,7 @@ export interface TripParseApiResponse {
   need_clarify: boolean
   // 后端 LLM 判断需求字段是否完整;仅供展示,绝不代表用户已确认生成
   ready_to_generate?: boolean
+  readiness_token?: string
   clarify_question: string
   summary: string
   trip?: ParsedTripDraft | null
@@ -538,6 +539,7 @@ export interface TripConfirmReplyResponse {
   confidence: number
   message: string
   ready_to_generate?: boolean
+  readiness_token?: string
   trip?: ParsedTripDraft | null
   decision_id?: string
   execution_token?: string

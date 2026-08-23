@@ -29,6 +29,7 @@ const input = {
   cardId: 7,
   language: 'zh-CN',
   history: [{ role: 'assistant', content: '要按这份草稿生成吗？' }],
+  readinessToken: 'ready-token-123',
 }
 
 const createHarness = (response, generateResult = { status: 'completed' }) => {
@@ -55,9 +56,9 @@ test('forwards every pending reply to confirm-reply exactly once without interpr
 
   const result = await orchestrateConfirmationReply(input, harness.dependencies)
 
-  assert.deepEqual(harness.confirmCalls, [[input.text, draft, input.language, input.history]])
+  assert.deepEqual(harness.confirmCalls, [[input.text, draft, input.language, input.history, input.readinessToken]])
   assert.equal(harness.generateCalls.length, 0)
-  assert.deepEqual(result.pending, { cardId: 7, draft })
+  assert.deepEqual(result.pending, { cardId: 7, draft, readinessToken: input.readinessToken })
 })
 
 const updatedDraft = { ...draft, accommodation: '精品酒店' }
@@ -66,21 +67,28 @@ for (const { response, expected } of [
     response: { action: 'chat', message: '继续聊聊。' },
     expected: {
       effect: { type: 'message', message: '继续聊聊。', keepDraft: true },
-      pending: { cardId: 7, draft },
+      pending: { cardId: 7, draft, readinessToken: input.readinessToken },
     },
   },
   {
     response: { action: 'ask_confirmation', message: '要按当前草稿生成吗？' },
     expected: {
       effect: { type: 'message', message: '要按当前草稿生成吗？', keepDraft: true },
-      pending: { cardId: 7, draft },
+      pending: { cardId: 7, draft, readinessToken: input.readinessToken },
     },
   },
   {
     response: { action: 'update', message: '已修改。', trip: updatedDraft },
     expected: {
-      effect: { type: 'update', draft: updatedDraft, cardId: 7, message: '已修改。', keepDraft: true },
-      pending: { cardId: 7, draft: updatedDraft },
+      effect: {
+        type: 'update',
+        draft: updatedDraft,
+        cardId: 7,
+        message: '已修改。',
+        readinessToken: '',
+        keepDraft: true,
+      },
+      pending: { cardId: 7, draft: updatedDraft, readinessToken: '' },
     },
   },
   {
@@ -94,7 +102,7 @@ for (const { response, expected } of [
     response: { action: 'confirm', message: '开始生成。', trip: draft },
     expected: {
       effect: { type: 'error', message: '开始生成。', keepDraft: true },
-      pending: { cardId: 7, draft },
+      pending: { cardId: 7, draft, readinessToken: input.readinessToken },
     },
   },
 ]) {
@@ -187,7 +195,7 @@ test('contextual endpoint scenario matrix only orchestrates generation for signe
 
     assert.deepEqual(
       harness.confirmCalls,
-      [[scenario.text, draft, input.language, scenario.history]],
+      [[scenario.text, draft, input.language, scenario.history, input.readinessToken]],
       scenario.name
     )
     assert.equal(harness.generateCalls.length, scenario.expectedGenerateCalls, scenario.name)
@@ -231,7 +239,7 @@ test('confirm-reply failure returns an error effect and preserves the original p
   assert.equal(generateCalls.length, 0)
   assert.deepEqual(result, {
     effect: { type: 'error', message: 'Agent unavailable', keepDraft: true },
-    pending: { cardId: 7, draft },
+    pending: { cardId: 7, draft, readinessToken: input.readinessToken },
   })
 })
 
@@ -249,7 +257,11 @@ test('submission failure restores the confirmed draft and pending card state', a
   assert.equal(harness.confirmCalls.length, 1)
   assert.equal(harness.generateCalls.length, 1)
   assert.equal(result.effect.type, 'generate')
-  assert.deepEqual(result.pending, { cardId: 7, draft: confirmedDraft })
+  assert.deepEqual(result.pending, {
+    cardId: 7,
+    draft: confirmedDraft,
+    readinessToken: input.readinessToken,
+  })
 })
 
 test('watch failure after task creation never restores pending confirmation', async () => {

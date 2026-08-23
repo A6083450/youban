@@ -670,7 +670,8 @@ export async function confirmTripReply(
   text: string,
   draft: ParsedTripDraft,
   language: string,
-  history: ChatMessage[] = []
+  history: ChatMessage[] = [],
+  readinessToken = ''
 ): Promise<TripConfirmReplyResponse> {
   try {
     const today = new Date()
@@ -681,6 +682,7 @@ export async function confirmTripReply(
       language,
       today: todayStr,
       history: history.slice(-10),
+      readiness_token: readinessToken,
     })
     return response.data
   } catch (error: any) {
@@ -778,6 +780,7 @@ export function confirmTripReplyStream(
   draft: ParsedTripDraft,
   language: string,
   history: ChatMessage[],
+  readinessToken: string,
   cb: ChatStreamCallbacks<TripConfirmReplyResponse>
 ): Promise<void> {
   return postSSE('/api/trip/confirm-reply/stream', {
@@ -786,6 +789,7 @@ export function confirmTripReplyStream(
     language,
     today: todayString(),
     history: history.slice(-10),
+    readiness_token: readinessToken,
   }, cb)
 }
 

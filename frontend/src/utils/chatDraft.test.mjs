@@ -46,13 +46,14 @@ test('formats the same draft in English', () => {
   assert.match(text, /Suggested defaults: Transportation/)
 })
 
-test('shows draft actions only when the backend marks the draft ready', () => {
-  assert.equal(shouldShowDraftActions(true), true)
-  assert.equal(shouldShowDraftActions(false), false)
-  assert.equal(shouldShowDraftActions(undefined), false)
+test('shows draft actions only with backend readiness and its signed token', () => {
+  assert.equal(shouldShowDraftActions(true, 'ready-token'), true)
+  assert.equal(shouldShowDraftActions(true, ''), false)
+  assert.equal(shouldShowDraftActions(false, 'ready-token'), false)
+  assert.equal(shouldShowDraftActions(undefined, 'ready-token'), false)
 })
 
-test('migrates legacy confirmation cards to ready conversational drafts', () => {
+test('migrates legacy confirmation cards conservatively without executable actions', () => {
   const items = [
     { id: 1, role: 'user', type: 'text', text: '去北京玩三天' },
     { id: 2, role: 'assistant', type: 'confirm', draft },
@@ -67,6 +68,6 @@ test('migrates legacy confirmation cards to ready conversational drafts', () => 
     type: 'draft',
     draft,
     text: formatChatDraft(draft, 'zh-CN'),
-    ready: true,
+    ready: false,
   })
 })

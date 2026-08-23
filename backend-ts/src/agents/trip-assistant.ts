@@ -22,6 +22,7 @@ export interface ConfirmTripInput {
   language?: string;
   today?: string;
   history?: ChatHistoryItem[];
+  readiness_token?: string;
 }
 
 interface RunOptions {
@@ -92,7 +93,7 @@ function isExplicitExecutionAuthorization(value: unknown): boolean {
     || /(不(?:确认|确定|同意|要|想)|不要|先不|别|取消|稍等|等等|修改|改成|暂不)/.test(text)
     || /(don't|dont|donot|notyet|cancel|stop|change|modify)/.test(lower)) return false;
   if (/^(确认|确定|开始吧|就这样|按这个来|生成详细行程)$/.test(text)) return true;
-  if (/^(generatedetaileditinerary|createdetaileditinerary|startplanning)$/.test(lower)) return true;
+  if (/^(confirm|generatedetaileditinerary|createdetaileditinerary|startplanning)$/.test(lower)) return true;
   const confirms = /(确认|确定|同意|就按|照.+执行|立即.+生成)/.test(text);
   const executes = /(方案|生成|执行|开始)/.test(text);
   return confirms && executes;
@@ -272,6 +273,7 @@ export class TripAssistant {
       recommendations: [],
       need_clarify: true,
       ready_to_generate: false,
+      readiness_token: "",
       clarify_question: fallback,
       summary: "",
       trip: null,
@@ -317,6 +319,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
         recommendations,
         need_clarify: action === "clarify" || action === "recommend",
         ready_to_generate: false,
+        readiness_token: "",
         clarify_question: reply,
         summary: "",
         trip: null,
@@ -334,6 +337,25 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     const inferred = ready ? [] : strings(data.inferred_fields).filter((field) => INFERRED_FIELDS.has(field));
     const suggestions = ready ? [] : strings(data.suggestions).slice(0, 4);
     const budgetBasis = data.budget_basis === "per_person" ? "per_person" : "group_total";
+    const trip = {
+      city: cities[0]!.city,
+      cities,
+      start_date: startDate,
+      end_date: endDate,
+      travel_days: travelDays,
+      transportation: nonBlank(data.transportation, "公共交通"),
+      accommodation: nonBlank(data.accommodation, "经济型酒店"),
+      traveler_count: travelerCount,
+      room_count: roomCount,
+      budget_amount: safeBudget(data.budget_amount),
+      budget_basis: budgetBasis,
+      preferences: strings(data.preferences),
+      free_text_input: input.text,
+      origin_text: input.text,
+      inferred_fields: inferred,
+      suggestions,
+    };
+    const language = String(input.language ?? "").trim().replaceAll("_", "-");
     return {
       success: true,
       action: "plan",
@@ -343,26 +365,12 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       recommendations,
       need_clarify: false,
       ready_to_generate: ready,
+      readiness_token: ready
+        ? this.dependencies.ledger.attestReady({ ...trip, language })
+        : "",
       clarify_question: String(data.clarify_question ?? reply),
       summary: String(data.summary ?? ""),
-      trip: {
-        city: cities[0]!.city,
-        cities,
-        start_date: startDate,
-        end_date: endDate,
-        travel_days: travelDays,
-        transportation: nonBlank(data.transportation, "公共交通"),
-        accommodation: nonBlank(data.accommodation, "经济型酒店"),
-        traveler_count: travelerCount,
-        room_count: roomCount,
-        budget_amount: safeBudget(data.budget_amount),
-        budget_basis: budgetBasis,
-        preferences: strings(data.preferences),
-        free_text_input: input.text,
-        origin_text: input.text,
-        inferred_fields: inferred,
-        suggestions,
-      },
+      trip,
     };
   }
 
@@ -371,7 +379,12 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     const draft = input.draft ?? {};
     const language = String(input.language ?? "").trim().replaceAll("_", "-");
     const fallback = languageFallback(language, "confirm");
-    const explicitAuthorization = Object.keys(draft).length > 0 && isExplicitExecutionAuthorization(input.text);
+    const readiness = this.dependencies.ledger.validateReady(
+      input.readiness_token,
+      { ...draft, language },
+    );
+    const trustedReady = Object.keys(draft).length > 0 && readiness.valid;
+    const explicitAuthorization = trustedReady && isExplicitExecutionAuthorization(input.text);
     const prompt = `你是旅行规划助手的意图判断模块。今天是 ${today}。
 当前草稿：${JSON.stringify(draft)}
 最近对话：\n${historyText(input.history)}
@@ -390,6 +403,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
           confidence: 1,
           message: "已确认，正在按当前方案生成行程。",
           ready_to_generate: true,
+          readiness_token: input.readiness_token ?? "",
           trip: draft,
           decision_id: decision.decisionId,
           execution_token: decision.token,
@@ -401,6 +415,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
         confidence: 0,
         message: fallback,
         ready_to_generate: false,
+        readiness_token: trustedReady ? input.readiness_token ?? "" : "",
         trip: Object.keys(draft).length > 0 ? draft : null,
         decision_id: "",
         execution_token: "",
@@ -417,6 +432,8 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       action = "confirm";
       confidence = 1;
     }
+    const agentConfirmedReady = action === "confirm" && confidence >= 0.85;
+    if (action === "confirm" && !trustedReady) action = "ask_confirmation";
     if (action === "confirm" && confidence < 0.85) action = "ask_confirmation";
     if (action === "ask_confirmation") message = fallback;
     if (!message) message = fallback;
@@ -424,7 +441,14 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     let trip: Record<string, unknown> | null = Object.keys(draft).length > 0 ? draft : null;
     if (action === "update") trip = this.updatedTrip(data, draft, today);
     if (action === "update" && !trip) action = "chat";
-    const readyToGenerate = action === "confirm" || data.ready_to_generate === true;
+    const readyToGenerate = action === "confirm" || agentConfirmedReady || data.ready_to_generate === true;
+    const shouldAttestReady = action !== "cancel"
+      && readyToGenerate
+      && trip
+      && (action === "update" || !trustedReady);
+    const readinessToken = shouldAttestReady
+      ? this.dependencies.ledger.attestReady({ ...trip, language })
+      : trustedReady ? input.readiness_token ?? "" : "";
 
     let decisionId = "";
     let token = "";
@@ -439,6 +463,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       confidence,
       message,
       ready_to_generate: readyToGenerate,
+      readiness_token: readinessToken,
       trip,
       decision_id: decisionId,
       execution_token: token,

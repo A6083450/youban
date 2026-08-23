@@ -40,7 +40,11 @@ export function buildTripPlanRequest(draft, executionToken, language) {
 }
 
 export async function orchestrateConfirmationReply(input, dependencies) {
-  const originalPending = { cardId: input.cardId, draft: input.draft }
+  const originalPending = {
+    cardId: input.cardId,
+    draft: input.draft,
+    readinessToken: input.readinessToken,
+  }
   let response
 
   try {
@@ -48,7 +52,8 @@ export async function orchestrateConfirmationReply(input, dependencies) {
       input.text,
       input.draft,
       input.language,
-      input.history
+      input.history,
+      input.readinessToken
     )
   } catch (error) {
     return {
@@ -72,7 +77,7 @@ export async function orchestrateConfirmationReply(input, dependencies) {
       effect,
       generation,
       pending: generation.status === 'submit_failed'
-        ? { cardId: input.cardId, draft: effect.draft }
+        ? { cardId: input.cardId, draft: effect.draft, readinessToken: input.readinessToken }
         : null,
     }
   }
@@ -82,8 +87,18 @@ export async function orchestrateConfirmationReply(input, dependencies) {
   }
 
   if (effect.type === 'update') {
-    return { effect, pending: { cardId: input.cardId, draft: effect.draft } }
+    return {
+      effect,
+      pending: {
+        cardId: input.cardId,
+        draft: effect.draft,
+        readinessToken: effect.readinessToken,
+      },
+    }
   }
 
-  return { effect, pending: originalPending }
+  const readinessToken = 'readinessToken' in effect
+    ? effect.readinessToken ?? input.readinessToken
+    : input.readinessToken
+  return { effect, pending: { ...originalPending, readinessToken } }
 }

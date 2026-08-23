@@ -12,6 +12,7 @@ export interface ConfirmationOrchestrationInput {
   cardId: number
   language: string
   history: ChatMessage[]
+  readinessToken: string
 }
 
 export type PlanGenerationOutcome =
@@ -32,7 +33,8 @@ export interface ConfirmationOrchestrationDependencies {
     text: string,
     draft: ParsedTripDraft,
     language: string,
-    history: ChatMessage[]
+    history: ChatMessage[],
+    readinessToken: string
   ) => Promise<TripConfirmReplyResponse>
   generate: (draft: ParsedTripDraft, executionToken: string) => Promise<PlanGenerationOutcome>
 }
@@ -40,6 +42,7 @@ export interface ConfirmationOrchestrationDependencies {
 export interface PendingConfirmation {
   cardId: number
   draft: ParsedTripDraft
+  readinessToken: string
 }
 
 export interface ConfirmationOrchestrationResult {

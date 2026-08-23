@@ -84,25 +84,46 @@ export class ConfirmationLedger {
     }
     const decisionId = crypto.randomUUID().replaceAll("-", "");
     const payload = {
+      token_type: "execution",
       decision_id: decisionId,
       nonce: randomBytes(16).toString("base64url"),
       expires_at: now + ttlSeconds * 1_000,
       draft_hash: draftHash(draft),
     };
-    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    const signature = createHmac("sha256", this.secret).update(encoded).digest("hex");
+    const token = this.encode(payload);
     this.entries.set(decisionId, {
       decisionId,
       expiresAt: payload.expires_at,
       draftHash: payload.draft_hash,
       consumed: false,
     });
-    return { decisionId, token: `${encoded}.${signature}` };
+    return { decisionId, token };
+  }
+
+  attestReady(draft: unknown, ttlSeconds = 600): string {
+    const now = this.now();
+    return this.encode({
+      token_type: "readiness",
+      nonce: randomBytes(16).toString("base64url"),
+      expires_at: now + ttlSeconds * 1_000,
+      draft_hash: draftHash(draft),
+    });
+  }
+
+  validateReady(token: unknown, draft: unknown): { valid: boolean; reason: ConfirmationReason } {
+    const decoded = this.decode(token);
+    if (!decoded.payload) return { valid: false, reason: decoded.reason };
+    if (decoded.payload.token_type !== "readiness") return { valid: false, reason: "invalid_token" };
+    const expiresAt = Number(decoded.payload.expires_at);
+    if (!Number.isFinite(expiresAt) || this.now() >= expiresAt) return { valid: false, reason: "expired" };
+    if (decoded.payload.draft_hash !== draftHash(draft)) return { valid: false, reason: "draft_mismatch" };
+    return { valid: true, reason: "ok" };
   }
 
   validate(token: unknown, draft: unknown): { valid: boolean; reason: ConfirmationReason } {
     const decoded = this.decode(token);
     if (!decoded.payload) return { valid: false, reason: decoded.reason };
+    if (decoded.payload.token_type !== "execution") return { valid: false, reason: "invalid_token" };
     const entry = this.entries.get(String(decoded.payload.decision_id ?? ""));
     if (!entry) return { valid: false, reason: "unknown_decision" };
     if (entry.consumed) return { valid: false, reason: "already_consumed" };
@@ -121,6 +142,12 @@ export class ConfirmationLedger {
 
   clear(): void {
     this.entries.clear();
+  }
+
+  private encode(payload: Record<string, unknown>): string {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signature = createHmac("sha256", this.secret).update(encoded).digest("hex");
+    return `${encoded}.${signature}`;
   }
 
   private decode(token: unknown): {

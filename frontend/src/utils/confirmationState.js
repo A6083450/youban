@@ -33,6 +33,7 @@ export function reduceConfirmationDecision(state, response) {
       ...(typeof response.ready_to_generate === 'boolean'
         ? { readyToGenerate: response.ready_to_generate }
         : {}),
+      readinessToken: response.readiness_token || '',
       keepDraft: true,
     }
   }
@@ -40,6 +41,12 @@ export function reduceConfirmationDecision(state, response) {
   return {
     type: response.action === 'chat' || response.action === 'ask_confirmation' ? 'message' : 'error',
     message: response.message || '',
+    ...(typeof response.ready_to_generate === 'boolean'
+      ? { readyToGenerate: response.ready_to_generate }
+      : {}),
+    ...(typeof response.readiness_token === 'string'
+      ? { readinessToken: response.readiness_token }
+      : {}),
     keepDraft: true,
   }
 }

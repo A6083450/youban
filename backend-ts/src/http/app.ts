@@ -974,6 +974,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           role: t.Optional(t.String()),
           content: t.Optional(t.String()),
         }))),
+        readiness_token: t.Optional(t.String()),
       }),
     })
     .post("/api/trip/confirm-reply/stream", ({ body, headers, request }) => sseResponse(
@@ -991,6 +992,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           role: t.Optional(t.String()),
           content: t.Optional(t.String()),
         }))),
+        readiness_token: t.Optional(t.String()),
       }),
     })
     .post("/api/trip/plan", ({ body, headers, status }) => {
