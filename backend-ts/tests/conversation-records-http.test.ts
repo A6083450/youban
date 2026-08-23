@@ -369,6 +369,49 @@ describe("conversation record HTTP API", () => {
     ]);
   });
 
+  it("keeps planner success authoritative when the completed session transition throws", async () => {
+    const planner = new ControlledPlanner();
+    const value = runtime(
+      new ConversationTitleService({ agentComplete: async () => "大理三日自然旅行" }),
+      planner,
+    );
+    await createConversation(value.app);
+    const token = value.assistant.ledger.register(DRAFT, 0.95).token;
+    const accepted = await json(await call(value.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      session_id: "session-1",
+      execution_token: token,
+    }));
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    sessions.database.raw.exec(`
+      CREATE TRIGGER reject_completed_session_projection
+      BEFORE UPDATE OF state ON conversation_sessions
+      WHEN NEW.state = 'planned'
+      BEGIN
+        SELECT RAISE(ABORT, 'reject completed session projection');
+      END;
+    `);
+    sessions.close();
+
+    planner.succeed();
+    await waitFor(() => value.tasks.get(accepted.task_id)?.status !== "processing");
+    await Bun.sleep(10);
+    const statusResponse = await call(value.app, "GET", `/api/trip/status/${accepted.task_id}`);
+
+    expect(value.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "completed",
+      stage: "completed",
+      result: expect.objectContaining({ success: true }),
+      error: null,
+    }));
+    expect(statusResponse.status).toBe(200);
+    expect(await json(statusResponse)).toEqual(expect.objectContaining({
+      task_id: accepted.task_id,
+      status: "completed",
+      result: expect.objectContaining({ success: true }),
+    }));
+  });
+
   it("returns a failed linked generation to chatting without creating a duplicate record", async () => {
     const planner = new ControlledPlanner();
     const value = runtime(
@@ -421,10 +464,10 @@ describe("conversation record HTTP API", () => {
 
     expect(adminList.status).toBe(200);
     expect((await json(adminList)).items).toEqual([
-      expect.objectContaining({ record_id: "session-1", state: "planned", status: "completed" }),
+      expect.objectContaining({ record_id: "session:session-1", state: "planned", status: "completed" }),
     ]);
     const permanentlyDeleted = await value.app.handle(new Request(
-      "http://localhost/api/admin/records/session-1",
+      "http://localhost/api/admin/records/session:session-1",
       { method: "DELETE", headers: { "x-admin-token": "admin@123" } },
     ));
     expect(permanentlyDeleted.status).toBe(200);

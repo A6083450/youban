@@ -151,11 +151,17 @@ export class ConversationRecordService {
     const records = [
       ...sessions.map((session) => {
         const plan = session.planId ? plansById.get(session.planId) : undefined;
-        return projectSession(session, plan, plan ? deletedByTaskId.get(plan.task_id) ?? null : null);
+        return {
+          ...projectSession(session, plan, plan ? deletedByTaskId.get(plan.task_id) ?? null : null),
+          record_id: `session:${session.sessionId}`,
+        };
       }),
       ...history
         .filter((plan) => !linkedPlanIds.has(plan.plan_id))
-        .map((plan) => projectLegacyPlan(plan, deletedByTaskId.get(plan.task_id) ?? null)),
+        .map((plan) => ({
+          ...projectLegacyPlan(plan, deletedByTaskId.get(plan.task_id) ?? null),
+          record_id: `task:${plan.task_id}`,
+        })),
     ];
     return records
       .filter((record) => visibility === "all"
@@ -269,19 +275,32 @@ export class ConversationRecordService {
     return this.tombstone(linked, matching[0]!);
   }
 
-  permanentlyDelete(recordId: string): PermanentDeleteResult {
-    const session = this.sessions.listAll().find((candidate) => candidate.sessionId === recordId);
-    let task = session?.planId
-      ? this.uniqueTaskForPlan(session.planId)
-      : undefined;
-    if (!session) {
-      task = this.tasks.get(recordId) ?? this.uniqueTaskForPlan(recordId);
+  permanentlyDeleteRecord(recordId: string): PermanentDeleteResult {
+    if (recordId.startsWith("session:")) {
+      const sessionId = recordId.slice("session:".length);
+      const session = this.sessions.listAll().find((candidate) => candidate.sessionId === sessionId);
+      if (!session) return { status: "not_found" };
+      const task = session.planId ? this.uniqueTaskForPlan(session.planId) : undefined;
+      if (session.planId && !task) return { status: "not_found" };
+      return this.deleteAggregate(session, task);
     }
-    if (!session && !task) return { status: "not_found" };
+    if (recordId.startsWith("task:")) {
+      return this.permanentlyDeleteTask(recordId.slice("task:".length));
+    }
+    return { status: "not_found" };
+  }
 
-    const linkedSession = session ?? (task
-      ? this.sessions.getByPlanId(task.plan_id, { includeDeleted: true })
-      : undefined);
+  permanentlyDeleteTask(taskId: string): PermanentDeleteResult {
+    const task = this.tasks.get(taskId);
+    if (!task) return { status: "not_found" };
+    const session = this.sessions.getByPlanId(task.plan_id, { includeDeleted: true });
+    return this.deleteAggregate(session, task);
+  }
+
+  private deleteAggregate(
+    linkedSession: ConversationSession | undefined,
+    task: ReturnType<SqliteTaskStore["get"]>,
+  ): PermanentDeleteResult {
     if (task?.status === "processing" || linkedSession?.state === "generating") {
       return { status: "conflict" };
     }
@@ -366,10 +385,13 @@ export class ConversationRecordService {
   }
 
   private cleanupImages(referenced: Set<string>): number {
-    const remaining = this.tasks.all().map((candidate) => JSON.stringify(candidate)).join("\n");
+    const remaining = new Set<string>();
+    for (const task of this.tasks.all()) {
+      for (const name of this.imageReferences(task)) remaining.add(name);
+    }
     let removedImages = 0;
     for (const name of referenced) {
-      if (remaining.includes(`/api/images/${name}`)) continue;
+      if (remaining.has(name)) continue;
       const path = join(this.imagesDir, name);
       try {
         if (existsSync(path)) {

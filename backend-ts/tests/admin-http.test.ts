@@ -107,6 +107,59 @@ describe("admin HTTP", () => {
     expect(runtime.tasks.get("alice-trip")).toBeUndefined();
   });
 
+  it("keeps legacy task deletion in the task namespace when a session id collides", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "alice-trip",
+      userId: aliceId,
+      firstMessage: "与任务编号碰撞的纯聊天",
+      snapshot: { version: 1, items: [] },
+    });
+
+    const removed = await call("DELETE", "/api/admin/trips/alice-trip", undefined, "admin@123");
+
+    expect(removed.status).toBe(200);
+    expect(runtime.tasks.get("alice-trip")).toBeUndefined();
+    expect(sessions.getOwned("alice-trip", aliceId)).toEqual(expect.objectContaining({
+      sessionId: "alice-trip",
+      planId: null,
+    }));
+    sessions.close();
+  });
+
+  it("uses namespaced record ids to delete the selected side of an id collision", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "alice-trip",
+      userId: aliceId,
+      firstMessage: "与任务编号碰撞的纯聊天",
+      snapshot: { version: 1, items: [] },
+    });
+
+    const recordIds = (await adminRecords("all")).map((record) => record.record_id).sort();
+    expect(recordIds).toEqual(["session:alice-trip", "task:alice-trip"]);
+
+    const chatRemoved = await call(
+      "DELETE",
+      "/api/admin/records/session:alice-trip",
+      undefined,
+      "admin@123",
+    );
+    expect(chatRemoved.status).toBe(200);
+    expect(sessions.getOwned("alice-trip", aliceId)).toBeUndefined();
+    expect(runtime.tasks.get("alice-trip")).toBeDefined();
+
+    const taskRemoved = await call(
+      "DELETE",
+      "/api/admin/records/task:alice-trip",
+      undefined,
+      "admin@123",
+    );
+    expect(taskRemoved.status).toBe(200);
+    expect(runtime.tasks.get("alice-trip")).toBeUndefined();
+    sessions.close();
+  });
+
   it("lists conversations and plans by visibility with owner nicknames", async () => {
     const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
     sessions.create({
@@ -131,12 +184,12 @@ describe("admin HTTP", () => {
 
     expect(all).toHaveLength(3);
     expect(all).toEqual(expect.arrayContaining([
-      expect.objectContaining({ record_id: "active-chat", kind: "conversation", nickname: "小艾", user_deleted_at: null }),
-      expect.objectContaining({ record_id: "deleted-chat", kind: "conversation", nickname: "小艾", user_deleted_at: expect.any(String) }),
-      expect.objectContaining({ record_id: "alice-trip", kind: "plan", nickname: "小艾", user_deleted_at: expect.any(String) }),
+      expect.objectContaining({ record_id: "session:active-chat", kind: "conversation", nickname: "小艾", user_deleted_at: null }),
+      expect.objectContaining({ record_id: "session:deleted-chat", kind: "conversation", nickname: "小艾", user_deleted_at: expect.any(String) }),
+      expect.objectContaining({ record_id: "task:alice-trip", kind: "plan", nickname: "小艾", user_deleted_at: expect.any(String) }),
     ]));
-    expect(active.map((record) => record.record_id)).toEqual(["active-chat"]);
-    expect(deleted.map((record) => record.record_id).sort()).toEqual(["alice-trip", "deleted-chat"]);
+    expect(active.map((record) => record.record_id)).toEqual(["session:active-chat"]);
+    expect(deleted.map((record) => record.record_id).sort()).toEqual(["session:deleted-chat", "task:alice-trip"]);
     sessions.close();
   });
 
@@ -149,7 +202,7 @@ describe("admin HTTP", () => {
       snapshot: { version: 1, items: [] },
     });
 
-    const removed = await call("DELETE", "/api/admin/records/pure-chat", undefined, "admin@123");
+    const removed = await call("DELETE", "/api/admin/records/session:pure-chat", undefined, "admin@123");
 
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ success: true, removed_images: 0 });
@@ -157,7 +210,7 @@ describe("admin HTTP", () => {
       "SELECT session_id FROM conversation_sessions WHERE session_id = ?",
     ).get("pure-chat")).toBeNull();
     expect(runtime.tasks.get("alice-trip")).toBeDefined();
-    expect((await call("DELETE", "/api/admin/records/missing", undefined, "admin@123")).status).toBe(404);
+    expect((await call("DELETE", "/api/admin/records/task:missing", undefined, "admin@123")).status).toBe(404);
     sessions.close();
   });
 
@@ -181,7 +234,7 @@ describe("admin HTTP", () => {
     sessions.linkPlan("planned-session", aliceId, "alice-trip");
     sessions.markPlanned("planned-session");
 
-    const removed = await call("DELETE", "/api/admin/records/planned-session", undefined, "admin@123");
+    const removed = await call("DELETE", "/api/admin/records/session:planned-session", undefined, "admin@123");
 
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ success: true, removed_images: 1 });
@@ -206,7 +259,7 @@ describe("admin HTTP", () => {
     });
     sessions.linkPlan("generating-session", aliceId, "alice-trip");
 
-    const rejected = await call("DELETE", "/api/admin/records/generating-session", undefined, "admin@123");
+    const rejected = await call("DELETE", "/api/admin/records/session:generating-session", undefined, "admin@123");
 
     expect(rejected.status).toBe(409);
     expect(await rejected.json()).toEqual({ detail: "计划正在生成中，完成或失败后才能删除" });
@@ -215,14 +268,14 @@ describe("admin HTTP", () => {
     sessions.close();
   });
 
-  it("removes a cached image only after its last task reference is permanently deleted", async () => {
-    const image = join(dataDir, "images", "shared.jpg");
+  it("removes a percent-encoded cached image only after its last task reference is permanently deleted", async () => {
+    const image = join(dataDir, "images", "shared photo.jpg");
     mkdirSync(join(dataDir, "images"), { recursive: true });
     writeFileSync(image, "image");
     const first = runtime.tasks.get("alice-trip")!;
     runtime.tasks.save({
       ...first,
-      result: { success: true, data: { city: "北京", days: [{ image_url: "/api/images/shared.jpg" }] } },
+      result: { success: true, data: { city: "北京", days: [{ image_url: "/api/images/shared%20photo.jpg" }] } },
     }, { immediate: true });
     runtime.tasks.save(createTaskState("second-trip", {
       user_id: aliceId,
@@ -230,14 +283,14 @@ describe("admin HTTP", () => {
       stage: "completed",
       progress: 100,
       request_payload: { city: "上海", travel_days: 1 },
-      result: { success: true, data: { city: "上海", days: [{ image_url: "/api/images/shared.jpg" }] } },
+      result: { success: true, data: { city: "上海", days: [{ image_url: "/api/images/shared%20photo.jpg" }] } },
     }), { immediate: true });
 
-    const firstRemoved = await call("DELETE", "/api/admin/records/alice-trip", undefined, "admin@123");
+    const firstRemoved = await call("DELETE", "/api/admin/records/task:alice-trip", undefined, "admin@123");
     expect(await firstRemoved.json()).toEqual({ success: true, removed_images: 0 });
     expect(existsSync(image)).toBe(true);
 
-    const secondRemoved = await call("DELETE", "/api/admin/records/second-trip", undefined, "admin@123");
+    const secondRemoved = await call("DELETE", "/api/admin/records/task:second-trip", undefined, "admin@123");
     expect(await secondRemoved.json()).toEqual({ success: true, removed_images: 1 });
     expect(existsSync(image)).toBe(false);
   });
@@ -269,7 +322,7 @@ describe("admin HTTP", () => {
       END;
     `);
 
-    const rejected = await call("DELETE", "/api/admin/records/transaction-session", undefined, "admin@123");
+    const rejected = await call("DELETE", "/api/admin/records/session:transaction-session", undefined, "admin@123");
 
     expect(rejected.status).toBe(500);
     expect(runtime.tasks.get("alice-trip")).toBeDefined();

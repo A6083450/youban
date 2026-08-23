@@ -645,7 +645,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         error: null,
         execution: { elapsed_ms: Date.now() - startedAt },
       }, { immediate: true });
-      conversationRecords.markCompleted(taskId);
     } catch (error) {
       const current = tasks.get(taskId);
       if (!current || closed) return;
@@ -659,7 +658,17 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         error: message,
         execution: { elapsed_ms: Date.now() - startedAt },
       }, { immediate: true });
-      conversationRecords.markFailed(taskId);
+      try {
+        conversationRecords.markFailed(taskId);
+      } catch {
+        // The persisted task result is authoritative over its conversation projection.
+      }
+      return;
+    }
+    try {
+      conversationRecords.markCompleted(taskId);
+    } catch {
+      // The persisted task result is authoritative over its conversation projection.
     }
   };
 
@@ -897,7 +906,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .delete("/api/admin/records/:recordId", ({ params, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
-      const result = conversationRecords.permanentlyDelete(params.recordId);
+      const result = conversationRecords.permanentlyDeleteRecord(params.recordId);
       if (result.status === "not_found") return status(404, { detail: "记录不存在" });
       if (result.status === "conflict") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
@@ -918,7 +927,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .delete("/api/admin/trips/:taskId", ({ params, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
-      const result = conversationRecords.permanentlyDelete(params.taskId);
+      const result = conversationRecords.permanentlyDeleteTask(params.taskId);
       if (result.status === "not_found") return status(404, { detail: "计划不存在" });
       if (result.status === "conflict") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
