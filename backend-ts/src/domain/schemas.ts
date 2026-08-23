@@ -91,6 +91,58 @@ export const TripHistoryResponseSchema = Type.Object({
   items: Type.Array(TripHistoryItemSchema),
 }, { additionalProperties: false });
 
+export const ConversationTitleStatusSchema = Type.Union([
+  Type.Literal("pending"), Type.Literal("generated"), Type.Literal("fallback"),
+]);
+
+export const ConversationStateSchema = Type.Union([
+  Type.Literal("chatting"), Type.Literal("generating"), Type.Literal("planned"),
+]);
+
+export const ConversationRecordSchema = Type.Object({
+  record_id: Type.String(),
+  kind: Type.Union([Type.Literal("conversation"), Type.Literal("plan")]),
+  session_id: Type.Union([Type.String(), Type.Null()]),
+  plan_id: Type.Union([Type.String(), Type.Null()]),
+  task_id: Type.Union([Type.String(), Type.Null()]),
+  title: Type.String(),
+  title_status: ConversationTitleStatusSchema,
+  state: ConversationStateSchema,
+  revision: Type.Integer({ minimum: 0 }),
+  status: Type.Union([TripTaskStatusSchema, Type.Null()]),
+  user_id: Type.String(),
+  city: Type.String(),
+  cities: Type.Array(Type.Unknown()),
+  start_date: Type.String(),
+  end_date: Type.String(),
+  travel_days: Type.Number(),
+  updated_at: Type.String(),
+  overall_suggestions: Type.String(),
+  user_deleted_at: Type.Union([Type.String(), Type.Null()]),
+}, { additionalProperties: false });
+
+export const ConversationSessionDetailSchema = Type.Object({
+  ...ConversationRecordSchema.properties,
+  snapshot: Type.Record(Type.String(), Type.Unknown()),
+}, { additionalProperties: false });
+
+export const ConversationRecordListSchema = Type.Object({
+  items: Type.Array(ConversationRecordSchema),
+}, { additionalProperties: false });
+
+export const CreateConversationBodySchema = Type.Object({
+  session_id: Type.String({ minLength: 1, maxLength: 100 }),
+  first_message: Type.String({ minLength: 1, maxLength: 2_000 }),
+  snapshot: Type.Record(Type.String(), Type.Unknown()),
+}, { additionalProperties: false });
+
+export const ReplaceConversationSnapshotBodySchema = Type.Object({
+  revision: Type.Integer({ minimum: 0 }),
+  snapshot: Type.Record(Type.String(), Type.Unknown()),
+}, { additionalProperties: false });
+
 export type UserInfoDto = Static<typeof UserInfoSchema>;
 export type TripTaskEventDto = Static<typeof TripTaskEventSchema>;
 export type TripHistoryItemDto = Static<typeof TripHistoryItemSchema>;
+export type ConversationRecordDto = Static<typeof ConversationRecordSchema>;
+export type ConversationSessionDetailDto = Static<typeof ConversationSessionDetailSchema>;

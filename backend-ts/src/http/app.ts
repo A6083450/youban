@@ -19,6 +19,7 @@ import {
 import { SkillManagementService } from "../agents/skill-management-service.ts";
 import { SkillRuntimeDiagnostics } from "../agents/skill-runtime-diagnostics.ts";
 import { TripAssistant } from "../agents/trip-assistant.ts";
+import { ConversationTitleService } from "../agents/conversation-title.ts";
 import { createPiLlmClient, getPiLlmClient } from "../agents/llm/providers.ts";
 import type { TripPlanner } from "../agents/trip-planner.ts";
 import {
@@ -36,6 +37,8 @@ import {
 } from "../config/settings.ts";
 import { ConfirmationLedger } from "../domain/confirmation.ts";
 import { ConversationRepository } from "../domain/conversations.ts";
+import { ConversationRecordService } from "../domain/conversation-records.ts";
+import { ConversationSessionRepository, SessionRevisionConflictError } from "../domain/conversation-sessions.ts";
 import {
   budgetLedgerResponse,
   syncBudgetItems,
@@ -56,8 +59,13 @@ import {
 import { emptyCheckpoint, normalizeCheckpoint, type TripPlanningRequest } from "../domain/orchestrator.ts";
 import {
   AuthResponseSchema,
+  ConversationRecordListSchema,
+  ConversationRecordSchema,
+  ConversationSessionDetailSchema,
+  CreateConversationBodySchema,
   DetailErrorSchema,
   LoginBodySchema,
+  ReplaceConversationSnapshotBodySchema,
   TripHistoryResponseSchema,
 } from "../domain/schemas.ts";
 import {
@@ -110,6 +118,7 @@ export interface HttpRuntimeOptions {
   parentAgent?: YoubanParentAgent;
   skillService?: AdminSkillService;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
+  conversationTitleService?: ConversationTitleService;
   serviceFactories?: {
     parentAgent?: (options: DefaultParentAgentOptions) => YoubanParentAgent;
     planner?: (options: DefaultTripPlannerOptions) => TripPlanner;
@@ -184,6 +193,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const tasks = new SqliteTaskStore(databasePath);
   const users = new SqliteUserRepository(databasePath);
   const conversations = new ConversationRepository(databasePath);
+  const conversationRecords = new ConversationRecordService(
+    new ConversationSessionRepository(databasePath),
+    tasks,
+  );
   const ownedMemory = options.memory ? undefined : new HermesMemoryBridge({ dataDir: options.dataDir });
   const memory = options.memory ?? ownedMemory!;
   const settings = getSettings();
@@ -251,6 +264,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       () => tasks.close(),
       () => users.close(),
       () => conversations.close(),
+      () => conversationRecords.close(),
     ]) {
       try {
         closeStore();
@@ -288,6 +302,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const webSockets = new Map<string, { close(code?: number, reason?: string): void }>();
   const activeRuns = new Set<Promise<void>>();
   const activeServiceCalls = new Set<Promise<unknown>>();
+  const titleJobs = new Map<string, Promise<void>>();
   let serviceGate = Promise.resolve();
   let settingsRefreshTail = Promise.resolve();
   let pendingSettingsRefreshes = 0;
@@ -295,6 +310,33 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   let closed = false;
   let closePromise: Promise<void> | undefined;
   let dispatchRewritten: (request: Request) => Response | Promise<Response>;
+  const createConversationTitleService = (): ConversationTitleService => {
+    const llm = getPiLlmClient();
+    return new ConversationTitleService({
+      agentComplete(prompt, callOptions) {
+        if (!llm.agentComplete) throw new Error("runtime model does not support Pi agent completion");
+        return llm.agentComplete(prompt, callOptions);
+      },
+    });
+  };
+
+  const startConversationTitle = (
+    sessionId: string,
+    userId: string,
+    firstMessage: string,
+    titleStatus: string,
+  ): void => {
+    if (closed || titleStatus !== "pending" || titleJobs.has(sessionId)) return;
+    let job!: Promise<void>;
+    job = Promise.resolve()
+      .then(() => (options.conversationTitleService ?? createConversationTitleService()).infer(firstMessage))
+      .then((title) => { conversationRecords.setTitle(sessionId, userId, title); })
+      .catch(() => undefined)
+      .finally(() => {
+        if (titleJobs.get(sessionId) === job) titleJobs.delete(sessionId);
+      });
+    titleJobs.set(sessionId, job);
+  };
 
   mkdirSync(options.dataDir, { recursive: true });
   if (!existsSync(adminPasswordFile)) writeFileSync(adminPasswordFile, "admin@123\n", { encoding: "utf8", mode: 0o600 });
@@ -920,6 +962,83 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (!userId || !users.get(userId)) return status(404, { detail: "用户不存在,请重新登录" });
       if (!await memory.remove(userId, params.memoryId)) return status(404, { detail: "记忆不存在" });
       return { success: true as const };
+    })
+    .post("/api/conversations", ({ body, headers, status }) => {
+      const userId = (headers["x-user-id"] ?? "").trim();
+      if (!userId) return status(404, { detail: "会话不存在" });
+      const record = conversationRecords.create({
+        sessionId: body.session_id,
+        userId,
+        firstMessage: body.first_message,
+        snapshot: body.snapshot,
+      });
+      if (!record) return status(404, { detail: "会话不存在" });
+      const titleInput = conversationRecords.pendingTitleInput(body.session_id, userId);
+      if (titleInput) {
+        startConversationTitle(
+          body.session_id,
+          userId,
+          titleInput.firstMessage,
+          titleInput.titleStatus,
+        );
+      }
+      return record;
+    }, {
+      body: CreateConversationBodySchema,
+      response: { 200: ConversationRecordSchema, 404: DetailErrorSchema },
+    })
+    .get("/api/conversations", ({ headers, query }) => {
+      const rawLimit = Number(query.limit ?? 50);
+      const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 50, 50));
+      const userId = (headers["x-user-id"] ?? "").trim();
+      return { items: userId ? conversationRecords.listOwner(userId, limit) : [] };
+    }, {
+      query: t.Object({ limit: t.Optional(t.String()) }),
+      response: ConversationRecordListSchema,
+    })
+    .get("/api/conversations/:sessionId", ({ params, headers, status }) => {
+      const record = conversationRecords.detail(
+        params.sessionId,
+        (headers["x-user-id"] ?? "").trim(),
+      );
+      return record ?? status(404, { detail: "会话不存在" });
+    }, {
+      response: { 200: ConversationSessionDetailSchema, 404: DetailErrorSchema },
+    })
+    .put("/api/conversations/:sessionId", ({ params, body, headers, status }) => {
+      try {
+        const record = conversationRecords.replaceSnapshot(
+          params.sessionId,
+          (headers["x-user-id"] ?? "").trim(),
+          body.revision,
+          body.snapshot,
+        );
+        return record ?? status(404, { detail: "会话不存在" });
+      } catch (error) {
+        if (error instanceof SessionRevisionConflictError) {
+          return status(409, { detail: "会话已在其他位置更新，请重新加载" });
+        }
+        throw error;
+      }
+    }, {
+      body: ReplaceConversationSnapshotBodySchema,
+      response: {
+        200: ConversationSessionDetailSchema,
+        404: DetailErrorSchema,
+        409: DetailErrorSchema,
+      },
+    })
+    .delete("/api/conversations/:sessionId", ({ params, headers, status }) => {
+      const removed = conversationRecords.softDeleteSession(
+        params.sessionId,
+        (headers["x-user-id"] ?? "").trim(),
+      );
+      return removed ? { success: true as const } : status(404, { detail: "会话不存在" });
+    }, {
+      response: {
+        200: t.Object({ success: t.Literal(true) }, { additionalProperties: false }),
+        404: DetailErrorSchema,
+      },
     })
     .get("/api/trip/history", ({ headers, query }) => {
       const rawLimit = Number(query.limit ?? 10);
@@ -1575,6 +1694,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     tasks,
     users,
     conversations,
+    conversationRecords,
     skills,
     skillRuntimeDiagnostics,
     get assistant() { return assistant; },
@@ -1596,9 +1716,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const closeResources = async () => {
         if (pendingSettingsRefreshes > 0) await settingsRefreshTail;
         if (activeServiceCalls.size > 0) await Promise.allSettled([...activeServiceCalls]);
+        if (titleJobs.size > 0) await Promise.allSettled([...titleJobs.values()]);
         tasks.close();
         users.close();
         conversations.close();
+        conversationRecords.close();
         await Promise.allSettled([
           ...(!options.planner ? [settleResourceClose(() => planner.close?.())] : []),
           ...(!options.chatService ? [settleResourceClose(() => chatService.close())] : []),
