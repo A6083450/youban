@@ -109,6 +109,34 @@ describe("ConversationSessionRepository", () => {
     }
   });
 
+  it("does not mark an unlinked chat session as planned", () => {
+    const repository = createRepository();
+    try {
+      createSession(repository);
+
+      expect(repository.markPlanned("session-1")).toEqual(expect.objectContaining({
+        state: "chatting",
+        planId: null,
+      }));
+    } finally {
+      repository.close();
+    }
+  });
+
+  it("excludes a soft-deleted linked session from plan lookup", () => {
+    const repository = createRepository();
+    try {
+      createSession(repository);
+      repository.linkPlan("session-1", "user-1", "plan-1");
+
+      expect(repository.getByPlanId("plan-1")).toEqual(expect.objectContaining({ sessionId: "session-1" }));
+      expect(repository.softDelete("session-1", "user-1")).toBe(true);
+      expect(repository.getByPlanId("plan-1")).toBeUndefined();
+    } finally {
+      repository.close();
+    }
+  });
+
   it("excludes soft-deleted sessions from owner access and removes them permanently on request", () => {
     const repository = createRepository();
     try {

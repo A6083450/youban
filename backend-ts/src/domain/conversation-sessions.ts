@@ -211,7 +211,7 @@ export class ConversationSessionRepository {
       this.database.raw.query(`
         UPDATE conversation_sessions
         SET state = 'planned', updated_at = ?
-        WHERE session_id = ? AND deleted_at IS NULL
+        WHERE session_id = ? AND plan_id IS NOT NULL AND deleted_at IS NULL
       `).run(now(), normalizedSessionId);
       return this.getBySessionId(normalizedSessionId, true);
     });
@@ -246,9 +246,10 @@ export class ConversationSessionRepository {
     ).run(normalizedSessionId).changes === 1);
   }
 
-  getByPlanId(planId: string): ConversationSession | undefined {
+  getByPlanId(planId: string, options: { includeDeleted?: boolean } = {}): ConversationSession | undefined {
+    const visibility = options.includeDeleted ? "" : " AND deleted_at IS NULL";
     const row = this.database.raw.query(
-      "SELECT * FROM conversation_sessions WHERE plan_id = ?",
+      `SELECT * FROM conversation_sessions WHERE plan_id = ?${visibility}`,
     ).get(normalizeRequired(planId, "plan id")) as ConversationSessionRow | null;
     return row ? toSession(row) : undefined;
   }
