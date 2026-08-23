@@ -266,6 +266,70 @@ describe("conversation record HTTP API", () => {
     expect(items.filter((item: Record<string, unknown>) => item.plan_id === "plan-linked")).toHaveLength(1);
   });
 
+  it("soft-deletes both sides of a linked planned record without removing either row", async () => {
+    const value = runtime(new ConversationTitleService({ agentComplete: async () => "国庆新疆深度旅行规划" }));
+    value.tasks.save(createTaskState("task-linked", {
+      plan_id: "plan-linked",
+      user_id: "user-1",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      request_payload: { city: "新疆", travel_days: 30 },
+      result: { data: { city: "新疆", days: [] } },
+    }), { immediate: true });
+    await createConversation(value.app);
+    await Bun.sleep(0);
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    sessions.linkPlan("session-1", "user-1", "plan-linked");
+    sessions.markPlanned("session-1");
+
+    const removed = await call(value.app, "DELETE", "/api/conversations/session-1");
+
+    expect(removed.status).toBe(200);
+    expect((await json(await call(value.app, "GET", "/api/conversations"))).items).toEqual([]);
+    expect(value.tasks.get("task-linked")).toBeDefined();
+    expect(value.tasks.database.raw.query(
+      "SELECT user_deleted_at FROM tasks WHERE task_id = ?",
+    ).get("task-linked")).toEqual({ user_deleted_at: expect.any(String) });
+    expect(sessions.getByPlanId("plan-linked", { includeDeleted: true })).toEqual(expect.objectContaining({
+      sessionId: "session-1",
+      deletedAt: expect.any(String),
+    }));
+    sessions.close();
+  });
+
+  it("fails closed when a linked task belongs to a different owner", async () => {
+    const value = runtime(new ConversationTitleService({ agentComplete: async () => "国庆新疆深度旅行规划" }));
+    value.tasks.save(createTaskState("task-linked", {
+      plan_id: "plan-linked",
+      user_id: "other-user",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      request_payload: { city: "新疆", travel_days: 30 },
+      result: { data: { city: "新疆", days: [] } },
+    }), { immediate: true });
+    await createConversation(value.app);
+    await Bun.sleep(0);
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    sessions.linkPlan("session-1", "user-1", "plan-linked");
+    sessions.markPlanned("session-1");
+
+    const rejected = await call(value.app, "DELETE", "/api/conversations/session-1");
+
+    expect(rejected.status).toBe(404);
+    expect((await json(await call(value.app, "GET", "/api/conversations"))).items)
+      .toEqual([expect.objectContaining({ record_id: "session-1", plan_id: "plan-linked" })]);
+    expect(value.tasks.database.raw.query(
+      "SELECT user_deleted_at FROM tasks WHERE task_id = ?",
+    ).get("task-linked")).toEqual({ user_deleted_at: null });
+    expect(sessions.getByPlanId("plan-linked", { includeDeleted: true })).toEqual(expect.objectContaining({
+      sessionId: "session-1",
+      deletedAt: null,
+    }));
+    sessions.close();
+  });
+
   it("waits for its title jobs before closing the session repository", async () => {
     const title = deferred<string>();
     const value = runtime(new ConversationTitleService({ agentComplete: async () => title.promise }));

@@ -172,7 +172,13 @@ export class ConversationRecordService {
   }
 
   softDeleteSession(sessionId: string, userId: string): boolean {
-    if (!this.sessions.getOwned(sessionId, userId)) return false;
+    const session = this.sessions.getOwned(sessionId, userId);
+    if (!session) return false;
+    if (session.planId) {
+      const linkedTasks = this.tasks.all().filter((task) => task.plan_id === session.planId);
+      if (linkedTasks.length !== 1 || linkedTasks[0]!.user_id !== userId) return false;
+      if (!this.tasks.softDelete(linkedTasks[0]!.task_id)) return false;
+    }
     return this.sessions.softDelete(sessionId, userId);
   }
 
