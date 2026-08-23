@@ -26,12 +26,16 @@ const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_REGULAR_FILES = 100;
 const MAX_PACKAGE_BYTES = 10 * 1024 * 1024;
+const MAX_GIT_ACQUISITION_BYTES = 32 * 1024 * 1024;
+const ACQUISITION_POLL_INTERVAL_MS = 10;
+const POSIX_ULIMIT_BLOCK_BYTES = 1024;
 const COMMIT_PATTERN = /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/;
 
 export interface GitInvocation {
   args: readonly string[];
   cwd?: string;
   env?: Readonly<Record<string, string>>;
+  acquisitionRoot?: string;
   timeoutMs: number;
 }
 
@@ -72,6 +76,7 @@ export type SkillGitImportErrorCode =
   | "git_unavailable"
   | "git_timeout"
   | "git_output_too_large"
+  | "git_acquisition_too_large"
   | "git_redirect"
   | "git_failed";
 
@@ -85,6 +90,7 @@ export class SkillGitImportError extends Error {
 interface BunGitRunnerOptions {
   executable?: string;
   maxOutputBytes?: number;
+  maxAcquisitionBytes?: number;
 }
 
 export interface GitHostAddress {
@@ -115,6 +121,34 @@ function redact(text: string, secrets: readonly string[]): string {
   let sanitized = text;
   for (const secret of secrets) sanitized = sanitized.split(secret).join("[REDACTED]");
   return sanitized;
+}
+
+function directoryBytes(root: string, stopAfter: number): number {
+  let total = 0;
+  const visit = (directory: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(directory);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const name of names) {
+      const path = join(directory, name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+        throw error;
+      }
+      if (stat.isDirectory()) visit(path);
+      else total += stat.size;
+      if (total > stopAfter) return;
+    }
+  };
+  visit(root);
+  return total;
 }
 
 async function readBounded(
@@ -155,10 +189,12 @@ async function readBounded(
 export class BunGitRunner implements GitRunner {
   private readonly executable: string;
   private readonly maxOutputBytes: number;
+  private readonly maxAcquisitionBytes: number;
 
   constructor(options: BunGitRunnerOptions = {}) {
     this.executable = options.executable ?? "git";
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    this.maxAcquisitionBytes = options.maxAcquisitionBytes ?? MAX_GIT_ACQUISITION_BYTES;
   }
 
   async run(invocation: GitInvocation): Promise<GitResult> {
@@ -172,15 +208,47 @@ export class BunGitRunner implements GitRunner {
     for (const [key, value] of Object.entries(invocation.env ?? {})) {
       if (
         key === "GIT_CONFIG_COUNT" || key === "GIT_CONFIG_NOSYSTEM" || key === "GIT_CONFIG_GLOBAL" ||
-        key === "GIT_TERMINAL_PROMPT" || key === "GCM_INTERACTIVE" ||
+        key === "GIT_TERMINAL_PROMPT" || key === "GCM_INTERACTIVE" || key === "GIT_NO_LAZY_FETCH" ||
         /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)
       ) childEnv[key] = value;
     }
 
+    let acquisitionBytesBefore = 0;
+    let acquisitionFileLimitBlocks: number | undefined;
+    if (invocation.acquisitionRoot) {
+      try {
+        acquisitionBytesBefore = directoryBytes(invocation.acquisitionRoot, this.maxAcquisitionBytes);
+      } catch {
+        gitError("git_failed", "Git acquisition storage could not be monitored");
+      }
+      if (acquisitionBytesBefore > this.maxAcquisitionBytes) {
+        gitError("git_acquisition_too_large", "Git acquisition exceeded its temporary storage limit");
+      }
+      if (process.platform === "darwin" || process.platform === "linux") {
+        acquisitionFileLimitBlocks = Math.floor(
+          (this.maxAcquisitionBytes - acquisitionBytesBefore) / POSIX_ULIMIT_BLOCK_BYTES,
+        );
+        if (acquisitionFileLimitBlocks < 1) {
+          gitError("git_acquisition_too_large", "Git acquisition exceeded its temporary storage limit");
+        }
+      }
+    }
+
+    const command = acquisitionFileLimitBlocks === undefined
+      ? [this.executable, ...invocation.args]
+      : [
+        "/bin/sh",
+        "-c",
+        'ulimit -f "$1" || exit 125\nshift\nexec "$@"',
+        "youban-git-acquisition-limit",
+        String(acquisitionFileLimitBlocks),
+        this.executable,
+        ...invocation.args,
+      ];
     let child!: ReturnType<typeof Bun.spawn>;
     try {
       child = Bun.spawn({
-        cmd: [this.executable, ...invocation.args],
+        cmd: command,
         cwd: invocation.cwd,
         env: childEnv,
         stdin: "ignore",
@@ -193,6 +261,8 @@ export class BunGitRunner implements GitRunner {
     }
 
     let timedOut = false;
+    let acquisitionExceeded = false;
+    let acquisitionMonitorFailed = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     let terminationComplete: Promise<void> | undefined;
     const outputAbort = new AbortController();
@@ -226,6 +296,21 @@ export class BunGitRunner implements GitRunner {
       timedOut = true;
       terminate();
     }, invocation.timeoutMs);
+    const checkAcquisition = (): void => {
+      if (!invocation.acquisitionRoot || acquisitionExceeded || acquisitionMonitorFailed) return;
+      try {
+        if (directoryBytes(invocation.acquisitionRoot, this.maxAcquisitionBytes) > this.maxAcquisitionBytes) {
+          acquisitionExceeded = true;
+          terminate();
+        }
+      } catch {
+        acquisitionMonitorFailed = true;
+        terminate();
+      }
+    };
+    const acquisitionMonitor = invocation.acquisitionRoot
+      ? setInterval(checkAcquisition, ACQUISITION_POLL_INTERVAL_MS)
+      : undefined;
     const secrets = secretFragments(invocation.env);
     // stdout/stderr are streams because this spawn invocation fixes both options to "pipe".
     const stdout = child.stdout as ReadableStream<Uint8Array>;
@@ -236,12 +321,25 @@ export class BunGitRunner implements GitRunner {
         readBounded(stdout, this.maxOutputBytes, terminate, outputAbort.signal),
         readBounded(stderr, this.maxOutputBytes, terminate, outputAbort.signal),
       ]);
-      if (timedOut) gitError("git_timeout", "Git process exceeded its timeout");
+      checkAcquisition();
       const decoder = new TextDecoder("utf-8", { fatal: false });
+      const stdoutText = redact(decoder.decode(stdoutBytes), secrets);
+      const stderrText = redact(decoder.decode(stderrBytes), secrets);
+      if (acquisitionExceeded) {
+        gitError("git_acquisition_too_large", "Git acquisition exceeded its temporary storage limit");
+      }
+      if (acquisitionMonitorFailed) gitError("git_failed", "Git acquisition storage could not be monitored");
+      if (timedOut) gitError("git_timeout", "Git process exceeded its timeout");
+      if (
+        acquisitionFileLimitBlocks !== undefined && exitCode !== 0 &&
+        /(?:\bEFBIG\b|file too large|fetch-pack: invalid index-pack output)/i.test(stderrText)
+      ) {
+        gitError("git_acquisition_too_large", "Git acquisition exceeded its temporary storage limit");
+      }
       return {
         exitCode,
-        stdout: redact(decoder.decode(stdoutBytes), secrets),
-        stderr: redact(decoder.decode(stderrBytes), secrets),
+        stdout: stdoutText,
+        stderr: stderrText,
       };
     } catch (error) {
       terminate();
@@ -251,11 +349,16 @@ export class BunGitRunner implements GitRunner {
         // Process exit failures are mapped below without child output.
       }
       if (terminationComplete) await terminationComplete;
+      if (acquisitionExceeded) {
+        gitError("git_acquisition_too_large", "Git acquisition exceeded its temporary storage limit");
+      }
+      if (acquisitionMonitorFailed) gitError("git_failed", "Git acquisition storage could not be monitored");
       if (timedOut) gitError("git_timeout", "Git process exceeded its timeout");
       if (error instanceof SkillGitImportError) throw error;
       gitError("git_failed", "Git process could not be completed");
     } finally {
       clearTimeout(timeout);
+      if (acquisitionMonitor) clearInterval(acquisitionMonitor);
       if (forceKillTimer) clearTimeout(forceKillTimer);
     }
     gitError("git_failed", "Git process could not be completed");
@@ -337,6 +440,12 @@ function remoteEnvironment(
     env[`GIT_CONFIG_VALUE_${index}`] = value;
   });
   return env;
+}
+
+function withoutLazyFetch(
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  return { ...environment, GIT_NO_LAZY_FETCH: "1" };
 }
 
 function ipv4Parts(address: string): readonly number[] | undefined {
@@ -490,8 +599,10 @@ function parseTreeEntries(output: string, includeSizes: boolean): GitTreeEntry[]
     }
     let size: bigint | undefined;
     if (includeSizes) {
-      if (!/^\d+$/.test(metadata[3])) gitError("git_failed", "Git tree size listing was invalid");
-      size = BigInt(metadata[3]);
+      if (metadata[3] !== "BAD" && !/^\d+$/.test(metadata[3])) {
+        gitError("git_failed", "Git tree size listing was invalid");
+      }
+      if (metadata[3] !== "BAD") size = BigInt(metadata[3]);
     }
     return {
       mode: metadata[0],
@@ -539,8 +650,11 @@ function validateSelectedTreeSizes(
     const sized = sizedEntries[index];
     if (
       sized.mode !== entry.mode || sized.type !== entry.type || sized.objectId !== entry.objectId ||
-      sized.path !== entry.path || sized.size === undefined
+      sized.path !== entry.path
     ) gitError("git_failed", "Git tree size listing was inconsistent");
+    if (sized.size === undefined) {
+      gitError("skill_package_too_large", "Git skill package exceeds the package limits");
+    }
     if (sized.size > remainingBytes) {
       gitError("skill_package_too_large", "Git skill package exceeds the package limits");
     }
@@ -655,7 +769,7 @@ export class GitSkillImporter {
       const cloneArgs = ["clone", "--depth=1", "--filter=blob:none", "--no-tags", "--no-checkout"];
       if (acquisition.kind === "branch-or-tag") cloneArgs.push("--branch", acquisition.branchArgument);
       cloneArgs.push(repositoryUrl.href, cloneDir);
-      await this.runGit(cloneArgs, undefined, secureRemoteEnvironment);
+      await this.runGit(cloneArgs, undefined, secureRemoteEnvironment, checkoutRoot);
 
       let revision = "HEAD";
       if (acquisition.kind === "explicit") {
@@ -663,11 +777,17 @@ export class GitSkillImporter {
           ["fetch", "--depth=1", "--filter=blob:none", "origin", acquisition.fetchRef],
           cloneDir,
           secureRemoteEnvironment,
+          checkoutRoot,
         );
         revision = "FETCH_HEAD";
       }
 
-      const resolved = await this.runGit(["rev-parse", "--verify", `${revision}^{commit}`], cloneDir);
+      const resolved = await this.runGit(
+        ["rev-parse", "--verify", `${revision}^{commit}`],
+        cloneDir,
+        undefined,
+        checkoutRoot,
+      );
       const commit = validateCommit(resolved.stdout.trim());
       let selectedTree = commit;
       if (subdirectory) {
@@ -678,7 +798,7 @@ export class GitSkillImporter {
           commit,
           "--",
           `:(top,literal)${subdirectory}`,
-        ], cloneDir);
+        ], cloneDir, undefined, checkoutRoot);
         const directoryEntries = parseTreeEntries(directory.stdout, false);
         if (
           directoryEntries.length !== 1 || directoryEntries[0].path !== subdirectory ||
@@ -687,23 +807,45 @@ export class GitSkillImporter {
         selectedTree = directoryEntries[0].objectId;
       }
 
-      const listed = await this.runGit(["ls-tree", "-r", "-z", selectedTree], cloneDir);
+      const listed = await this.runGit(
+        ["ls-tree", "-r", "-z", selectedTree],
+        cloneDir,
+        undefined,
+        checkoutRoot,
+      );
       const treeEntries = parseTreeEntries(listed.stdout, false);
       validateSelectedTree(treeEntries);
+      await this.runGit(
+        [
+          "fetch",
+          "--refetch",
+          "--no-tags",
+          "--no-write-fetch-head",
+          `--filter=blob:limit=${MAX_PACKAGE_BYTES + 1}`,
+          "origin",
+          selectedTree,
+        ],
+        cloneDir,
+        secureRemoteEnvironment,
+        checkoutRoot,
+      );
+      const localOnlyEnvironment = withoutLazyFetch(secureRemoteEnvironment);
       const sized = await this.runGit(
         ["ls-tree", "-r", "-z", "-l", selectedTree],
         cloneDir,
-        secureRemoteEnvironment,
+        localOnlyEnvironment,
+        checkoutRoot,
       );
       validateSelectedTreeSizes(treeEntries, parseTreeEntries(sized.stdout, true));
 
       const packageRoot = join(checkoutRoot, "package");
       mkdirSync(packageRoot, { mode: 0o700 });
-      await this.runGit(["read-tree", selectedTree], cloneDir);
+      await this.runGit(["read-tree", selectedTree], cloneDir, localOnlyEnvironment, checkoutRoot);
       await this.runGit(
         ["checkout-index", "--force", "--all", `--prefix=${packageRoot}/`],
         cloneDir,
-        secureRemoteEnvironment,
+        localOnlyEnvironment,
+        checkoutRoot,
       );
       const entries = collectRegularFiles(packageRoot);
       const skillEntries = entries.filter(({ path }) => path === "SKILL.md");
@@ -792,16 +934,19 @@ export class GitSkillImporter {
   ): Promise<string> {
     const resolutionDirectory = mkdtempSync(join(tmpdir(), "youban-skill-git-resolve-"));
     try {
-      await this.runGit(["init", "--bare"], resolutionDirectory);
+      await this.runGit(["init", "--bare"], resolutionDirectory, undefined, resolutionDirectory);
       await this.runGit(
-        ["fetch", "--depth=1", "--no-tags", repositoryUrl.href, tagReference],
+        ["fetch", "--depth=1", "--filter=blob:none", "--no-tags", repositoryUrl.href, tagReference],
         resolutionDirectory,
         remoteEnvironment(repositoryUrl, pinnedAddresses),
+        resolutionDirectory,
       );
       let result: GitResult;
       try {
         result = await this.runGit(
           ["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
+          resolutionDirectory,
+          undefined,
           resolutionDirectory,
         );
       } catch (error) {
@@ -820,10 +965,11 @@ export class GitSkillImporter {
     args: readonly string[],
     cwd?: string,
     env?: Readonly<Record<string, string>>,
+    acquisitionRoot?: string,
   ): Promise<GitResult> {
     let result: GitResult;
     try {
-      result = await this.runner.run({ args, cwd, env, timeoutMs: DEFAULT_GIT_TIMEOUT_MS });
+      result = await this.runner.run({ args, cwd, env, acquisitionRoot, timeoutMs: DEFAULT_GIT_TIMEOUT_MS });
     } catch (error) {
       if (error instanceof SkillGitImportError) throw error;
       gitError("git_failed", "Git process could not be completed");

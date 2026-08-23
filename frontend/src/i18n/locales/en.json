@@ -401,6 +401,7 @@
         "git_unavailable": "Git is unavailable on the server. Use ZIP upload instead.",
         "git_timeout": "The Git operation timed out. Try again later.",
         "git_output_too_large": "The Git response exceeded the limit.",
+        "git_acquisition_too_large": "The Git repository exceeded the temporary acquisition limit.",
         "git_redirect": "Redirected Git repository URLs are not supported.",
         "git_failed": "The Git operation failed. Check the URL and repository access.",
         "invalid_archive": "Choose exactly one ZIP file.",

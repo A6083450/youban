@@ -100,6 +100,7 @@ const STABLE_DEPENDENCY_CODES = new Set([
   "git_unavailable",
   "git_timeout",
   "git_output_too_large",
+  "git_acquisition_too_large",
   "git_redirect",
   "git_failed",
 ]);

@@ -110,6 +110,19 @@ class BlockingGitImporter extends StubGitImporter {
   }
 }
 
+class AcquisitionFailingGitImporter extends StubGitImporter {
+  failStage = false;
+
+  override async stage(request: GitSkillInstallRequest): Promise<StagedSkillPackage> {
+    if (this.failStage) {
+      throw Object.assign(new Error("private acquisition path"), {
+        code: "git_acquisition_too_large",
+      });
+    }
+    return super.stage(request);
+  }
+}
+
 class BlockingZipImporter extends ZipSkillImporter {
   readonly release = deferred<void>();
   readonly stageBlocked = deferred<void>();
@@ -469,6 +482,26 @@ describe("SkillManagementService lifecycle", () => {
 });
 
 describe("SkillManagementService Git, audit, and events", () => {
+  it("keeps acquisition-limit failures stable in Git update audit records", async () => {
+    const { service, gitImporter, database } = createHarness({
+      gitImporter: (store) => new AcquisitionFailingGitImporter(store),
+    });
+    const installed = await service.stageGit({
+      repositoryUrl: "https://git.example.com/org/museum.git",
+    });
+    gitImporter.nextRemote = { changed: true, commit: COMMIT_TWO };
+    (gitImporter as AcquisitionFailingGitImporter).failStage = true;
+
+    await expect(service.checkGitUpdate(installed.id)).rejects.toMatchObject({
+      code: "git_acquisition_too_large",
+    });
+    expect(auditRows(database).at(-1)).toMatchObject({
+      operation: "candidate_git_staged",
+      result: "failure",
+      error_code: "git_acquisition_too_large",
+    });
+  });
+
   it("does not create a candidate when a Git remote is unchanged", async () => {
     const { service, gitImporter } = createHarness();
     const installed = await service.stageGit({

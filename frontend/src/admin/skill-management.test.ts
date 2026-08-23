@@ -327,6 +327,7 @@ describe('admin Skill pure state helpers', () => {
       'skill_activation_failed',
       'invalid_zip_entry',
       'git_output_too_large',
+      'git_acquisition_too_large',
       'internal_error',
     ]) {
       expect(localizeAdminSkillError({ code })).toBe(`admin.skills.errors.${code}`)
@@ -334,7 +335,7 @@ describe('admin Skill pure state helpers', () => {
   })
 
   it('keeps all stable backend error codes aligned with natural Chinese and English copy', () => {
-    expect(STABLE_ADMIN_SKILL_ERROR_CODES).toHaveLength(45)
+    expect(STABLE_ADMIN_SKILL_ERROR_CODES).toHaveLength(46)
     expect(Object.keys(en.admin.skills.errors).sort()).toEqual([
       'fallback',
       ...STABLE_ADMIN_SKILL_ERROR_CODES,

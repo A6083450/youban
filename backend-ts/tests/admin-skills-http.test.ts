@@ -885,6 +885,7 @@ describe("admin Skill HTTP", () => {
       ["skill_not_found", 404],
       ["skill_name_conflict", 409],
       ["skill_package_too_large", 413],
+      ["git_acquisition_too_large", 413],
       ["invalid_skill_frontmatter", 422],
       ["invalid_git_ref", 422],
       ["git_unavailable", 503],

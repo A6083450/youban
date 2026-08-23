@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
   ftruncateSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   openSync,
@@ -13,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   BunGitRunner,
@@ -154,6 +156,80 @@ function createRepositoryWithOversizedUnselectedFile(): string {
   return pathToFileURL(repository).href;
 }
 
+function createRepositoryWithOversizedSelectedFile(size: number, allowFilter: boolean): string {
+  const repository = join(temporaryRoot("youban-skill-git-source-"), "repository");
+  mkdirSync(join(repository, "skills", "museum"), { recursive: true });
+  runFixtureGit(repository, ["init", "--quiet"]);
+  runFixtureGit(repository, ["config", "user.email", "skills@example.com"]);
+  runFixtureGit(repository, ["config", "user.name", "Skill Fixture"]);
+  writeFileSync(join(repository, "skills", "museum", "SKILL.md"), VALID_SKILL);
+  writeFileSync(join(repository, "skills", "museum", "oversized.bin"), randomBytes(size));
+  runFixtureGit(repository, ["add", "."]);
+  runFixtureGit(repository, ["commit", "--quiet", "-m", "fixture"]);
+  if (allowFilter) {
+    runFixtureGit(repository, ["config", "uploadpack.allowFilter", "true"]);
+    runFixtureGit(repository, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    runFixtureGit(repository, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
+  }
+  return pathToFileURL(repository).href;
+}
+
+function directorySize(root: string): number {
+  if (!existsSync(root)) return 0;
+  let total = 0;
+  const visit = (directory: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(directory);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const name of names) {
+      const path = join(directory, name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+        throw error;
+      }
+      if (stat.isDirectory()) visit(path);
+      else total += stat.size;
+    }
+  };
+  visit(root);
+  return total;
+}
+
+class ObservedLocalGitRunner implements GitRunner {
+  private readonly actual = new BunGitRunner();
+  private acquisitionRoot: string | undefined;
+  maxObservedAcquisitionBytes = 0;
+
+  constructor(
+    private readonly requestedUrl: string,
+    private readonly fixtureUrl: string,
+  ) {}
+
+  async run(invocation: GitInvocation): Promise<GitResult> {
+    if (invocation.args[0] === "clone") this.acquisitionRoot = dirname(invocation.args.at(-1)!);
+    try {
+      return await this.actual.run({
+        ...invocation,
+        args: invocation.args.map((argument) => argument === this.requestedUrl ? this.fixtureUrl : argument),
+      });
+    } finally {
+      if (this.acquisitionRoot) {
+        this.maxObservedAcquisitionBytes = Math.max(
+          this.maxObservedAcquisitionBytes,
+          directorySize(this.acquisitionRoot),
+        );
+      }
+    }
+  }
+}
+
 class RejectOutsideMaterializationRunner implements GitRunner {
   private readonly actual = new BunGitRunner();
   private checkoutDirectory: string | undefined;
@@ -266,9 +342,10 @@ describe("GitSkillImporter source and credential boundaries", () => {
       "credential.helper",
     ]);
     const lazyFetchInvocations = exactRunner.invocations.filter(({ args }) =>
+      (args[0] === "fetch" && args.includes("--refetch")) ||
       (args[0] === "ls-tree" && args.includes("-l")) || args[0] === "checkout-index"
     );
-    expect(lazyFetchInvocations).toHaveLength(2);
+    expect(lazyFetchInvocations).toHaveLength(3);
     expect(lazyFetchInvocations.every(({ authorizationHeaderKeys }) => authorizationHeaderKeys.length === 1)).toBe(true);
     expect(lazyFetchInvocations.every(({ env, envKeys }) => envKeys.some(
       (key) => env[key]?.endsWith(".curloptResolve"),
@@ -575,9 +652,71 @@ describe("BunGitRunner process boundaries", () => {
     expect(elapsedMs).toBeLessThan(700);
     expect(existsSync(marker)).toBe(true);
   });
+
+  it("caps a single acquisition file before polling can observe it", async () => {
+    if (process.platform === "win32") return;
+    const root = temporaryRoot("youban-git-acquisition-file-limit-");
+    const acquisitionRoot = join(root, "acquisition");
+    const output = join(acquisitionRoot, "oversized.pack");
+    const script = join(root, "write-oversized.ts");
+    mkdirSync(acquisitionRoot);
+    writeFileSync(script, [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(output)}, Buffer.alloc(4 * 1024 * 1024));`,
+    ].join("\n"));
+    const maximumBytes = 1024 * 1024;
+    const runner = new BunGitRunner({
+      executable: process.execPath,
+      maxAcquisitionBytes: maximumBytes,
+    });
+
+    const error = await runner.run({
+      args: [script],
+      acquisitionRoot,
+      timeoutMs: 1_000,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "git_acquisition_too_large" });
+    expect(statSync(output).size).toBeLessThanOrEqual(maximumBytes);
+  });
 });
 
 describe("GitSkillImporter staging", () => {
+  it("rejects an omitted oversized selected blob without lazily fetching it", async () => {
+    const repositoryUrl = "https://git.example.com/org/repo.git";
+    const runner = new ObservedLocalGitRunner(
+      repositoryUrl,
+      createRepositoryWithOversizedSelectedFile(12 * 1024 * 1024, true),
+    );
+    const root = temporaryRoot("youban-skill-git-");
+    const importer = new GitSkillImporter(new SkillPackageStore(root), runner, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    await expectGitCode(importer.stage({
+      repositoryUrl,
+      subdirectory: "skills/museum",
+    }), "skill_package_too_large");
+    expect(runner.maxObservedAcquisitionBytes).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("terminates acquisition when the remote ignores blob filtering", async () => {
+    const repositoryUrl = "https://git.example.com/org/repo.git";
+    const runner = new ObservedLocalGitRunner(
+      repositoryUrl,
+      createRepositoryWithOversizedSelectedFile(40 * 1024 * 1024, false),
+    );
+    const root = temporaryRoot("youban-skill-git-");
+    const importer = new GitSkillImporter(new SkillPackageStore(root), runner, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    await expectGitCode(importer.stage({
+      repositoryUrl,
+      subdirectory: "skills/museum",
+    }), "git_acquisition_too_large");
+  });
+
   it("does not materialize an oversized file outside the selected subdirectory", async () => {
     const repositoryUrl = "https://git.example.com/org/repo.git";
     const runner = new RejectOutsideMaterializationRunner(
@@ -690,6 +829,7 @@ describe("GitSkillImporter staging", () => {
       "fetch",
       "rev-parse",
       "ls-tree",
+      "fetch",
       "ls-tree",
       "read-tree",
       "checkout-index",
@@ -889,6 +1029,7 @@ describe("GitSkillImporter remote update checks", () => {
     expect(runner.invocations[2].args).toEqual([
       "fetch",
       "--depth=1",
+      "--filter=blob:none",
       "--no-tags",
       "https://git.example.com/org/repo.git",
       "refs/tags/release-v2",

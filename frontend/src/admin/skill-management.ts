@@ -274,6 +274,7 @@ export const STABLE_ADMIN_SKILL_ERROR_CODES = [
   'git_unavailable',
   'git_timeout',
   'git_output_too_large',
+  'git_acquisition_too_large',
   'git_redirect',
   'git_failed',
   'invalid_archive',

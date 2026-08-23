@@ -201,6 +201,7 @@ const KNOWN_ERROR_CODES = new Set([
   "git_unavailable",
   "git_timeout",
   "git_output_too_large",
+  "git_acquisition_too_large",
   "git_redirect",
   "git_failed",
   "invalid_archive",
@@ -239,6 +240,7 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
   git_unavailable: "服务器当前无法使用 Git",
   git_timeout: "Git 操作超时",
   git_output_too_large: "Git 响应超出限制",
+  git_acquisition_too_large: "Git 仓库获取内容超出临时空间限制",
   git_redirect: "Git 仓库重定向不受支持",
   git_failed: "Git 操作失败",
   invalid_archive: "上传文件必须是唯一的 ZIP 文件字段",
@@ -378,7 +380,7 @@ function statusForError(code: string): number {
     "skill_state_changed",
     "skill_version_conflict",
   ].includes(code)) return 409;
-  if (code === "skill_package_too_large") return 413;
+  if (code === "skill_package_too_large" || code === "git_acquisition_too_large") return 413;
   if (code === "git_unavailable") return 503;
   if (code === "git_timeout") return 504;
   if (

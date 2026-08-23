@@ -401,6 +401,7 @@
         "git_unavailable": "服务器当前无法使用 Git，可改用 ZIP 上传。",
         "git_timeout": "Git 操作超时，请稍后重试。",
         "git_output_too_large": "Git 返回内容超出限制。",
+        "git_acquisition_too_large": "Git 仓库获取内容超出临时空间限制。",
         "git_redirect": "不支持跳转后的 Git 仓库地址。",
         "git_failed": "Git 操作失败，请检查仓库地址和访问权限。",
         "invalid_archive": "请选择唯一的 ZIP 文件。",
