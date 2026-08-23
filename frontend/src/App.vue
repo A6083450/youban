@@ -59,9 +59,19 @@
               @click="openConversation(item.session_id)"
             >
               <span class="sidebar-item-city">{{ item.title }}</span>
-              <span v-if="item.title_status === 'pending'" class="sidebar-item-date">
+              <span v-if="isGeneratingRecord(item)" class="sidebar-item-date">
                 <span class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
               </span>
+            </button>
+            <button
+              v-if="shouldShowConversationResume(item)"
+              type="button"
+              class="sidebar-item-resume"
+              @click.stop="openConversation(item.session_id)"
+              @keydown.enter.stop
+            >
+              <PlayCircleOutlined aria-hidden="true" />
+              <span>{{ t('sidebar.returnToGeneration') }}</span>
             </button>
             <a-popconfirm
               :title="t('sidebar.deleteConfirm')"
@@ -101,13 +111,13 @@
               <span class="sidebar-item-city">{{ item.city || item.title }}</span>
               <span class="sidebar-item-date">
                 {{ item.start_date }} ~ {{ item.end_date }}
-                <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
+                <span v-if="isGeneratingRecord(item)" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
                 <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
                 <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
               </span>
             </button>
             <button
-              v-if="item.status === 'processing' && item.plan_id"
+              v-if="isGeneratingRecord(item) && item.plan_id"
               type="button"
               class="sidebar-item-resume"
               :disabled="resumingPlanId === item.plan_id"
@@ -216,12 +226,16 @@ import { normalizeLocale } from '@/i18n/locale'
 import {
   CONVERSATION_RECORDS_UPDATED_EVENT,
   conversationRecords,
+  invalidateAllConversationTitlePolling,
+  invalidateConversationTitlePolling,
   isConversationRecordActive,
+  isGeneratingRecord,
   isPlanRecordActive,
   plannedRecords,
   recordsLoading,
   refreshRecords,
   removeRecord,
+  shouldShowConversationResume,
 } from '@/stores/conversation-records'
 import { PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteConversation, deleteTripPlan, getStoredUser } from '@/services/api'
@@ -345,7 +359,10 @@ const resumePlan = async (planId: string): Promise<void> => {
 
 const deleteRecord = async (item: ConversationRecord) => {
   try {
-    if (item.session_id) await deleteConversation(item.session_id)
+    if (item.session_id) {
+      invalidateConversationTitlePolling(item.session_id)
+      await deleteConversation(item.session_id)
+    }
     else if (item.task_id) await deleteTripPlan(item.task_id)
     else return
     removeRecord(item.record_id)
@@ -369,6 +386,7 @@ const onRecordsUpdated = () => {
 }
 
 const onAuthUpdated = () => {
+  invalidateAllConversationTitlePolling()
   syncActiveTripTask()
   void refreshRecords()
 }

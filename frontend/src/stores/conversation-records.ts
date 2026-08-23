@@ -10,6 +10,10 @@ export const CONVERSATION_RECORDS_UPDATED_EVENT = 'youban:conversation-records-u
 export const records = ref<ConversationRecord[]>([])
 export const recordsLoading = ref(false)
 
+let nextTitlePollToken = 0
+let titlePollEpoch = 0
+const titlePollTokens = new Map<string, number>()
+
 export interface GroupedConversationRecords {
   conversations: ConversationRecord[]
   plans: ConversationRecord[]
@@ -51,6 +55,8 @@ export const upsertRecord = (record: ConversationRecord): void => {
 }
 
 export const removeRecord = (recordId: string): void => {
+  const removed = records.value.find((item) => item.record_id === recordId)
+  if (removed?.session_id) invalidateConversationTitlePolling(removed.session_id)
   records.value = records.value.filter((item) => item.record_id !== recordId)
 }
 
@@ -65,6 +71,15 @@ export const isConversationRecordActive = (record: ConversationRecord, sessionId
 
 export const isPlanRecordActive = (record: ConversationRecord, planId: string): boolean =>
   Boolean(planId) && record.plan_id === planId
+
+export const isGeneratingRecord = (record: ConversationRecord): boolean =>
+  record.state === 'generating' || record.status === 'processing'
+
+export const shouldShowConversationResume = (record: ConversationRecord): boolean =>
+  record.kind === 'conversation'
+  && Boolean(record.session_id)
+  && Boolean(record.plan_id)
+  && isGeneratingRecord(record)
 
 export const createOptimisticConversationRecord = (input: {
   sessionId: string
@@ -109,22 +124,70 @@ export const refreshRecords = async (): Promise<void> => {
 }
 
 const pause = (milliseconds: number): Promise<void> => new Promise((resolve) => {
-  window.setTimeout(resolve, milliseconds)
+  globalThis.setTimeout(resolve, milliseconds)
 })
 
-export const waitForConversationTitle = async (sessionId: string): Promise<void> => {
-  const ownerId = getStoredUser()?.user_id || ''
+interface ConversationTitlePollingDependencies {
+  getConversationSession: (sessionId: string) => Promise<ConversationRecord>
+  getUserId: () => string
+  pause: (milliseconds: number) => Promise<void>
+  maxAttempts?: number
+}
+
+const defaultTitlePollingDependencies: ConversationTitlePollingDependencies = {
+  getConversationSession,
+  getUserId: () => getStoredUser()?.user_id || '',
+  pause,
+}
+
+export const invalidateConversationTitlePolling = (sessionId: string): void => {
+  if (!sessionId) return
+  titlePollTokens.set(sessionId, ++nextTitlePollToken)
+}
+
+export const invalidateAllConversationTitlePolling = (): void => {
+  titlePollEpoch += 1
+  titlePollTokens.clear()
+}
+
+const isCurrentPendingTitlePoll = (
+  sessionId: string,
+  ownerId: string,
+  token: number,
+  epoch: number,
+  getUserId: () => string,
+): boolean => {
+  const current = findRecordBySessionId(sessionId)
+  return Boolean(
+    current
+    && current.title_status === 'pending'
+    && current.user_id === ownerId
+    && getUserId() === ownerId
+    && titlePollTokens.get(sessionId) === token
+    && titlePollEpoch === epoch,
+  )
+}
+
+export const waitForConversationTitle = async (
+  sessionId: string,
+  dependencies: ConversationTitlePollingDependencies = defaultTitlePollingDependencies,
+): Promise<void> => {
+  const ownerId = dependencies.getUserId()
   if (!ownerId) return
+  const token = ++nextTitlePollToken
+  const epoch = titlePollEpoch
+  titlePollTokens.set(sessionId, token)
+  const maxAttempts = Math.max(0, Math.trunc(dependencies.maxAttempts ?? TITLE_POLL_ATTEMPTS))
 
-  for (let attempt = 0; attempt < TITLE_POLL_ATTEMPTS; attempt += 1) {
-    const current = findRecordBySessionId(sessionId)
-    if (!current || current.title_status !== 'pending' || getStoredUser()?.user_id !== ownerId) return
-    if (attempt > 0) await pause(TITLE_POLL_INTERVAL_MS)
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (!isCurrentPendingTitlePoll(sessionId, ownerId, token, epoch, dependencies.getUserId)) return
+    if (attempt > 0) await dependencies.pause(TITLE_POLL_INTERVAL_MS)
 
-    const pending = findRecordBySessionId(sessionId)
-    if (!pending || pending.title_status !== 'pending' || getStoredUser()?.user_id !== ownerId) return
+    if (!isCurrentPendingTitlePoll(sessionId, ownerId, token, epoch, dependencies.getUserId)) return
     try {
-      upsertRecord(await getConversationSession(sessionId))
+      const updated = await dependencies.getConversationSession(sessionId)
+      if (!isCurrentPendingTitlePoll(sessionId, ownerId, token, epoch, dependencies.getUserId)) return
+      upsertRecord(updated)
     } catch {
       return
     }

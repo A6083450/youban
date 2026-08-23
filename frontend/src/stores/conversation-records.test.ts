@@ -1,12 +1,17 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import {
   conversationRecords,
   createOptimisticConversationRecord,
   groupConversationRecords,
+  invalidateAllConversationTitlePolling,
+  invalidateConversationTitlePolling,
+  isGeneratingRecord,
   plannedRecords,
   records,
   removeRecord,
+  shouldShowConversationResume,
   upsertRecord,
+  waitForConversationTitle,
 } from './conversation-records'
 
 const record = (overrides: Record<string, unknown> = {}) => ({
@@ -115,5 +120,90 @@ describe('conversation records store', () => {
     removeRecord('session-1')
 
     expect(records.value).toEqual([])
+  })
+
+  test('does not resurrect a deleted record when an in-flight title request resolves', async () => {
+    upsertRecord(record({ title_status: 'pending' }))
+    let resolveDetail: (value: ReturnType<typeof record>) => void = () => undefined
+    const getConversationSession = mock(() => new Promise<ReturnType<typeof record>>((resolve) => {
+      resolveDetail = resolve
+    }))
+
+    const polling = waitForConversationTitle('session-1', {
+      getConversationSession,
+      getUserId: () => 'user-1',
+      pause: async () => undefined,
+    })
+    await Promise.resolve()
+    removeRecord('session-1')
+    invalidateConversationTitlePolling('session-1')
+    resolveDetail(record({ title: '北京三日游', title_status: 'generated' }))
+    await polling
+
+    expect(getConversationSession).toHaveBeenCalledTimes(1)
+    expect(records.value).toEqual([])
+  })
+
+  test('does not apply an in-flight title request after authentication invalidates polling', async () => {
+    upsertRecord(record({ title_status: 'pending' }))
+    let userId = 'user-1'
+    let resolveDetail: (value: ReturnType<typeof record>) => void = () => undefined
+    const getConversationSession = mock(() => new Promise<ReturnType<typeof record>>((resolve) => {
+      resolveDetail = resolve
+    }))
+
+    const polling = waitForConversationTitle('session-1', {
+      getConversationSession,
+      getUserId: () => userId,
+      pause: async () => undefined,
+    })
+    await Promise.resolve()
+    userId = 'user-2'
+    invalidateAllConversationTitlePolling()
+    resolveDetail(record({ title: '北京三日游', title_status: 'generated' }))
+    await polling
+
+    expect(records.value[0]?.title_status).toBe('pending')
+  })
+
+  test('bounds title polling and stops without a locally pending record', async () => {
+    const getConversationSession = mock(async () => record({ title_status: 'pending' }))
+
+    await waitForConversationTitle('missing', {
+      getConversationSession,
+      getUserId: () => 'user-1',
+      pause: async () => undefined,
+      maxAttempts: 2,
+    })
+
+    expect(getConversationSession).not.toHaveBeenCalled()
+
+    upsertRecord(record({ title_status: 'pending' }))
+    await waitForConversationTitle('session-1', {
+      getConversationSession,
+      getUserId: () => 'user-1',
+      pause: async () => undefined,
+      maxAttempts: 2,
+    })
+
+    expect(getConversationSession).toHaveBeenCalledTimes(2)
+  })
+
+  test('derives generating badge and session resume visibility from record lifecycle state', () => {
+    const generatingSession = record({
+      title_status: 'generated',
+      state: 'generating',
+      status: 'processing',
+      plan_id: 'plan-1',
+      task_id: 'task-1',
+    })
+    const processingConversation = record({ title_status: 'generated', status: 'processing' })
+
+    expect(isGeneratingRecord(generatingSession)).toBe(true)
+    expect(isGeneratingRecord(processingConversation)).toBe(true)
+    expect(isGeneratingRecord(record())).toBe(false)
+    expect(shouldShowConversationResume(generatingSession)).toBe(true)
+    expect(shouldShowConversationResume(processingConversation)).toBe(false)
+    expect(shouldShowConversationResume(record({ kind: 'plan', state: 'planned', plan_id: 'plan-1' }))).toBe(false)
   })
 })
