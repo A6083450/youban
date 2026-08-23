@@ -213,6 +213,8 @@ import {
   captureConversationOperation,
   captureConversationPersistence,
   captureConversationRestore,
+  cancelConversationRestore,
+  CONVERSATION_RESTORE_TIMEOUT_MS,
   ConversationPersistenceQueue,
   conversationPersistenceStorageKey,
   conversationPersistenceStoragePrefix,
@@ -232,10 +234,12 @@ import {
   queryConversationId,
   reserveConversationId,
   resetConversationIdentity,
+  runWithConversationDeadline,
   toServerSnapshot,
   type ChatSessionSnapshot,
   type ConversationOperationContext,
   type ConversationPersistenceCapture,
+  type ConversationRestoreLease,
   type PendingConversationSubmission,
   type SnapshotItem,
 } from '@/utils/conversationSession'
@@ -331,8 +335,16 @@ let nextId = 1
 const conversationIdentity = reactive(createConversationIdentity())
 let conversationFirstMessage = ''
 let restoreRequestToken = 0
+let activeRestoreRequest: ConversationRestoreLease | null = null
 let routeRestoreReady = false
 let pendingSubmission: PendingConversationSubmission | null = null
+
+const cancelActiveRestore = (): boolean => {
+  const request = activeRestoreRequest
+  activeRestoreRequest = null
+  if (!request) return false
+  return cancelConversationRestore(request, { operationToken, ownerId: userId() })
+}
 
 // 首页示例建议:从 i18n 候选池里随机抽取一批展示,点"换一批"轮换,避免每次进入都是同一组。
 // 待 mem0 记忆架构落地后,改为按用户历史偏好个性化推荐,新用户仍回退到此热门列表。
@@ -580,6 +592,7 @@ const unregisterBeforeAuthTransition = registerBeforeAuthTransition(flushCurrent
 
 const clearChatSession = (options: { preserveLocal?: boolean } = {}) => {
   suppressChatPersistence = true
+  cancelActiveRestore()
   restoreRequestToken += 1
   if (!options.preserveLocal) {
     removeLegacyChatSnapshot(userId())
@@ -701,23 +714,32 @@ const clearPlanResultSession = () => {
 }
 
 const resetConversation = async () => {
-  invalidateOperations()
+  cancelActiveRestore()
+  const resetContext = beginOperation()
   restoreRequestToken += 1
   generating.value = false
-  busy.value = false
-  const persisted = await flushCurrentPersistence()
-  clearChatSession({ preserveLocal: !persisted })
-  items.value = []
-  pendingConfirmId.value = null
-  pendingDraft.value = null
-  pendingReadinessToken.value = ''
-  pendingUserText.value = null
-  nextId = 1
-  composerRef.value?.setText('')
-  clearPlanResultSession()
-  nextTick(() => {
-    suppressChatPersistence = false
-  })
+  busy.value = true
+  let resetOwnsBusy = true
+  try {
+    const persisted = await flushCurrentPersistence()
+    if (!ownsOperation(resetContext)) return
+    clearChatSession({ preserveLocal: !persisted })
+    items.value = []
+    pendingConfirmId.value = null
+    pendingDraft.value = null
+    pendingReadinessToken.value = ''
+    pendingUserText.value = null
+    nextId = 1
+    composerRef.value?.setText('')
+    clearPlanResultSession()
+    busy.value = false
+    resetOwnsBusy = false
+    nextTick(() => {
+      suppressChatPersistence = false
+    })
+  } finally {
+    if (resetOwnsBusy && ownsOperation(resetContext)) busy.value = false
+  }
 }
 
 // 页面刷新后:若存在进行中任务,重建对话并重连订阅(后端会先推送当前快照)
@@ -891,16 +913,16 @@ const ensureServerConversation = async (firstMessageText: string): Promise<boole
   if (conversationIdentity.sessionId) return true
   const ownerId = userId()
   const requestOperationToken = operationToken
-  const snapshot = buildChatSnapshot()
   const sessionId = reserveConversationId(conversationIdentity)
-  conversationFirstMessage ||= firstUserMessage(snapshot) || firstMessageText.trim()
-  createOptimisticConversationRecord({
-    sessionId,
-    title: t('sidebar.newConversation'),
-    userId: userId(),
-  })
 
   try {
+    const snapshot = buildChatSnapshot()
+    conversationFirstMessage ||= firstUserMessage(snapshot) || firstMessageText.trim()
+    createOptimisticConversationRecord({
+      sessionId,
+      title: t('sidebar.newConversation'),
+      userId: userId(),
+    })
     const created = await createConversation({
       session_id: sessionId,
       first_message: conversationFirstMessage,
@@ -928,12 +950,20 @@ const ensureServerConversation = async (firstMessageText: string): Promise<boole
 }
 
 const restoreServerConversation = async (sessionId: string): Promise<void> => {
+  cancelActiveRestore()
+  const restoreAbortController = new AbortController()
   const ownerId = userId()
   const restoreToken = ++restoreRequestToken
   const persistedCapture = readPersistedConversationCaptures(ownerId)
     .find((capture) => capture.sessionId === sessionId)
   invalidateOperations()
   const restoreOperationToken = operationToken
+  activeRestoreRequest = {
+    controller: restoreAbortController,
+    operationToken: restoreOperationToken,
+    ownerId,
+    sessionId,
+  }
   const restoreContext = captureConversationRestore({
     restoreToken,
     operationToken: restoreOperationToken,
@@ -954,7 +984,11 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
     await flushCurrentPersistence()
     if (!restoreIsCurrent()) return
     const targetPersistencePending = persistenceQueue.hasPending(ownerId, sessionId)
-    const detail = await getConversationSession(sessionId, ownerId)
+    const detail = await runWithConversationDeadline(
+      (signal) => getConversationSession(sessionId, ownerId, signal),
+      CONVERSATION_RESTORE_TIMEOUT_MS,
+      restoreAbortController.signal,
+    )
     if (!restoreIsCurrent()) return
     if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
       removeRecord(conversationIdentity.pendingSessionId)
@@ -995,6 +1029,9 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
       message.error(error instanceof Error ? error.message : '读取对话记录失败')
     }
   } finally {
+    if (activeRestoreRequest?.controller === restoreAbortController) {
+      activeRestoreRequest = null
+    }
     if (restoreOwnsBusy && restoreIsCurrent()) busy.value = false
   }
 }
@@ -1081,6 +1118,7 @@ onBeforeRouteLeave(async () => {
 onUnmounted(() => {
   isAlive = false
   invalidateOperations()
+  cancelActiveRestore()
   unregisterBeforeAuthTransition()
   window.removeEventListener(NEW_PLAN_EVENT, resetConversation)
   if (previousScrollRestoration !== null) {
@@ -1096,11 +1134,20 @@ watch([items, pendingConfirmId, pendingDraft, pendingReadinessToken, pendingUser
 watch(() => route.query.conversation, (value) => {
   if (!routeRestoreReady) return
   const selected = queryConversationId(value)
-  if (selected === conversationIdentity.sessionId) return
+  if (selected === conversationIdentity.sessionId) {
+    const restoreOwnedBusy = cancelActiveRestore()
+    if (restoreOwnedBusy) {
+      invalidateOperations()
+      restoreRequestToken += 1
+      busy.value = false
+    }
+    return
+  }
   void initializeConversationSelection(false)
 })
 watch(() => currentUser.value?.user_id, async () => {
   invalidateOperations()
+  cancelActiveRestore()
   restoreRequestToken += 1
   await persistenceQueue.flush()
   if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
@@ -1379,9 +1426,17 @@ const handleUserSend = async (text: string) => {
     const submissionToken = operationToken
     const submissionOwnerId = userId()
     busy.value = true
-    const created = await ensureServerConversation(text)
+    let created = false
+    try {
+      created = await ensureServerConversation(text)
+    } catch (error: unknown) {
+      message.error(error instanceof Error ? error.message : '对话记录保存失败，请重试')
+    } finally {
+      if (submissionToken === operationToken && submissionOwnerId === userId()) {
+        busy.value = false
+      }
+    }
     if (submissionToken !== operationToken || submissionOwnerId !== userId()) return
-    busy.value = false
     if (!created) {
       composerRef.value?.setText(text)
       await restoreComposerFocus()

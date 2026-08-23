@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'bun:test'
+import { reactive, ref } from 'vue'
 import {
   acceptConversationRevision,
   activeTaskFromConversation,
   captureConversationOperation,
   captureConversationPersistence,
   captureConversationRestore,
+  cancelConversationRestore,
   ConversationPersistenceQueue,
   conversationSelectionAction,
   conversationPersistenceStorageKey,
@@ -25,9 +27,11 @@ import {
   queryConversationId,
   reserveConversationId,
   resetConversationIdentity,
+  runWithConversationDeadline,
   toServerSnapshot,
   serializeConversationPersistenceEnvelope,
   type ChatSessionSnapshot,
+  type SnapshotItem,
 } from './conversationSession'
 
 const stableState = {
@@ -57,6 +61,53 @@ describe('conversation session snapshots', () => {
       ...stableState,
     })
     expect(firstUserMessage(snapshot)).toBe('国庆新疆玩一个月帮我计划下')
+  })
+
+  it('projects nested Vue reactive proxies into stable JSON-safe snapshot data', () => {
+    const items = ref<SnapshotItem[]>([])
+    const nestedPreferences = reactive({ pace: 'slow', tags: ['history', 'food'] })
+    const draft = reactive({
+      city: '新疆',
+      preferences: nestedPreferences,
+      ignored: () => 'not serializable',
+    })
+    items.value.push({
+      id: 1,
+      role: 'assistant',
+      type: 'draft',
+      text: '新疆路线',
+      draft,
+      ignored: Symbol('transient'),
+    })
+    const pendingDraft = reactive({ city: '新疆', details: reactive({ days: 30 }) })
+
+    const snapshot = toServerSnapshot(items.value, {
+      pendingConfirmId: 1,
+      pendingDraft,
+      pendingReadinessToken: 'ready-proxy',
+      pendingUserText: null,
+      nextId: 2,
+    })
+
+    expect(snapshot).toEqual({
+      version: 1,
+      items: [{
+        id: 1,
+        role: 'assistant',
+        type: 'draft',
+        text: '新疆路线',
+        draft: {
+          city: '新疆',
+          preferences: { pace: 'slow', tags: ['history', 'food'] },
+        },
+      }],
+      pendingConfirmId: 1,
+      pendingDraft: { city: '新疆', details: { days: 30 } },
+      pendingReadinessToken: 'ready-proxy',
+      pendingUserText: null,
+      nextId: 2,
+    })
+    expect(() => JSON.stringify(snapshot)).not.toThrow()
   })
 
   it('normalizes legacy snapshots to the versioned server contract', () => {
@@ -223,6 +274,94 @@ describe('conversation operation ownership', () => {
     expect(isConversationOperationCurrent(context, { ...current, ownerId: 'user-2' })).toBe(false)
     expect(isConversationOperationCurrent(context, { ...current, sessionId: 'session-b' })).toBe(false)
     expect(isConversationOperationCurrent(context, { ...current, alive: false })).toBe(false)
+  })
+
+  it('keeps reset input blocked and rejects an old reset after a newer operation starts', async () => {
+    let operationToken = 0
+    let busy = false
+    let sessionId: string | null = 'session-a'
+    let releaseFlush: (() => void) | undefined
+    const flush = new Promise<void>((resolve) => { releaseFlush = resolve })
+    const context = captureConversationOperation({
+      token: ++operationToken,
+      ownerId: 'user-1',
+      sessionId,
+    })
+    busy = true
+
+    const resetting = (async () => {
+      await flush
+      if (!isConversationOperationCurrent(context, {
+        token: operationToken,
+        ownerId: 'user-1',
+        sessionId,
+        alive: true,
+      })) return
+      sessionId = null
+      busy = false
+    })()
+
+    expect(busy).toBe(true)
+    expect(sessionId).toBe('session-a')
+    operationToken += 1
+    releaseFlush?.()
+    await resetting
+    expect(sessionId).toBe('session-a')
+    expect(busy).toBe(true)
+  })
+
+  it('aborts a never-resolving conversation request at its deadline or parent cancellation', async () => {
+    let deadlineSignal: AbortSignal | undefined
+    const deadlineRequest = runWithConversationDeadline(async (signal) => {
+      deadlineSignal = signal
+      return await new Promise<string>(() => {})
+    }, 5)
+
+    await expect(deadlineRequest).rejects.toThrow('timed out')
+    expect(deadlineSignal?.aborted).toBe(true)
+
+    const parent = new AbortController()
+    let cancellationSignal: AbortSignal | undefined
+    const cancelledRequest = runWithConversationDeadline(async (signal) => {
+      cancellationSignal = signal
+      return await new Promise<string>(() => {})
+    }, 1_000, parent.signal)
+    parent.abort()
+
+    await expect(cancelledRequest).rejects.toThrow('cancelled')
+    expect(cancellationSignal?.aborted).toBe(true)
+  })
+
+  it('cancels a pending A-to-B restore and releases its input lock when routing back to A', () => {
+    const controller = new AbortController()
+    const displayedSessionId = 'session-a'
+    let busy = true
+    const restoreOwnedBusy = cancelConversationRestore({
+      controller,
+      operationToken: 8,
+      ownerId: 'user-1',
+      sessionId: 'session-b',
+    }, {
+      operationToken: 8,
+      ownerId: 'user-1',
+    })
+    if (restoreOwnedBusy) busy = false
+
+    expect(controller.signal.aborted).toBe(true)
+    expect(displayedSessionId).toBe('session-a')
+    expect(busy).toBe(false)
+
+    const newerOperationController = new AbortController()
+    expect(cancelConversationRestore({
+      controller: newerOperationController,
+      operationToken: 8,
+      ownerId: 'user-1',
+      sessionId: 'session-b',
+    }, {
+      operationToken: 9,
+      ownerId: 'user-1',
+    })).toBe(false)
+    expect(newerOperationController.signal.aborted).toBe(true)
   })
 
   it('invalidates a restore when its request, operation, account, route, or component changes', () => {

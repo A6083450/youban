@@ -56,6 +56,13 @@ export interface ConversationRestoreState {
   readonly alive: boolean
 }
 
+export interface ConversationRestoreLease {
+  readonly controller: AbortController
+  readonly operationToken: number
+  readonly ownerId: string
+  readonly sessionId: string
+}
+
 export interface ConversationPersistenceCapture {
   readonly ownerId: string
   readonly sessionId: string | null
@@ -114,8 +121,75 @@ export interface ConversationFallbackStorage {
 const CONVERSATION_PERSISTENCE_ENVELOPE_VERSION = 1 as const
 const CONVERSATION_PERSISTENCE_STORAGE_PREFIX = 'tripstar.chat_persistence.'
 export const CONVERSATION_PERSISTENCE_WRITE_TIMEOUT_MS = 3_000
+export const CONVERSATION_RESTORE_TIMEOUT_MS = 5_000
 
-const clone = <T>(value: T): T => structuredClone(value)
+const projectJsonSafe = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'object') return undefined
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value.toISOString()
+  if (ancestors.has(value)) return undefined
+
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => projectJsonSafe(item, ancestors) ?? null)
+    }
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return undefined
+    const result: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      let projected: unknown
+      try {
+        projected = projectJsonSafe((value as Record<string, unknown>)[key], ancestors)
+      } catch {
+        continue
+      }
+      if (projected !== undefined) result[key] = projected
+    }
+    return result
+  } catch {
+    return undefined
+  } finally {
+    ancestors.delete(value)
+  }
+}
+
+const clone = <T>(value: T): T => projectJsonSafe(value) as T
+
+export const runWithConversationDeadline = async <T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = CONVERSATION_RESTORE_TIMEOUT_MS,
+  parentSignal?: AbortSignal,
+): Promise<T> => {
+  const controller = new AbortController()
+  let deadlineExpired = false
+  const abortError = (): Error => {
+    const error = new Error(`Conversation request ${deadlineExpired ? 'timed out' : 'cancelled'}`)
+    error.name = 'AbortError'
+    return error
+  }
+  let rejectAbort: ((error: Error) => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject })
+  const onAbort = () => { rejectAbort?.(abortError()) }
+  const onParentAbort = () => { controller.abort() }
+  controller.signal.addEventListener('abort', onAbort, { once: true })
+  if (parentSignal?.aborted) onParentAbort()
+  else parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+  const timer = setTimeout(() => {
+    deadlineExpired = true
+    controller.abort()
+  }, Math.max(1, timeoutMs))
+
+  try {
+    if (controller.signal.aborted) return await aborted
+    return await Promise.race([operation(controller.signal), aborted])
+  } finally {
+    clearTimeout(timer)
+    controller.signal.removeEventListener('abort', onAbort)
+    parentSignal?.removeEventListener('abort', onParentAbort)
+  }
+}
 
 export const captureConversationOperation = (
   context: ConversationOperationContext,
@@ -145,6 +219,14 @@ export const isConversationRestoreCurrent = (
   && context.ownerId === current.ownerId
   && context.sessionId === current.selectedSessionId,
 )
+
+export const cancelConversationRestore = (
+  restore: ConversationRestoreLease,
+  current: Pick<ConversationRestoreLease, 'operationToken' | 'ownerId'>,
+): boolean => {
+  restore.controller.abort()
+  return restore.operationToken === current.operationToken && restore.ownerId === current.ownerId
+}
 
 export const captureConversationPersistence = (
   capture: ConversationPersistenceCapture,
@@ -349,7 +431,7 @@ export const toServerSnapshot = (
   version: CHAT_SESSION_SNAPSHOT_VERSION,
   items: items.filter((item) => STABLE_ITEM_TYPES.has(item.type)).map(clone),
   pendingConfirmId: state.pendingConfirmId,
-  pendingDraft: clone(state.pendingDraft),
+  pendingDraft: clone(state.pendingDraft) ?? null,
   pendingReadinessToken: String(state.pendingReadinessToken ?? ''),
   pendingUserText: state.pendingUserText,
   nextId: Math.max(1, Math.trunc(state.nextId) || 1),
