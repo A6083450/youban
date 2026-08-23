@@ -227,7 +227,6 @@ import {
   CONVERSATION_RECORDS_UPDATED_EVENT,
   conversationRecords,
   invalidateAllConversationTitlePolling,
-  invalidateConversationTitlePolling,
   isConversationRecordActive,
   isGeneratingRecord,
   isPlanRecordActive,
@@ -360,7 +359,6 @@ const resumePlan = async (planId: string): Promise<void> => {
 const deleteRecord = async (item: ConversationRecord) => {
   try {
     if (item.session_id) {
-      invalidateConversationTitlePolling(item.session_id)
       await deleteConversation(item.session_id)
     }
     else if (item.task_id) await deleteTripPlan(item.task_id)
