@@ -11,6 +11,7 @@ describe("SSE response", () => {
     });
 
     expect(await response.text()).toBe([
+      'data: {"type":"status","status":"connected"}\n\n',
       'data: {"type":"delta","text":"第一段"}\n\n',
       'data: {"type":"delta","text":"第二段"}\n\n',
       'data: {"type":"final","payload":{"success":true}}\n\n',
@@ -24,9 +25,22 @@ describe("SSE response", () => {
     });
 
     expect(await response.text()).toBe([
+      'data: {"type":"status","status":"connected"}\n\n',
       'data: {"type":"error","message":"upstream failed"}\n\n',
       "data: [DONE]\n\n",
     ].join(""));
+  });
+
+  it("keeps a slow upstream connection alive before its first delta", async () => {
+    const response = sseResponse(async () => {
+      await Bun.sleep(25);
+      return { success: true };
+    }, [], { heartbeatMs: 5 });
+
+    const text = await response.text();
+    expect(text.startsWith('data: {"type":"status","status":"connected"}\n\n')).toBeTrue();
+    expect(text.match(/data: {"type":"heartbeat"}\n\n/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(text.endsWith('data: [DONE]\n\n')).toBeTrue();
   });
 
   it("aborts upstream without extra frames when the reader is cancelled", async () => {
@@ -68,7 +82,7 @@ describe("SSE response", () => {
 
     shutdown.abort(new Error("server stopping"));
     await aborted;
-    expect(await response.text()).toBe("");
+    expect(await response.text()).toBe('data: {"type":"status","status":"connected"}\n\n');
     expect(received?.aborted).toBeTrue();
   });
 });

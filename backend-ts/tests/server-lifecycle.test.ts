@@ -596,7 +596,7 @@ describe("Bun server lifecycle", () => {
       expect(await socketClosed).toBe(1012);
       const sseResponse = await sseRequest;
       expect(sseResponse.status).toBe(200);
-      expect(await sseResponse.text()).toBe("");
+      expect(await sseResponse.text()).toBe('data: {"type":"status","status":"connected"}\n\n');
     } finally {
       socket.close();
       await server.stop(true);

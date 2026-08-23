@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
@@ -81,6 +81,7 @@ import { sseResponse } from "./sse.ts";
 
 interface PoiSearch {
   searchPoi(keywords: string, city: string, types?: string): Promise<TrustedPoi[]>;
+  getPoiPhoto?(name: string, city?: string): Promise<string>;
 }
 
 const AttractionMutationBodySchema = t.Object({
@@ -821,6 +822,35 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         keywords: t.String({ minLength: 1, maxLength: 120 }),
         city: t.String({ minLength: 1, maxLength: 80 }),
         types: t.Optional(t.String({ maxLength: 80 })),
+      }),
+    })
+    .get("/api/poi/photo", async ({ query }) => {
+      const digest = createHash("md5").update(`${query.city ?? ""}:${query.name}`, "utf8").digest("hex").slice(0, 16);
+      for (const extension of ["jpg", "jpeg", "png", "webp"]) {
+        const fileName = `${digest}.${extension}`;
+        const path = join(imagesDir, fileName);
+        try {
+          if (existsSync(path) && statSync(path).size > 0) {
+            return {
+              success: true,
+              message: "获取图片成功",
+              data: { name: query.name, photo_url: `/api/images/${fileName}` },
+            };
+          }
+        } catch {
+          // A broken cache entry is treated as a miss so the remote source can still recover.
+        }
+      }
+      const photoUrl = await poiSearch.getPoiPhoto?.(query.name, query.city) ?? "";
+      return {
+        success: true,
+        message: "获取图片成功",
+        data: { name: query.name, photo_url: photoUrl },
+      };
+    }, {
+      query: t.Object({
+        name: t.String({ minLength: 1, maxLength: 120 }),
+        city: t.Optional(t.String({ maxLength: 80 })),
       }),
     })
     .post("/api/admin/login", ({ body, status }) => {

@@ -3,9 +3,14 @@ export type SseRun = (
   signal: AbortSignal,
 ) => Promise<unknown>;
 
+export interface SseResponseOptions {
+  heartbeatMs?: number;
+}
+
 export function sseResponse(
   run: SseRun,
   signals: readonly AbortSignal[] = [],
+  options: SseResponseOptions = {},
 ): Response {
   const encoder = new TextEncoder();
   const disconnect = new AbortController();
@@ -13,11 +18,13 @@ export function sseResponse(
     ? AbortSignal.any([...signals, disconnect.signal])
     : disconnect.signal;
   let closed = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const close = () => {
         if (closed) return;
         closed = true;
+        if (heartbeat) clearInterval(heartbeat);
         controller.close();
       };
       const send = (payload: unknown) => {
@@ -26,6 +33,11 @@ export function sseResponse(
       };
       const abort = () => close();
       signal.addEventListener("abort", abort, { once: true });
+      send({ type: "status", status: "connected" });
+      const heartbeatMs = options.heartbeatMs ?? 10_000;
+      if (heartbeatMs > 0) {
+        heartbeat = setInterval(() => send({ type: "heartbeat" }), heartbeatMs);
+      }
       void (async () => {
         try {
           if (signal.aborted) return;

@@ -78,6 +78,31 @@ describe("AmapResearchSources", () => {
     }]);
   });
 
+  it("returns the first valid POI photo from the place detail fields", async () => {
+    const urls: URL[] = [];
+    const sources = new AmapResearchSources({
+      apiKey: "web-key",
+      fetch: async (input) => {
+        urls.push(new URL(String(input)));
+        return jsonResponse({
+          status: "1",
+          pois: [{
+            id: "B001",
+            name: "西湖",
+            photos: [
+              { url: "" },
+              { url: "https://example.com/west-lake.jpg" },
+            ],
+          }],
+        });
+      },
+    });
+
+    expect(await sources.getPoiPhoto("西湖", "杭州")).toBe("https://example.com/west-lake.jpg");
+    expect(urls[0]?.pathname).toBe("/v5/place/text");
+    expect(urls[0]?.searchParams.get("show_fields")).toBe("photos");
+  });
+
   it("resolves an adcode before requesting forecast weather", async () => {
     const urls: URL[] = [];
     const sources = new AmapResearchSources({

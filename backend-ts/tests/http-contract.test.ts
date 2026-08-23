@@ -9,7 +9,11 @@ import { createTaskState } from "../src/domain/task-store.ts";
 const runtimes: HttpRuntime[] = [];
 const tempDirs: string[] = [];
 
-function runtime(options: { frontend?: boolean; skillRuntimeDiagnostics?: SkillRuntimeDiagnostics } = {}): HttpRuntime {
+function runtime(options: {
+  frontend?: boolean;
+  skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
+  poiSearch?: Parameters<typeof createHttpRuntime>[0]["poiSearch"];
+} = {}): HttpRuntime {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-http-"));
   tempDirs.push(dataDir);
   mkdirSync(join(dataDir, "images"), { recursive: true });
@@ -27,6 +31,7 @@ function runtime(options: { frontend?: boolean; skillRuntimeDiagnostics?: SkillR
     dataDir,
     frontendDist,
     skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
+    poiSearch: options.poiSearch,
   });
   runtimes.push(value);
   return value;
@@ -132,6 +137,26 @@ describe("HTTP compatibility contract", () => {
     expect(await image.text()).toBe("image-body");
     const traversal = await value.app.handle(new Request("http://localhost/api/images/%2e%2e%2fyouban.db"));
     expect(traversal.status).toBe(404);
+  });
+
+  it("resolves migrated attraction photos through the legacy cache key", async () => {
+    const value = runtime({
+      poiSearch: {
+        searchPoi: async () => [],
+      },
+    });
+    writeFileSync(join(value.dataDir, "images", "2cb2b9e654e5c06c.jpg"), "legacy-photo");
+
+    const response = await value.app.handle(new Request(
+      "http://localhost/api/poi/photo?name=%E8%A5%BF%E6%B9%96&city=%E6%9D%AD%E5%B7%9E",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({
+      success: true,
+      message: "获取图片成功",
+      data: { name: "西湖", photo_url: "/api/images/2cb2b9e654e5c06c.jpg" },
+    });
   });
 
   it("filters trip history by X-User-Id", async () => {

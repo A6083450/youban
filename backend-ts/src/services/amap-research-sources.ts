@@ -117,6 +117,28 @@ export class AmapResearchSources {
     });
   }
 
+  async getPoiPhoto(name: string, city = ""): Promise<string> {
+    if (!this.apiKey || !name.trim()) return "";
+    const payload = await this.getJson("/v5/place/text", {
+      key: this.apiKey,
+      keywords: name.trim(),
+      ...(city.trim() ? { region: city.trim(), city_limit: "true" } : {}),
+      page_size: "10",
+      page_num: "1",
+      show_fields: "photos",
+    });
+    if (!payload || stringValue(payload.status) !== "1" || !Array.isArray(payload.pois)) return "";
+    for (const rawPoi of payload.pois) {
+      if (!record(rawPoi) || !Array.isArray(rawPoi.photos)) continue;
+      for (const rawPhoto of rawPoi.photos) {
+        if (!record(rawPhoto)) continue;
+        const url = stringValue(rawPhoto.url);
+        if (/^https?:\/\//i.test(url)) return url;
+      }
+    }
+    return "";
+  }
+
   async getWeather(city: string): Promise<WeatherForecast[]> {
     if (!this.apiKey || !city.trim()) return [];
     const district = await this.getJson("/v3/config/district", {
