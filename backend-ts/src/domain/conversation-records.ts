@@ -138,7 +138,7 @@ export class ConversationRecordService {
     visibility: ConversationRecordVisibility,
     limit: number,
     offset = 0,
-  ): ConversationRecord[] {
+  ): { items: ConversationRecord[]; total: number } {
     const normalizedOffset = Math.max(0, Math.trunc(offset));
     const sessions = this.sessions.listAll();
     const history = this.tasks.listHistory({
@@ -168,14 +168,17 @@ export class ConversationRecordService {
           record_id: `task:${plan.task_id}`,
         })),
     ];
-    return records
+    const filtered = records
       .filter((record) => visibility === "all"
         || (visibility === "active" ? record.user_deleted_at === null : record.user_deleted_at !== null))
       .sort((left, right) => (
         right.updated_at.localeCompare(left.updated_at)
         || left.record_id.localeCompare(right.record_id)
-      ))
-      .slice(normalizedOffset, normalizedOffset + limit);
+      ));
+    return {
+      items: filtered.slice(normalizedOffset, normalizedOffset + limit),
+      total: filtered.length,
+    };
   }
 
   create(input: {

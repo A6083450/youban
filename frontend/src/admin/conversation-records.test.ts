@@ -7,9 +7,8 @@ import {
   filterAdminRecords,
   isAdminRecordPermanentlyDeletable,
   loadAllAdminRecordPages,
+  refreshAdminRecordsAfterPermanentDelete,
 } from './conversation-records'
-
-const EXPECTED_MAX_PAGES = 100
 
 const record = (
   overrides: Partial<AdminConversationRecord> = {},
@@ -151,7 +150,10 @@ describe('admin conversation record projection', () => {
 
     const loaded = await loadAllAdminRecordPages('user_deleted', async (visibility, page) => {
       requests.push({ visibility, ...page })
-      return source.slice(page.offset, page.offset + page.limit)
+      return {
+        items: source.slice(page.offset, page.offset + page.limit),
+        total: 1_201,
+      }
     }, 500)
 
     expect(loaded).toHaveLength(1_201)
@@ -163,37 +165,76 @@ describe('admin conversation record projection', () => {
     ])
   })
 
-  it('stops when a full page repeats without adding any record ids', async () => {
+  it('rejects a full repeated page that makes no progress toward total', async () => {
     const repeatedPage = Array.from({ length: 500 }, (_, index) => record({
       record_id: `session:repeated-${index}`,
       session_id: `repeated-${index}`,
     }))
     let calls = 0
 
-    const loaded = await loadAllAdminRecordPages('all', async () => {
+    const loading = loadAllAdminRecordPages('all', async () => {
       calls += 1
       if (calls > 4) throw new Error('pagination did not terminate')
-      return repeatedPage
+      return { items: repeatedPage, total: 1_000 }
     })
 
-    expect(loaded).toHaveLength(500)
+    await expect(loading).rejects.toThrow('progress')
     expect(calls).toBe(2)
   })
 
-  it('caps a server that returns unique full pages forever', async () => {
+  it('does not silently truncate a conceptual total above 50,000 records', async () => {
     let calls = 0
 
-    const loaded = await loadAllAdminRecordPages('all', async () => {
+    const loading = loadAllAdminRecordPages('all', async () => {
       calls += 1
-      if (calls > EXPECTED_MAX_PAGES) throw new Error('pagination exceeded hard page limit')
-      return Array.from({ length: 500 }, (_, index) => record({
-        record_id: `session:page-${calls}-record-${index}`,
-        session_id: `page-${calls}-record-${index}`,
-      }))
-    })
+      if (calls > 2) throw new Error('pagination did not terminate')
+      return calls === 1
+        ? { items: [record({ record_id: 'session:first-of-many' })], total: 50_001 }
+        : { items: [], total: 50_001 }
+    }, 1)
 
-    expect(calls).toBe(EXPECTED_MAX_PAGES)
-    expect(loaded).toHaveLength(EXPECTED_MAX_PAGES * 500)
+    await expect(loading).rejects.toThrow('incomplete')
+    expect(calls).toBe(2)
+  })
+
+  it('throws instead of returning partial records at the protective request bound', async () => {
+    let calls = 0
+    const loading = loadAllAdminRecordPages('all', async () => {
+      calls += 1
+      return {
+        items: [record({ record_id: `session:bounded-${calls}` })],
+        total: 1_001,
+      }
+    }, 1)
+
+    await expect(loading).rejects.toThrow('request bound')
+    expect(calls).toBe(1_000)
+  })
+
+  it('rejects a short page before the stable total is complete', async () => {
+    const loading = loadAllAdminRecordPages('active', async () => ({
+      items: [record({ record_id: 'session:only-one' })],
+      total: 3,
+    }), 2)
+
+    await expect(loading).rejects.toThrow('incomplete')
+  })
+
+  it('rejects missing, invalid, or changing totals', async () => {
+    for (const invalidTotal of [undefined, -1, 1.5, Number.NaN]) {
+      await expect(loadAllAdminRecordPages('all', async () => ({
+        items: [],
+        total: invalidTotal,
+      }))).rejects.toThrow('total')
+    }
+
+    let page = 0
+    await expect(loadAllAdminRecordPages('all', async () => {
+      page += 1
+      return page === 1
+        ? { items: [record({ record_id: 'session:first' })], total: 2 }
+        : { items: [record({ record_id: 'session:second' })], total: 3 }
+    }, 1)).rejects.toThrow('changed')
   })
 
   it('marks an older visibility request stale when a newer filter resolves first', async () => {
@@ -203,8 +244,11 @@ describe('admin conversation record projection', () => {
     })
     const loader = createAdminRecordVisibilityLoader(async (visibility) => (
       visibility === 'active'
-        ? activePage
-        : [record({ record_id: 'session:deleted-latest', user_deleted_at: '2026-08-24T11:00:00Z' })]
+        ? activePage.then((items) => ({ items, total: items.length }))
+        : {
+            items: [record({ record_id: 'session:deleted-latest', user_deleted_at: '2026-08-24T11:00:00Z' })],
+            total: 1,
+          }
     ), 500)
 
     const older = loader.load('active')
@@ -224,7 +268,7 @@ describe('admin conversation record projection', () => {
     }))
   })
 
-  it('invalidates an in-flight list after DELETE and lets the authoritative refresh win', async () => {
+  it('coordinates panel deletion so invalidation precedes its authoritative current-visibility reload', async () => {
     const deletedRecord = record({ record_id: 'session:deleted-during-load' })
     let resolveOld: ((value: AdminConversationRecord[]) => void) | undefined
     let request = 0
@@ -233,11 +277,12 @@ describe('admin conversation record projection', () => {
       request += 1
       requestedVisibilities.push(visibility)
       if (request === 1) {
-        return new Promise<AdminConversationRecord[]>((resolve) => {
+        const items = await new Promise<AdminConversationRecord[]>((resolve) => {
           resolveOld = resolve
         })
+        return { items, total: items.length }
       }
-      return []
+      return { items: [], total: 0 }
     })
     let rendered = [deletedRecord]
     const commit = (result: Awaited<ReturnType<typeof loader.load>>) => {
@@ -245,17 +290,49 @@ describe('admin conversation record projection', () => {
     }
 
     const staleLoad = loader.load('all')
-    await Promise.resolve() // DELETE succeeds
-    loader.invalidate()
-    rendered = rendered.filter((item) => item.record_id !== deletedRecord.record_id)
-    const current = await loader.load('active')
+    const current = await refreshAdminRecordsAfterPermanentDelete(
+      loader,
+      () => 'active',
+      async () => {
+        rendered = rendered.filter((item) => item.record_id !== deletedRecord.record_id)
+        resolveOld?.([deletedRecord])
+        commit(await staleLoad)
+        expect(rendered).toEqual([])
+      },
+    )
     commit(current)
-    resolveOld?.([deletedRecord])
-    commit(await staleLoad)
 
     expect(request).toBe(2)
     expect(requestedVisibilities).toEqual(['all', 'active'])
     expect(current).toEqual(expect.objectContaining({ current: true, visibility: 'active' }))
     expect(rendered).toEqual([])
+  })
+
+  it('reports a current load error while keeping a late older error stale', async () => {
+    let rejectOld: ((reason: Error) => void) | undefined
+    const oldPage = new Promise<never>((_resolve, reject) => {
+      rejectOld = reject
+    })
+    const loader = createAdminRecordVisibilityLoader(async (visibility) => {
+      if (visibility === 'active') return oldPage
+      if (visibility === 'user_deleted') return { items: [], total: 0 }
+      throw new Error('current list failed')
+    })
+
+    const older = loader.load('active')
+    const newer = await loader.load('user_deleted')
+    rejectOld?.(new Error('late stale failure'))
+    const staleFailure = await older
+    const currentFailure = await loader.load('all')
+
+    expect(newer).toEqual(expect.objectContaining({ current: true, records: [] }))
+    expect(staleFailure).toEqual(expect.objectContaining({
+      current: false,
+      error: expect.objectContaining({ message: 'late stale failure' }),
+    }))
+    expect(currentFailure).toEqual(expect.objectContaining({
+      current: true,
+      error: expect.objectContaining({ message: 'current list failed' }),
+    }))
   })
 })

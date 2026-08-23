@@ -16,13 +16,17 @@ export interface AdminRecordPage {
   offset: number
 }
 
+export interface AdminRecordPageResult {
+  items: AdminConversationRecord[]
+  total: number
+}
+
 export type AdminRecordPageFetcher = (
   visibility: AdminRecordVisibility,
   page: Readonly<AdminRecordPage>,
-) => Promise<AdminConversationRecord[]>
+) => Promise<AdminRecordPageResult>
 
-export const ADMIN_RECORD_MAX_PAGES = 100
-export const ADMIN_RECORD_MAX_RECORDS = 50_000
+const ADMIN_RECORD_MAX_PAGE_REQUESTS = 1_000
 
 export const adminRecordKindKey = (
   record: Pick<AdminConversationRecord, 'kind'>,
@@ -67,25 +71,41 @@ export const loadAllAdminRecordPages = async (
   fetchPage: AdminRecordPageFetcher,
   pageSize = 500,
 ): Promise<AdminConversationRecord[]> => {
+  if (!Number.isSafeInteger(pageSize) || pageSize <= 0) {
+    throw new Error('Admin record page size is invalid')
+  }
   const records = new Map<string, AdminConversationRecord>()
+  let expectedTotal: number | null = null
   let offset = 0
-  for (let pageIndex = 0; pageIndex < ADMIN_RECORD_MAX_PAGES; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < ADMIN_RECORD_MAX_PAGE_REQUESTS; pageIndex += 1) {
     const page = await fetchPage(visibility, { limit: pageSize, offset })
+    if (!Array.isArray(page.items)) throw new Error('Admin record page items are invalid')
+    if (!Number.isSafeInteger(page.total) || page.total < 0) {
+      throw new Error('Admin record total is invalid')
+    }
+    if (expectedTotal === null) expectedTotal = page.total
+    else if (page.total !== expectedTotal) throw new Error('Admin record total changed during pagination')
+
     let added = 0
-    for (const record of page) {
+    for (const record of page.items) {
       if (records.has(record.record_id)) continue
       records.set(record.record_id, record)
       added += 1
-      if (records.size >= ADMIN_RECORD_MAX_RECORDS) break
     }
-    if (
-      page.length < pageSize
-      || added === 0
-      || records.size >= ADMIN_RECORD_MAX_RECORDS
-    ) break
-    offset += page.length
+    if (records.size > expectedTotal) throw new Error('Admin record page exceeds total')
+    if (records.size === expectedTotal) return [...records.values()]
+    if (page.items.length === 0 || page.items.length < pageSize) {
+      throw new Error('Admin record pagination is incomplete')
+    }
+    if (added === 0) throw new Error('Admin record pagination made no progress')
+
+    offset += page.items.length
+    const expectedRequestBound = Math.ceil(expectedTotal / pageSize) + 2
+    if (pageIndex + 1 >= Math.min(expectedRequestBound, ADMIN_RECORD_MAX_PAGE_REQUESTS)) {
+      throw new Error('Admin record pagination exceeded its request bound')
+    }
   }
-  return [...records.values()]
+  throw new Error('Admin record pagination exceeded its request bound')
 }
 
 export interface AdminRecordVisibilityLoadResult {
@@ -95,10 +115,15 @@ export interface AdminRecordVisibilityLoadResult {
   error?: unknown
 }
 
+export interface AdminRecordVisibilityLoader {
+  invalidate: () => void
+  load: (visibility: AdminRecordVisibility) => Promise<AdminRecordVisibilityLoadResult>
+}
+
 export const createAdminRecordVisibilityLoader = (
   fetchPage: AdminRecordPageFetcher,
   pageSize = 500,
-) => {
+): AdminRecordVisibilityLoader => {
   let generation = 0
   return {
     invalidate(): void {
@@ -114,4 +139,14 @@ export const createAdminRecordVisibilityLoader = (
       }
     },
   }
+}
+
+export const refreshAdminRecordsAfterPermanentDelete = async (
+  loader: AdminRecordVisibilityLoader,
+  getVisibility: () => AdminRecordVisibility,
+  onInvalidated: () => void | Promise<void>,
+): Promise<AdminRecordVisibilityLoadResult> => {
+  loader.invalidate()
+  await onInvalidated()
+  return loader.load(getVisibility())
 }

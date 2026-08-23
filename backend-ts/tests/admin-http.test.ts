@@ -241,12 +241,27 @@ describe("admin HTTP", () => {
 
     expect(deletedPage.status).toBe(200);
     expect(deletedNextPage.status).toBe(200);
-    const firstDeletedItems = (await deletedPage.json() as { items: Array<{ record_id: string }> }).items;
-    const nextDeletedItems = (await deletedNextPage.json() as { items: Array<{ record_id: string }> }).items;
+    const firstDeletedBody = await deletedPage.json() as {
+      items: Array<{ record_id: string }>;
+      total: number;
+    };
+    const nextDeletedBody = await deletedNextPage.json() as {
+      items: Array<{ record_id: string }>;
+      total: number;
+    };
+    const allSecondBody = await allSecondPage.json() as {
+      items: Array<{ record_id: string }>;
+      total: number;
+    };
+    const firstDeletedItems = firstDeletedBody.items;
+    const nextDeletedItems = nextDeletedBody.items;
     expect(firstDeletedItems).toHaveLength(1);
     expect(nextDeletedItems).toHaveLength(1);
+    expect(firstDeletedBody.total).toBe(2);
+    expect(nextDeletedBody.total).toBe(2);
+    expect(allSecondBody.total).toBe(504);
     expect(nextDeletedItems[0]?.record_id).not.toBe(firstDeletedItems[0]?.record_id);
-    expect((await allSecondPage.json() as { items: Array<{ record_id: string }> }).items).toEqual(
+    expect(allSecondBody.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ record_id: "session:older-deleted-a" }),
         expect.objectContaining({ record_id: "session:older-deleted-b" }),

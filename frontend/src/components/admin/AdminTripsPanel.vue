@@ -156,6 +156,8 @@ import {
   createAdminRecordVisibilityLoader,
   filterAdminRecords,
   isAdminRecordPermanentlyDeletable,
+  refreshAdminRecordsAfterPermanentDelete,
+  type AdminRecordVisibilityLoadResult,
   type AdminRecordStatusFilter,
   type AdminRecordVisibility,
 } from '@/admin/conversation-records'
@@ -198,15 +200,19 @@ const removeRecord = async (item: AdminConversationRecord) => {
   deletingId.value = item.record_id
   try {
     await adminPermanentlyDeleteRecord(item.record_id)
-    visibilityLoader.invalidate()
-    records.value = records.value.filter((record) => record.record_id !== item.record_id)
-    if (
-      selectedUserKey.value !== 'all' &&
-      !records.value.some((record) => (record.user_id || 'anonymous') === selectedUserKey.value)
-    ) {
-      selectedUserKey.value = 'all'
-    }
-    await loadRecords()
+    await consumeRecordLoad(refreshAdminRecordsAfterPermanentDelete(
+      visibilityLoader,
+      () => visibilityFilter.value,
+      () => {
+        records.value = records.value.filter((record) => record.record_id !== item.record_id)
+        if (
+          selectedUserKey.value !== 'all' &&
+          !records.value.some((record) => (record.user_id || 'anonymous') === selectedUserKey.value)
+        ) {
+          selectedUserKey.value = 'all'
+        }
+      },
+    ))
     message.success(t('admin.trips.deleted'))
   } catch (error: any) {
     if (isAdminAuthError(error)) {
@@ -293,9 +299,9 @@ const filteredRecords = computed(() => filterAdminRecords(records.value, {
   anonymousLabel: t('admin.trips.anonymous'),
 }))
 
-const loadRecords = async () => {
+const consumeRecordLoad = async (request: Promise<AdminRecordVisibilityLoadResult>) => {
   recordsLoading.value = true
-  const result = await visibilityLoader.load(visibilityFilter.value)
+  const result = await request
   if (!result.current || result.visibility !== visibilityFilter.value) return
   recordsLoading.value = false
   if (result.error) {
@@ -315,6 +321,8 @@ const loadRecords = async () => {
     selectedUserKey.value = 'all'
   }
 }
+
+const loadRecords = () => consumeRecordLoad(visibilityLoader.load(visibilityFilter.value))
 
 onMounted(() => {
   void loadRecords()

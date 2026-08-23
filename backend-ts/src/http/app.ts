@@ -891,11 +891,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 100, 500));
       const rawOffset = Number(query.offset ?? 0);
       const offset = Math.min(Math.trunc(rawOffset), Number.MAX_SAFE_INTEGER);
-      const items = conversationRecords.listAdmin(query.visibility ?? "all", limit, offset).map((item) => ({
+      const page = conversationRecords.listAdmin(query.visibility ?? "all", limit, offset);
+      const items = page.items.map((item) => ({
         ...item,
         nickname: users.get(item.user_id)?.nickname ?? "",
       }));
-      return { success: true, items };
+      return { success: true, items, total: page.total };
     }, {
       query: t.Object({
         visibility: t.Optional(t.Union([

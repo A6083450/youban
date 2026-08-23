@@ -41,7 +41,11 @@ import type {
   UserInfo,
   UserMemoryItem,
 } from '@/types'
-import { adminRecordDeletePath, type AdminRecordVisibility } from '@/admin/conversation-records'
+import {
+  adminRecordDeletePath,
+  type AdminRecordPageResult,
+  type AdminRecordVisibility,
+} from '@/admin/conversation-records'
 import { i18n } from '@/i18n'
 import { completeTripPlanResponse } from '@/utils/planConversation.js'
 
@@ -411,15 +415,19 @@ export async function adminDeleteTrip(taskId: string): Promise<void> {
 export async function adminGetConversationRecords(
   visibility: AdminRecordVisibility = 'all',
   page: Readonly<{ limit?: number; offset?: number }> = {},
-): Promise<AdminConversationRecord[]> {
+): Promise<AdminRecordPageResult> {
   try {
     const limit = page.limit ?? 500
     const offset = page.offset ?? 0
-    const response = await apiClient.get<{ success: boolean; items: AdminConversationRecord[] }>(
+    const response = await apiClient.get<{
+      success: boolean
+      items: AdminConversationRecord[]
+      total: number
+    }>(
       '/api/admin/records',
       { headers: adminAuthHeaders(), params: { visibility, limit, offset } },
     )
-    return response.data.items ?? []
+    return { items: response.data.items ?? [], total: response.data.total }
   } catch (error: any) {
     console.error('读取后台对话记录失败:', error)
     throw toAdminError(error, '读取记录列表失败')

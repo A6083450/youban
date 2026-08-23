@@ -104,3 +104,40 @@
 - The 50,000-record bound is intentionally a defensive ceiling. Normal server pagination, including the existing more-than-500 regression, remains unchanged below that ceiling.
 - Permanent-delete routing, namespaced IDs, processing-state protection, and local user/status/search projections are unchanged.
 - No unrelated worktree changes were staged; backend timings and the existing appearance, theme, and chat work remain untouched.
+
+## Review Fix Round 3: Explicit Completeness and Integrated Delete Refresh
+
+### RED/GREEN Evidence
+
+- RED backend: the pagination regression expected visibility-filtered totals of 2 and 504, but the compatible response extension was absent and returned `undefined`.
+- RED frontend: the API client still returned a bare array, and the old loader treated `{ items, total }` as an iterable. The API DTO assertion and every total-completeness test failed against that behavior.
+- RED integration: the delete race test required the coordinator used by the admin panel, but `refreshAdminRecordsAfterPermanentDelete` was absent.
+- GREEN focused backend: `cd backend-ts && bun test tests/admin-http.test.ts && bun run typecheck` passed with 16 tests, 0 failures, and 98 assertions.
+- GREEN focused frontend: `cd frontend && bun test src/admin/conversation-records.test.ts src/admin/navigation.test.ts src/admin/skill-management.test.ts && bunx vue-tsc --noEmit` passed with 36 tests, 0 failures, and 370 assertions.
+
+### Implementation
+
+- Extended `GET /api/admin/records` compatibly from `{ success, items }` to `{ success, items, total }`. The service computes `total` after the selected visibility filter and before offset/limit slicing.
+- Updated the frontend API DTO and page fetcher to retain both `items` and `total`.
+- A page load succeeds only when the number of unique namespaced record IDs reaches one stable, nonnegative safe-integer total.
+- Missing, invalid, or changing totals; records exceeding total; repeated pages with no new IDs; and empty or short pages before completion now throw explicit errors that flow through the existing admin load-error UI.
+- Removed the silent 50,000-record success ceiling. A conceptual 50,001-record test proves the loader does not silently return a partial list without allocating a large fixture.
+- Retained a 1,000-request protective bound, derived alongside the expected total/page size; reaching it before completeness throws instead of returning partial data.
+- Extracted and tested the permanent-delete refresh coordinator used directly by `AdminTripsPanel`. It invalidates old generations before the local removal boundary, then reloads the visibility selected at reload time. The race test fails if either invalidation or the authoritative reload is removed.
+- Added coverage proving a current load error is surfaced while an older late error remains stale.
+
+### Verification
+
+- Full backend suite: `cd backend-ts && bun run test` passed with 458 tests, 0 failures, and 1888 assertions across 50 files.
+- Backend type check: `cd backend-ts && bun run typecheck` passed with no diagnostics.
+- Full frontend suite: `cd frontend && bun test src` passed with 166 tests, 0 failures, and 526 assertions across 25 files.
+- Frontend type check: `cd frontend && bunx vue-tsc --noEmit` passed with no diagnostics.
+- Production build: `cd frontend && bun run build` passed with only the existing unresolved static-resource and chunk-size warnings.
+- `git diff --check` passed.
+
+### Self-review and Concerns
+
+- `success` and `items` remain unchanged for existing admin API consumers; `total` is additive.
+- The 1,000-request guard can intentionally reject an exceptionally large result that cannot complete inside the bound, but it can no longer be mistaken for a complete list.
+- Namespaced IDs, encoded permanent-delete routing, processing-state protection, and local user/status/search projections are unchanged.
+- No unrelated worktree changes were staged; backend timings and the existing appearance, theme, and chat work remain untouched.
