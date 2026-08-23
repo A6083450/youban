@@ -23,7 +23,7 @@
           <a-select-option value="processing">{{ t('admin.trips.statusProcessing') }}</a-select-option>
           <a-select-option value="failed">{{ t('admin.trips.statusFailed') }}</a-select-option>
         </a-select>
-        <a-button :loading="recordsLoading" @click="loadRecords">
+        <a-button :loading="recordsLoading" @click="loadRecords()">
           {{ t('admin.trips.refresh') }}
         </a-button>
       </div>
@@ -141,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
@@ -153,6 +153,7 @@ import {
 } from '@/services/api'
 import {
   adminRecordKindKey,
+  createAdminRecordVisibilityLoader,
   filterAdminRecords,
   isAdminRecordPermanentlyDeletable,
   type AdminRecordStatusFilter,
@@ -173,6 +174,9 @@ const visibilityFilter = ref<AdminRecordVisibility>('all')
 const recordsStatusFilter = ref<AdminRecordStatusFilter>('all')
 const selectedUserKey = ref<string>('all')
 const deletingId = ref('')
+const visibilityLoader = createAdminRecordVisibilityLoader(
+  (visibility, page) => adminGetConversationRecords(visibility, page),
+)
 
 const visibilityOptions = computed(() => [
   { value: 'all', label: t('admin.trips.visibilityAll') },
@@ -289,26 +293,32 @@ const filteredRecords = computed(() => filterAdminRecords(records.value, {
 
 const loadRecords = async () => {
   recordsLoading.value = true
-  try {
-    records.value = await adminGetConversationRecords('all')
-    if (
-      selectedUserKey.value !== 'all' &&
-      !records.value.some((item) => (item.user_id || 'anonymous') === selectedUserKey.value)
-    ) {
-      selectedUserKey.value = 'all'
-    }
-  } catch (error: any) {
+  const result = await visibilityLoader.load(visibilityFilter.value)
+  if (!result.current || result.visibility !== visibilityFilter.value) return
+  recordsLoading.value = false
+  if (result.error) {
+    const error = result.error as any
     if (isAdminAuthError(error)) {
       props.onUnauthorized()
       return
     }
     message.error(error?.message || t('admin.trips.loadFailed'))
-  } finally {
-    recordsLoading.value = false
+    return
+  }
+  records.value = result.records
+  if (
+    selectedUserKey.value !== 'all' &&
+    !records.value.some((item) => (item.user_id || 'anonymous') === selectedUserKey.value)
+  ) {
+    selectedUserKey.value = 'all'
   }
 }
 
 onMounted(() => {
+  void loadRecords()
+})
+
+watch(visibilityFilter, () => {
   void loadRecords()
 })
 </script>

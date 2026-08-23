@@ -134,7 +134,12 @@ export class ConversationRecordService {
       .slice(0, limit);
   }
 
-  listAdmin(visibility: ConversationRecordVisibility, limit: number): ConversationRecord[] {
+  listAdmin(
+    visibility: ConversationRecordVisibility,
+    limit: number,
+    offset = 0,
+  ): ConversationRecord[] {
+    const normalizedOffset = Math.max(0, Math.trunc(offset));
     const sessions = this.sessions.listAll();
     const history = this.tasks.listHistory({
       userId: "",
@@ -166,8 +171,11 @@ export class ConversationRecordService {
     return records
       .filter((record) => visibility === "all"
         || (visibility === "active" ? record.user_deleted_at === null : record.user_deleted_at !== null))
-      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-      .slice(0, limit);
+      .sort((left, right) => (
+        right.updated_at.localeCompare(left.updated_at)
+        || left.record_id.localeCompare(right.record_id)
+      ))
+      .slice(normalizedOffset, normalizedOffset + limit);
   }
 
   create(input: {

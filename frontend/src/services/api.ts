@@ -410,12 +410,14 @@ export async function adminDeleteTrip(taskId: string): Promise<void> {
 
 export async function adminGetConversationRecords(
   visibility: AdminRecordVisibility = 'all',
-  limit = 500,
+  page: Readonly<{ limit?: number; offset?: number }> = {},
 ): Promise<AdminConversationRecord[]> {
   try {
+    const limit = page.limit ?? 500
+    const offset = page.offset ?? 0
     const response = await apiClient.get<{ success: boolean; items: AdminConversationRecord[] }>(
       '/api/admin/records',
-      { headers: adminAuthHeaders(), params: { visibility, limit } },
+      { headers: adminAuthHeaders(), params: { visibility, limit, offset } },
     )
     return response.data.items ?? []
   } catch (error: any) {

@@ -6,6 +6,7 @@ import {
   adminCheckSkillUpdate,
   adminConfigureSkill,
   adminGetSkill,
+  adminGetConversationRecords,
   adminInstallGitSkill,
   adminListSkills,
   adminRestoreSkill,
@@ -643,6 +644,23 @@ describe('admin Skill API client', () => {
     expect(network.status).toBeNull()
     expect(network.code).toBeNull()
     expect(network.unauthorized).toBeFalse()
+  })
+})
+
+describe('admin conversation record API client', () => {
+  it('passes visibility, limit, and offset for one server-filtered page', async () => {
+    requests.length = 0
+
+    await adminGetConversationRecords('user_deleted', { limit: 200, offset: 400 })
+
+    expect(requests).toHaveLength(1)
+    const requestUrl = new URL(requests[0]!.path, 'http://localhost')
+    expect(requestUrl.pathname).toBe('/api/admin/records')
+    expect(Object.fromEntries(requestUrl.searchParams)).toEqual({
+      visibility: 'user_deleted',
+      limit: '200',
+      offset: '400',
+    })
   })
 })
 

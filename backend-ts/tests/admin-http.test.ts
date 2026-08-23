@@ -193,6 +193,74 @@ describe("admin HTTP", () => {
     sessions.close();
   });
 
+  it("paginates after visibility filtering so older deleted records survive more than 500 active rows", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    for (let index = 0; index < 501; index += 1) {
+      const sessionId = `newer-active-${String(index).padStart(3, "0")}`;
+      sessions.create({
+        sessionId,
+        userId: aliceId,
+        firstMessage: `活跃对话 ${index}`,
+        snapshot: { version: 1, items: [] },
+      });
+      sessions.database.raw.query(
+        "UPDATE conversation_sessions SET updated_at = ? WHERE session_id = ?",
+      ).run(`2026-08-24T12:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`, sessionId);
+    }
+    for (const [index, sessionId] of ["older-deleted-a", "older-deleted-b"].entries()) {
+      sessions.create({
+        sessionId,
+        userId: aliceId,
+        firstMessage: `已删除对话 ${index}`,
+        snapshot: { version: 1, items: [] },
+      });
+      sessions.softDelete(sessionId, aliceId);
+      sessions.database.raw.query(
+        "UPDATE conversation_sessions SET updated_at = ? WHERE session_id = ?",
+      ).run(`2020-01-0${index + 1}T00:00:00.000Z`, sessionId);
+    }
+
+    const deletedPage = await call(
+      "GET",
+      "/api/admin/records?visibility=user_deleted&limit=1&offset=0",
+      undefined,
+      "admin@123",
+    );
+    const deletedNextPage = await call(
+      "GET",
+      "/api/admin/records?visibility=user_deleted&limit=1&offset=1",
+      undefined,
+      "admin@123",
+    );
+    const allSecondPage = await call(
+      "GET",
+      "/api/admin/records?visibility=all&limit=500&offset=500",
+      undefined,
+      "admin@123",
+    );
+
+    expect(deletedPage.status).toBe(200);
+    expect(deletedNextPage.status).toBe(200);
+    const firstDeletedItems = (await deletedPage.json() as { items: Array<{ record_id: string }> }).items;
+    const nextDeletedItems = (await deletedNextPage.json() as { items: Array<{ record_id: string }> }).items;
+    expect(firstDeletedItems).toHaveLength(1);
+    expect(nextDeletedItems).toHaveLength(1);
+    expect(nextDeletedItems[0]?.record_id).not.toBe(firstDeletedItems[0]?.record_id);
+    expect((await allSecondPage.json() as { items: Array<{ record_id: string }> }).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ record_id: "session:older-deleted-a" }),
+        expect.objectContaining({ record_id: "session:older-deleted-b" }),
+      ]),
+    );
+    expect((await call(
+      "GET",
+      "/api/admin/records?visibility=all&limit=10&offset=-1",
+      undefined,
+      "admin@123",
+    )).status).toBe(422);
+    sessions.close();
+  });
+
   it("permanently deletes a pure conversation without touching plan rows", async () => {
     const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
     sessions.create({

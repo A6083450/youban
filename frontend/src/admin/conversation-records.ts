@@ -11,6 +11,16 @@ export interface AdminRecordFilters {
   anonymousLabel: string
 }
 
+export interface AdminRecordPage {
+  limit: number
+  offset: number
+}
+
+export type AdminRecordPageFetcher = (
+  visibility: AdminRecordVisibility,
+  page: Readonly<AdminRecordPage>,
+) => Promise<AdminConversationRecord[]>
+
 export const adminRecordKindKey = (
   record: Pick<AdminConversationRecord, 'kind'>,
 ): 'admin.trips.kindConversation' | 'admin.trips.kindPlan' => (
@@ -47,4 +57,47 @@ export const filterAdminRecords = (
       || record.title.toLowerCase().includes(keyword)
       || record.city.toLowerCase().includes(keyword)
   })
+}
+
+export const loadAllAdminRecordPages = async (
+  visibility: AdminRecordVisibility,
+  fetchPage: AdminRecordPageFetcher,
+  pageSize = 500,
+): Promise<AdminConversationRecord[]> => {
+  const records = new Map<string, AdminConversationRecord>()
+  let offset = 0
+  while (true) {
+    const page = await fetchPage(visibility, { limit: pageSize, offset })
+    for (const record of page) {
+      if (!records.has(record.record_id)) records.set(record.record_id, record)
+    }
+    if (page.length < pageSize) break
+    offset += page.length
+  }
+  return [...records.values()]
+}
+
+export interface AdminRecordVisibilityLoadResult {
+  current: boolean
+  visibility: AdminRecordVisibility
+  records: AdminConversationRecord[]
+  error?: unknown
+}
+
+export const createAdminRecordVisibilityLoader = (
+  fetchPage: AdminRecordPageFetcher,
+  pageSize = 500,
+) => {
+  let generation = 0
+  return {
+    async load(visibility: AdminRecordVisibility): Promise<AdminRecordVisibilityLoadResult> {
+      const requestGeneration = ++generation
+      try {
+        const records = await loadAllAdminRecordPages(visibility, fetchPage, pageSize)
+        return { current: requestGeneration === generation, visibility, records }
+      } catch (error) {
+        return { current: requestGeneration === generation, visibility, records: [], error }
+      }
+    },
+  }
 }

@@ -889,7 +889,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
       const rawLimit = Number(query.limit ?? 100);
       const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 100, 500));
-      const items = conversationRecords.listAdmin(query.visibility ?? "all", limit).map((item) => ({
+      const rawOffset = Number(query.offset ?? 0);
+      const offset = Math.min(Math.trunc(rawOffset), Number.MAX_SAFE_INTEGER);
+      const items = conversationRecords.listAdmin(query.visibility ?? "all", limit, offset).map((item) => ({
         ...item,
         nickname: users.get(item.user_id)?.nickname ?? "",
       }));
@@ -902,6 +904,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           t.Literal("user_deleted"),
         ])),
         limit: t.Optional(t.String()),
+        offset: t.Optional(t.String({ pattern: "^(0|[1-9]\\d*)$" })),
       }),
     })
     .delete("/api/admin/records/:recordId", ({ params, headers, status }) => {

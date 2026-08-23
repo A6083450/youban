@@ -3,8 +3,10 @@ import type { AdminConversationRecord } from '@/types'
 import {
   adminRecordDeletePath,
   adminRecordKindKey,
+  createAdminRecordVisibilityLoader,
   filterAdminRecords,
   isAdminRecordPermanentlyDeletable,
+  loadAllAdminRecordPages,
 } from './conversation-records'
 
 const record = (
@@ -134,5 +136,56 @@ describe('admin conversation record projection', () => {
   it('encodes namespaced record ids as a single permanent-delete path segment', () => {
     expect(adminRecordDeletePath('session:active-chat')).toBe('/api/admin/records/session%3Aactive-chat')
     expect(adminRecordDeletePath('task:completed-plan')).toBe('/api/admin/records/task%3Acompleted-plan')
+  })
+
+  it('loads every server-filtered page and de-duplicates a repeated boundary record', async () => {
+    const source = Array.from({ length: 1_201 }, (_, index) => record({
+      record_id: `session:deleted-${index}`,
+      session_id: `deleted-${index}`,
+      user_deleted_at: '2026-08-24T11:00:00Z',
+    }))
+    source.splice(500, 0, source[499]!)
+    const requests: Array<{ visibility: string; limit: number; offset: number }> = []
+
+    const loaded = await loadAllAdminRecordPages('user_deleted', async (visibility, page) => {
+      requests.push({ visibility, ...page })
+      return source.slice(page.offset, page.offset + page.limit)
+    }, 500)
+
+    expect(loaded).toHaveLength(1_201)
+    expect(new Set(loaded.map((item) => item.record_id)).size).toBe(1_201)
+    expect(requests).toEqual([
+      { visibility: 'user_deleted', limit: 500, offset: 0 },
+      { visibility: 'user_deleted', limit: 500, offset: 500 },
+      { visibility: 'user_deleted', limit: 500, offset: 1000 },
+    ])
+  })
+
+  it('marks an older visibility request stale when a newer filter resolves first', async () => {
+    let resolveActive: ((value: AdminConversationRecord[]) => void) | undefined
+    const activePage = new Promise<AdminConversationRecord[]>((resolve) => {
+      resolveActive = resolve
+    })
+    const loader = createAdminRecordVisibilityLoader(async (visibility) => (
+      visibility === 'active'
+        ? activePage
+        : [record({ record_id: 'session:deleted-latest', user_deleted_at: '2026-08-24T11:00:00Z' })]
+    ), 500)
+
+    const older = loader.load('active')
+    const newer = await loader.load('user_deleted')
+    resolveActive?.([record({ record_id: 'session:active-late' })])
+    const late = await older
+
+    expect(newer).toEqual(expect.objectContaining({
+      current: true,
+      visibility: 'user_deleted',
+      records: [expect.objectContaining({ record_id: 'session:deleted-latest' })],
+    }))
+    expect(late).toEqual(expect.objectContaining({
+      current: false,
+      visibility: 'active',
+      records: [expect.objectContaining({ record_id: 'session:active-late' })],
+    }))
   })
 })
