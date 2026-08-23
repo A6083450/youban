@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
@@ -190,12 +190,14 @@ function frontendResponse(frontendDist: string | undefined, pathname: string): R
 
 export function createHttpRuntime(options: HttpRuntimeOptions) {
   const databasePath = join(options.dataDir, "youban.db");
+  const imagesDir = join(options.dataDir, "images");
   const tasks = new SqliteTaskStore(databasePath);
   const users = new SqliteUserRepository(databasePath);
   const conversations = new ConversationRepository(databasePath);
   const conversationRecords = new ConversationRecordService(
     new ConversationSessionRepository(databasePath),
     tasks,
+    imagesDir,
   );
   const ownedMemory = options.memory ? undefined : new HermesMemoryBridge({ dataDir: options.dataDir });
   const memory = options.memory ?? ownedMemory!;
@@ -295,7 +297,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     throw error;
   }
   const planningAbort = new AbortController();
-  const imagesDir = join(options.dataDir, "images");
   const adminPasswordFile = join(options.dataDir, "admin_password.txt");
   const frontendDist = options.frontendDist;
   const unsubscribers = new Map<string, () => void>();
@@ -592,32 +593,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     return verified;
   };
 
-  const removeTripData = (task: TripTaskState): number => {
-    const referenced = new Set<string>();
-    const serialized = JSON.stringify(task);
-    for (const match of serialized.matchAll(/\/api\/images\/([^\s"')?]+)/g)) {
-      const name = decodeURIComponent(match[1] ?? "");
-      if (name && basename(name) === name) referenced.add(name);
-    }
-    tasks.delete(task.task_id);
-    conversations.delete(task.task_id);
-    const remaining = tasks.all().map((candidate) => JSON.stringify(candidate)).join("\n");
-    let removedImages = 0;
-    for (const name of referenced) {
-      if (remaining.includes(`/api/images/${name}`)) continue;
-      const path = join(imagesDir, name);
-      try {
-        if (existsSync(path)) {
-          unlinkSync(path);
-          removedImages += 1;
-        }
-      } catch {
-        // Cache cleanup is best effort after the task itself is deleted.
-      }
-    }
-    return removedImages;
-  };
-
   const mutationFailure = (
     error: unknown,
     status: (code: 404 | 409 | 422, body: { detail: string }) => unknown,
@@ -670,6 +645,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         error: null,
         execution: { elapsed_ms: Date.now() - startedAt },
       }, { immediate: true });
+      conversationRecords.markCompleted(taskId);
     } catch (error) {
       const current = tasks.get(taskId);
       if (!current || closed) return;
@@ -683,6 +659,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         error: message,
         execution: { elapsed_ms: Date.now() - startedAt },
       }, { immediate: true });
+      conversationRecords.markFailed(taskId);
     }
   };
 
@@ -899,6 +876,34 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     }, {
       body: t.Object({ password: t.String() }),
     })
+    .get("/api/admin/records", ({ headers, query, status }) => {
+      if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
+      const rawLimit = Number(query.limit ?? 100);
+      const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 100, 500));
+      const items = conversationRecords.listAdmin(query.visibility ?? "all", limit).map((item) => ({
+        ...item,
+        nickname: users.get(item.user_id)?.nickname ?? "",
+      }));
+      return { success: true, items };
+    }, {
+      query: t.Object({
+        visibility: t.Optional(t.Union([
+          t.Literal("all"),
+          t.Literal("active"),
+          t.Literal("user_deleted"),
+        ])),
+        limit: t.Optional(t.String()),
+      }),
+    })
+    .delete("/api/admin/records/:recordId", ({ params, headers, status }) => {
+      if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
+      const result = conversationRecords.permanentlyDelete(params.recordId);
+      if (result.status === "not_found") return status(404, { detail: "记录不存在" });
+      if (result.status === "conflict") {
+        return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
+      }
+      return { success: true, removed_images: result.removedImages };
+    })
     .get("/api/admin/trips", ({ headers, query, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
       const rawLimit = Number(query.limit ?? 100);
@@ -913,12 +918,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .delete("/api/admin/trips/:taskId", ({ params, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
-      const task = tasks.get(params.taskId);
-      if (!task) return status(404, { detail: "计划不存在" });
-      if (task.status === "processing") {
+      const result = conversationRecords.permanentlyDelete(params.taskId);
+      if (result.status === "not_found") return status(404, { detail: "计划不存在" });
+      if (result.status === "conflict") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
       }
-      return { success: true, removed_images: removeTripData(task) };
+      return { success: true, removed_images: result.removedImages };
     })
     .get("/api/admin/settings", ({ headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
@@ -1115,8 +1120,15 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/plan", ({ body, headers, status }) => {
+      const userId = (headers["x-user-id"] ?? "").trim();
+      const sessionId = body.session_id?.trim();
+      if (body.session_id !== undefined
+        && (!sessionId || !conversationRecords.canStartGeneration(sessionId, userId))) {
+        return status(404, { detail: "会话不存在" });
+      }
       const signedPayload = { ...body } as Record<string, unknown>;
       delete signedPayload.execution_token;
+      if (sessionId) signedPayload.session_id = sessionId;
       let requestPayload: TripPlanningRequest & Record<string, unknown>;
       try {
         requestPayload = normalizeTripPlanningRequest(signedPayload);
@@ -1132,12 +1144,16 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }
       const taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
       tasks.save(createTaskState(taskId, {
-        user_id: (headers["x-user-id"] ?? "").trim(),
+        user_id: userId,
         progress: 5,
         message: "任务已提交，正在初始化流程...",
         request_payload: requestPayload,
         checkpoint: emptyCheckpoint() as unknown as Record<string, unknown>,
       }), { immediate: true });
+      if (sessionId && !conversationRecords.linkGeneration(sessionId, userId, taskId)) {
+        tasks.delete(taskId);
+        return status(404, { detail: "会话不存在" });
+      }
       const rawConversation = requestPayload.conversation;
       const cityDisplay = requestPayload.cities.map((stay) => stay.city).join(" → ");
       const fallbackMessages = [
@@ -1151,7 +1167,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       ];
       conversations.save(
         taskId,
-        (headers["x-user-id"] ?? "").trim(),
+        userId,
         Array.isArray(rawConversation) && rawConversation.length > 0 ? rawConversation : fallbackMessages,
       );
       startPlanning(taskId);
@@ -1180,6 +1196,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           role: t.Union([t.Literal("user"), t.Literal("assistant")]),
           content: t.String({ minLength: 1, maxLength: 4_000 }),
         }), { maxItems: 100 })),
+        session_id: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
         execution_token: t.String(),
       }),
     })
@@ -1203,6 +1220,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           ? emptyCheckpoint() as unknown as Record<string, unknown>
           : task.checkpoint,
       }, { immediate: true });
+      conversationRecords.markGenerating(task.task_id);
       startPlanning(task.task_id);
       return planningResponse(task.task_id, `任务已重新提交，可通过 WebSocket /api/trip/ws/${task.task_id} 实时订阅状态`);
     }, {
@@ -1529,7 +1547,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (task.status === "processing") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
       }
-      return { success: true, removed_images: removeTripData(task) };
+      const userId = validAdminToken(headers) ? task.user_id : (headers["x-user-id"] ?? "").trim();
+      if (!conversationRecords.softDeletePlan(task.plan_id, userId)) {
+        return status(404, { detail: "计划不存在" });
+      }
+      return { success: true, removed_images: 0 };
     })
     .post("/api/chat/ask", ({ body, headers, request }) => withServices(({ chatService: activeChatService }) =>
       activeChatService.ask({

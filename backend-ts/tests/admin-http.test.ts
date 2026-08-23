@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -16,6 +16,7 @@ import type { DefaultTripPlannerOptions } from "../src/agents/default-trip-plann
 import type { StructuredAgentRequest } from "../src/agents/pi-trip-planner.ts";
 import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
 import { _resetSettingsForTest, getSettings } from "../src/config/settings.ts";
+import { ConversationSessionRepository } from "../src/domain/conversation-sessions.ts";
 import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
@@ -36,6 +37,7 @@ class ClosableParent implements YoubanParentAgent {
 let previousDataDir: string | undefined;
 let dataDir = "";
 let runtime: HttpRuntime;
+let aliceId = "";
 
 beforeEach(() => {
   previousDataDir = process.env.DATA_DIR;
@@ -44,6 +46,7 @@ beforeEach(() => {
   _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
   runtime = createHttpRuntime({ dataDir, planner: new NoopPlanner() });
   const alice = runtime.users.login("小艾");
+  aliceId = alice.user_id;
   runtime.tasks.save(createTaskState("alice-trip", {
     user_id: alice.user_id,
     status: "completed",
@@ -76,6 +79,12 @@ function call(method: string, path: string, body?: unknown, token?: string) {
   }));
 }
 
+async function adminRecords(visibility: "all" | "active" | "user_deleted") {
+  const response = await call("GET", `/api/admin/records?visibility=${visibility}`, undefined, "admin@123");
+  expect(response.status).toBe(200);
+  return (await response.json() as Record<string, any>).items as Array<Record<string, any>>;
+}
+
 describe("admin HTTP", () => {
   it("creates the password file and rereads it on every request", async () => {
     expect(readFileSync(join(dataDir, "admin_password.txt"), "utf8").trim()).toBe("admin@123");
@@ -96,6 +105,178 @@ describe("admin HTTP", () => {
     }));
     expect((await call("DELETE", "/api/admin/trips/alice-trip", undefined, "admin@123")).status).toBe(200);
     expect(runtime.tasks.get("alice-trip")).toBeUndefined();
+  });
+
+  it("lists conversations and plans by visibility with owner nicknames", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "active-chat",
+      userId: aliceId,
+      firstMessage: "继续聊聊北京",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.create({
+      sessionId: "deleted-chat",
+      userId: aliceId,
+      firstMessage: "稍后删除的聊天",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.softDelete("deleted-chat", aliceId);
+    runtime.tasks.softDelete("alice-trip");
+
+    expect((await call("GET", "/api/admin/records", undefined, "wrong-secret")).status).toBe(401);
+    const all = await adminRecords("all");
+    const active = await adminRecords("active");
+    const deleted = await adminRecords("user_deleted");
+
+    expect(all).toHaveLength(3);
+    expect(all).toEqual(expect.arrayContaining([
+      expect.objectContaining({ record_id: "active-chat", kind: "conversation", nickname: "小艾", user_deleted_at: null }),
+      expect.objectContaining({ record_id: "deleted-chat", kind: "conversation", nickname: "小艾", user_deleted_at: expect.any(String) }),
+      expect.objectContaining({ record_id: "alice-trip", kind: "plan", nickname: "小艾", user_deleted_at: expect.any(String) }),
+    ]));
+    expect(active.map((record) => record.record_id)).toEqual(["active-chat"]);
+    expect(deleted.map((record) => record.record_id).sort()).toEqual(["alice-trip", "deleted-chat"]);
+    sessions.close();
+  });
+
+  it("permanently deletes a pure conversation without touching plan rows", async () => {
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "pure-chat",
+      userId: aliceId,
+      firstMessage: "只聊天不生成",
+      snapshot: { version: 1, items: [] },
+    });
+
+    const removed = await call("DELETE", "/api/admin/records/pure-chat", undefined, "admin@123");
+
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ success: true, removed_images: 0 });
+    expect(sessions.database.raw.query(
+      "SELECT session_id FROM conversation_sessions WHERE session_id = ?",
+    ).get("pure-chat")).toBeNull();
+    expect(runtime.tasks.get("alice-trip")).toBeDefined();
+    expect((await call("DELETE", "/api/admin/records/missing", undefined, "admin@123")).status).toBe(404);
+    sessions.close();
+  });
+
+  it("permanently deletes a plan, its linked session, legacy conversation, and unreferenced image", async () => {
+    const image = join(dataDir, "images", "admin-only.jpg");
+    mkdirSync(join(dataDir, "images"), { recursive: true });
+    writeFileSync(image, "image");
+    const task = runtime.tasks.get("alice-trip")!;
+    runtime.tasks.save({
+      ...task,
+      result: { success: true, data: { city: "北京", days: [{ image_url: "/api/images/admin-only.jpg" }] } },
+    }, { immediate: true });
+    runtime.conversations.save("alice-trip", aliceId, [{ role: "user", content: "计划对话" }]);
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "planned-session",
+      userId: aliceId,
+      firstMessage: "北京三天",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.linkPlan("planned-session", aliceId, "alice-trip");
+    sessions.markPlanned("planned-session");
+
+    const removed = await call("DELETE", "/api/admin/records/planned-session", undefined, "admin@123");
+
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ success: true, removed_images: 1 });
+    expect(runtime.tasks.get("alice-trip")).toBeUndefined();
+    expect(runtime.conversations.get("alice-trip")).toEqual([]);
+    expect(sessions.database.raw.query(
+      "SELECT session_id FROM conversation_sessions WHERE session_id = ?",
+    ).get("planned-session")).toBeNull();
+    expect(existsSync(image)).toBe(false);
+    sessions.close();
+  });
+
+  it("rejects permanent deletion while the linked record is generating", async () => {
+    const task = runtime.tasks.get("alice-trip")!;
+    runtime.tasks.save({ ...task, status: "processing", stage: "planning" }, { immediate: true });
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "generating-session",
+      userId: aliceId,
+      firstMessage: "北京三天",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.linkPlan("generating-session", aliceId, "alice-trip");
+
+    const rejected = await call("DELETE", "/api/admin/records/generating-session", undefined, "admin@123");
+
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toEqual({ detail: "计划正在生成中，完成或失败后才能删除" });
+    expect(runtime.tasks.get("alice-trip")).toBeDefined();
+    expect(sessions.getByPlanId("alice-trip")).toBeDefined();
+    sessions.close();
+  });
+
+  it("removes a cached image only after its last task reference is permanently deleted", async () => {
+    const image = join(dataDir, "images", "shared.jpg");
+    mkdirSync(join(dataDir, "images"), { recursive: true });
+    writeFileSync(image, "image");
+    const first = runtime.tasks.get("alice-trip")!;
+    runtime.tasks.save({
+      ...first,
+      result: { success: true, data: { city: "北京", days: [{ image_url: "/api/images/shared.jpg" }] } },
+    }, { immediate: true });
+    runtime.tasks.save(createTaskState("second-trip", {
+      user_id: aliceId,
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      request_payload: { city: "上海", travel_days: 1 },
+      result: { success: true, data: { city: "上海", days: [{ image_url: "/api/images/shared.jpg" }] } },
+    }), { immediate: true });
+
+    const firstRemoved = await call("DELETE", "/api/admin/records/alice-trip", undefined, "admin@123");
+    expect(await firstRemoved.json()).toEqual({ success: true, removed_images: 0 });
+    expect(existsSync(image)).toBe(true);
+
+    const secondRemoved = await call("DELETE", "/api/admin/records/second-trip", undefined, "admin@123");
+    expect(await secondRemoved.json()).toEqual({ success: true, removed_images: 1 });
+    expect(existsSync(image)).toBe(false);
+  });
+
+  it("rolls back all database rows before attempting image cleanup", async () => {
+    const image = join(dataDir, "images", "transactional.jpg");
+    mkdirSync(join(dataDir, "images"), { recursive: true });
+    writeFileSync(image, "image");
+    const task = runtime.tasks.get("alice-trip")!;
+    runtime.tasks.save({
+      ...task,
+      result: { success: true, data: { city: "北京", days: [{ image_url: "/api/images/transactional.jpg" }] } },
+    }, { immediate: true });
+    runtime.conversations.save("alice-trip", aliceId, [{ role: "user", content: "计划对话" }]);
+    const sessions = new ConversationSessionRepository(join(dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "transaction-session",
+      userId: aliceId,
+      firstMessage: "北京三天",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.linkPlan("transaction-session", aliceId, "alice-trip");
+    sessions.markPlanned("transaction-session");
+    sessions.database.raw.exec(`
+      CREATE TRIGGER reject_conversation_delete
+      BEFORE DELETE ON conversations
+      BEGIN
+        SELECT RAISE(ABORT, 'reject conversation delete');
+      END;
+    `);
+
+    const rejected = await call("DELETE", "/api/admin/records/transaction-session", undefined, "admin@123");
+
+    expect(rejected.status).toBe(500);
+    expect(runtime.tasks.get("alice-trip")).toBeDefined();
+    expect(runtime.conversations.get("alice-trip")).toEqual([{ role: "user", content: "计划对话" }]);
+    expect(sessions.getByPlanId("alice-trip", { includeDeleted: true })).toBeDefined();
+    expect(existsSync(image)).toBe(true);
+    sessions.close();
   });
 
   it("lets a live admin token cross owner guards and rejects an invalid token", async () => {

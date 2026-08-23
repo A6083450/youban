@@ -151,6 +151,14 @@ export class ConversationSessionRepository {
     return rows.map(toSession);
   }
 
+  listAll(): ConversationSession[] {
+    const rows = this.database.raw.query(`
+      SELECT * FROM conversation_sessions
+      ORDER BY updated_at DESC
+    `).all() as ConversationSessionRow[];
+    return rows.map(toSession);
+  }
+
   replaceSnapshot(
     sessionId: string,
     userId: string,
@@ -196,36 +204,47 @@ export class ConversationSessionRepository {
     const normalizedUserId = normalizeRequired(userId, "user id");
     const normalizedPlanId = normalizeRequired(planId, "plan id");
     return this.transaction(() => {
+      const existing = this.getBySessionId(normalizedSessionId, true, normalizedUserId);
+      if (!existing || (existing.planId !== null && existing.planId !== normalizedPlanId)) return undefined;
       this.database.raw.query(`
         UPDATE conversation_sessions
         SET plan_id = ?, state = CASE WHEN state = 'planned' THEN state ELSE 'generating' END, updated_at = ?
         WHERE session_id = ? AND user_id = ? AND deleted_at IS NULL
-      `).run(normalizedPlanId, now(), normalizedSessionId, normalizedUserId);
+          AND (plan_id IS NULL OR plan_id = ?)
+      `).run(normalizedPlanId, now(), normalizedSessionId, normalizedUserId, normalizedPlanId);
       return this.getBySessionId(normalizedSessionId, true, normalizedUserId);
     });
   }
 
-  markPlanned(sessionId: string): ConversationSession | undefined {
+  markPlanned(
+    sessionId: string,
+    options: { includeDeleted?: boolean } = {},
+  ): ConversationSession | undefined {
     const normalizedSessionId = normalizeRequired(sessionId, "session id");
+    const visibility = options.includeDeleted ? "" : " AND deleted_at IS NULL";
     return this.transaction(() => {
       this.database.raw.query(`
         UPDATE conversation_sessions
         SET state = 'planned', updated_at = ?
-        WHERE session_id = ? AND plan_id IS NOT NULL AND deleted_at IS NULL
+        WHERE session_id = ? AND plan_id IS NOT NULL${visibility}
       `).run(now(), normalizedSessionId);
-      return this.getBySessionId(normalizedSessionId, true);
+      return this.getBySessionId(normalizedSessionId, !options.includeDeleted);
     });
   }
 
-  markGenerationFailed(sessionId: string): ConversationSession | undefined {
+  markGenerationFailed(
+    sessionId: string,
+    options: { includeDeleted?: boolean } = {},
+  ): ConversationSession | undefined {
     const normalizedSessionId = normalizeRequired(sessionId, "session id");
+    const visibility = options.includeDeleted ? "" : " AND deleted_at IS NULL";
     return this.transaction(() => {
       this.database.raw.query(`
         UPDATE conversation_sessions
         SET state = 'chatting', updated_at = ?
-        WHERE session_id = ? AND deleted_at IS NULL AND state <> 'planned'
+        WHERE session_id = ?${visibility} AND state <> 'planned'
       `).run(now(), normalizedSessionId);
-      return this.getBySessionId(normalizedSessionId, true);
+      return this.getBySessionId(normalizedSessionId, !options.includeDeleted);
     });
   }
 

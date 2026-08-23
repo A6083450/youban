@@ -2,13 +2,33 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
 import { ConversationTitleService } from "../src/agents/conversation-title.ts";
+import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
 import { ConversationSessionRepository } from "../src/domain/conversation-sessions.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 
 const runtimes: HttpRuntime[] = [];
 const dirs: string[] = [];
+
+const DRAFT = {
+  city: "大理",
+  cities: [{ city: "大理", days: 3 }],
+  start_date: "2026-10-01",
+  end_date: "2026-10-03",
+  travel_days: 3,
+  transportation: "公共交通",
+  accommodation: "舒适型酒店",
+  preferences: ["自然风光"],
+  traveler_count: 2,
+  room_count: 1,
+  budget_amount: 3_000,
+  budget_basis: "group_total" as const,
+  free_text_input: "大理三天",
+  origin_text: "大理三天",
+  language: "zh-CN",
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -20,10 +40,31 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function runtime(conversationTitleService?: ConversationTitleService) {
+class ControlledPlanner implements TripPlanner {
+  readonly started = deferred<void>();
+  private readonly result = deferred<Record<string, unknown>>();
+
+  async plan(_request: TripPlanningRequest, _context: PlannerRunContext): Promise<Record<string, unknown>> {
+    this.started.resolve();
+    return this.result.promise;
+  }
+
+  succeed(): void {
+    this.result.resolve({
+      success: true,
+      data: { ...DRAFT, days: [{ day_index: 0, city: "大理", attractions: [] }] },
+    });
+  }
+
+  fail(): void {
+    this.result.reject(new Error("规划模型暂时不可用"));
+  }
+}
+
+function runtime(conversationTitleService?: ConversationTitleService, planner?: TripPlanner) {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-conversation-records-"));
   dirs.push(dataDir);
-  const value = createHttpRuntime({ dataDir, conversationTitleService });
+  const value = createHttpRuntime({ dataDir, conversationTitleService, planner });
   runtimes.push(value);
   return value;
 }
@@ -49,6 +90,14 @@ function call(
 
 async function json(response: Response): Promise<Record<string, any>> {
   return response.json() as Promise<Record<string, any>>;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition not reached");
+    await Bun.sleep(5);
+  }
 }
 
 async function createConversation(
@@ -266,6 +315,140 @@ describe("conversation record HTTP API", () => {
     expect(items.filter((item: Record<string, unknown>) => item.plan_id === "plan-linked")).toHaveLength(1);
   });
 
+  it("links a signed plan submission synchronously and promotes the same record after completion", async () => {
+    const planner = new ControlledPlanner();
+    const value = runtime(
+      new ConversationTitleService({ agentComplete: async () => "大理三日自然旅行" }),
+      planner,
+    );
+    await createConversation(value.app);
+    await Bun.sleep(0);
+    const token = value.assistant.ledger.register(DRAFT, 0.95).token;
+
+    const submitted = await call(value.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      session_id: "session-1",
+      execution_token: token,
+    });
+
+    const accepted = await json(submitted);
+    const storedRequest = value.tasks.get(accepted.task_id)?.request_payload;
+    const generatingItems = (await json(await call(value.app, "GET", "/api/conversations"))).items;
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    expect(sessions.linkPlan("session-1", "user-1", accepted.plan_id)?.planId).toBe(accepted.plan_id);
+    expect(sessions.linkPlan("session-1", "user-1", "different-plan")).toBeUndefined();
+    expect(sessions.getByPlanId(accepted.plan_id)?.sessionId).toBe("session-1");
+    sessions.close();
+    planner.succeed();
+
+    expect(submitted.status).toBe(200);
+    expect(storedRequest).toEqual(expect.objectContaining({
+      session_id: "session-1",
+    }));
+    expect(generatingItems).toEqual([
+      expect.objectContaining({
+        record_id: "session-1",
+        kind: "conversation",
+        plan_id: accepted.plan_id,
+        task_id: accepted.task_id,
+        state: "generating",
+        status: "processing",
+      }),
+    ]);
+
+    await waitFor(() => value.tasks.get(accepted.task_id)?.status === "completed");
+    expect((await json(await call(value.app, "GET", "/api/conversations"))).items).toEqual([
+      expect.objectContaining({
+        record_id: "session-1",
+        kind: "plan",
+        plan_id: accepted.plan_id,
+        task_id: accepted.task_id,
+        state: "planned",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  it("returns a failed linked generation to chatting without creating a duplicate record", async () => {
+    const planner = new ControlledPlanner();
+    const value = runtime(
+      new ConversationTitleService({ agentComplete: async () => "大理三日自然旅行" }),
+      planner,
+    );
+    await createConversation(value.app);
+    const token = value.assistant.ledger.register(DRAFT, 0.95).token;
+    const accepted = await json(await call(value.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      session_id: "session-1",
+      execution_token: token,
+    }));
+
+    planner.fail();
+    await waitFor(() => value.tasks.get(accepted.task_id)?.status === "failed");
+
+    expect((await json(await call(value.app, "GET", "/api/conversations"))).items).toEqual([
+      expect.objectContaining({
+        record_id: "session-1",
+        kind: "conversation",
+        plan_id: accepted.plan_id,
+        state: "chatting",
+        status: "failed",
+      }),
+    ]);
+  });
+
+  it("applies authoritative completion after user deletion so admin deletion does not stay blocked", async () => {
+    const planner = new ControlledPlanner();
+    const value = runtime(
+      new ConversationTitleService({ agentComplete: async () => "大理三日自然旅行" }),
+      planner,
+    );
+    await createConversation(value.app);
+    const token = value.assistant.ledger.register(DRAFT, 0.95).token;
+    const accepted = await json(await call(value.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      session_id: "session-1",
+      execution_token: token,
+    }));
+    expect((await call(value.app, "DELETE", "/api/conversations/session-1")).status).toBe(200);
+
+    planner.succeed();
+    await waitFor(() => value.tasks.get(accepted.task_id)?.status === "completed");
+    const adminList = await value.app.handle(new Request(
+      "http://localhost/api/admin/records?visibility=user_deleted",
+      { headers: { "x-admin-token": "admin@123" } },
+    ));
+
+    expect(adminList.status).toBe(200);
+    expect((await json(adminList)).items).toEqual([
+      expect.objectContaining({ record_id: "session-1", state: "planned", status: "completed" }),
+    ]);
+    const permanentlyDeleted = await value.app.handle(new Request(
+      "http://localhost/api/admin/records/session-1",
+      { method: "DELETE", headers: { "x-admin-token": "admin@123" } },
+    ));
+    expect(permanentlyDeleted.status).toBe(200);
+  });
+
+  it("verifies session ownership before consuming confirmation or creating a task", async () => {
+    const value = runtime(new ConversationTitleService({ agentComplete: async () => "大理三日自然旅行" }));
+    await createConversation(value.app);
+    const token = value.assistant.ledger.register(DRAFT, 0.95).token;
+
+    const rejected = await call(value.app, "POST", "/api/trip/plan", {
+      ...DRAFT,
+      session_id: "session-1",
+      execution_token: token,
+    }, "other-user");
+
+    expect(rejected.status).toBe(404);
+    expect(await json(rejected)).toEqual({ detail: "会话不存在" });
+    expect(value.assistant.ledger.validate(token, DRAFT)).toEqual({ valid: true, reason: "ok" });
+    expect(value.tasks.all()).toEqual([]);
+    expect((await json(await call(value.app, "GET", "/api/conversations"))).items)
+      .toEqual([expect.objectContaining({ record_id: "session-1", plan_id: null, state: "chatting" })]);
+  });
+
   it("soft-deletes both sides of a linked planned record without removing either row", async () => {
     const value = runtime(new ConversationTitleService({ agentComplete: async () => "国庆新疆深度旅行规划" }));
     value.tasks.save(createTaskState("task-linked", {
@@ -327,6 +510,39 @@ describe("conversation record HTTP API", () => {
       sessionId: "session-1",
       deletedAt: null,
     }));
+    sessions.close();
+  });
+
+  it("rolls back the task tombstone when the linked session tombstone fails", async () => {
+    const value = runtime(new ConversationTitleService({ agentComplete: async () => "国庆新疆深度旅行规划" }));
+    value.tasks.save(createTaskState("task-linked", {
+      plan_id: "plan-linked",
+      user_id: "user-1",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      request_payload: { city: "新疆", travel_days: 30 },
+      result: { data: { city: "新疆", days: [] } },
+    }), { immediate: true });
+    await createConversation(value.app);
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    sessions.linkPlan("session-1", "user-1", "plan-linked");
+    sessions.markPlanned("session-1");
+    sessions.database.raw.exec(`
+      CREATE TRIGGER reject_session_tombstone
+      BEFORE UPDATE OF deleted_at ON conversation_sessions
+      BEGIN
+        SELECT RAISE(ABORT, 'reject session tombstone');
+      END;
+    `);
+
+    const rejected = await call(value.app, "DELETE", "/api/conversations/session-1");
+
+    expect(rejected.status).toBe(500);
+    expect(value.tasks.database.raw.query(
+      "SELECT user_deleted_at FROM tasks WHERE task_id = ?",
+    ).get("task-linked")).toEqual({ user_deleted_at: null });
+    expect(sessions.getByPlanId("plan-linked", { includeDeleted: true })?.deletedAt).toBeNull();
     sessions.close();
   });
 

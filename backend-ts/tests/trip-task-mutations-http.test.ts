@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
 import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
+import { ConversationSessionRepository } from "../src/domain/conversation-sessions.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 
@@ -104,16 +105,39 @@ describe("share, execution, and deletion contracts", () => {
     expect(missing.status).toBe(404);
   });
 
-  it("deletes a terminal plan, its conversation, and an unreferenced cached image", async () => {
+  it("soft-deletes a terminal plan while retaining task, session, conversation, and image data", async () => {
     const value = runtime();
     const image = join(value.dataDir, "images", "orphan.jpg");
     writeFileSync(image, "image");
+    const sessions = new ConversationSessionRepository(join(value.dataDir, "youban.db"));
+    sessions.create({
+      sessionId: "session-1",
+      userId: "owner-1",
+      firstMessage: "北京三天",
+      snapshot: { version: 1, items: [] },
+    });
+    sessions.linkPlan("session-1", "owner-1", "plan-1");
+    sessions.markPlanned("session-1");
+
     const response = await call(value.app, "DELETE", "/api/trip/plan/plan-1");
+
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true, removed_images: 1 });
-    expect(value.tasks.get("plan-1")).toBeUndefined();
-    expect(value.conversations.get("plan-1")).toEqual([]);
-    expect(existsSync(image)).toBe(false);
+    expect(await response.json()).toEqual({ success: true, removed_images: 0 });
+    expect(value.tasks.get("plan-1")).toBeDefined();
+    expect(value.tasks.database.raw.query(
+      "SELECT user_deleted_at FROM tasks WHERE task_id = ?",
+    ).get("plan-1")).toEqual({ user_deleted_at: expect.any(String) });
+    expect(sessions.getByPlanId("plan-1", { includeDeleted: true })).toEqual(expect.objectContaining({
+      sessionId: "session-1",
+      deletedAt: expect.any(String),
+    }));
+    expect(value.conversations.get("plan-1")).toEqual([{ role: "user", content: "私密创建对话" }]);
+    expect(existsSync(image)).toBe(true);
+    expect((await call(value.app, "GET", "/api/trip/history").then((result) => result.json()) as Record<string, any>).items)
+      .toEqual([]);
+    expect((await call(value.app, "GET", "/api/conversations").then((result) => result.json()) as Record<string, any>).items)
+      .toEqual([]);
+    sessions.close();
   });
 
   it("rejects non-owner sharing/deletion and processing deletion", async () => {
