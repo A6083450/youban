@@ -466,6 +466,16 @@ describe("BunGitRunner process boundaries", () => {
     await expectGitCode(runner.run({ args: ["--version"], timeoutMs: 100 }), "git_unavailable");
   });
 
+  it("maps a missing Git executable while acquisition limits are active", async () => {
+    const root = temporaryRoot("youban-missing-limited-git-");
+    const runner = new BunGitRunner({ executable: join(root, "git") });
+
+    await expectGitCode(
+      runner.run({ args: ["--version"], acquisitionRoot: root, timeoutMs: 100 }),
+      "git_unavailable",
+    );
+  });
+
   it("terminates a timed-out child without exposing its private environment", async () => {
     const root = temporaryRoot("youban-git-timeout-");
     const script = join(root, "hang.ts");

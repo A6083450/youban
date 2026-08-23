@@ -234,15 +234,22 @@ export class BunGitRunner implements GitRunner {
       }
     }
 
+    let executable = this.executable;
+    if (acquisitionFileLimitBlocks !== undefined) {
+      executable = Bun.which(this.executable, {
+        cwd: invocation.cwd,
+        PATH: childEnv.PATH,
+      }) ?? gitError("git_unavailable", "Git executable is unavailable");
+    }
     const command = acquisitionFileLimitBlocks === undefined
-      ? [this.executable, ...invocation.args]
+      ? [executable, ...invocation.args]
       : [
         "/bin/sh",
         "-c",
         'ulimit -f "$1" || exit 125\nshift\nexec "$@"',
         "youban-git-acquisition-limit",
         String(acquisitionFileLimitBlocks),
-        this.executable,
+        executable,
         ...invocation.args,
       ];
     let child!: ReturnType<typeof Bun.spawn>;
