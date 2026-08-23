@@ -14,12 +14,12 @@
       >
         <template #item="{ item }">
           <Bubble
-            class="chat-bubble"
-            :class="`role-${item.role}`"
-            :placement="item.role === 'user' ? 'end' : 'start'"
-            :variant="item.role === 'user' ? 'filled' : 'outlined'"
-            :loading="item.type === 'typing'"
-            :no-style="isStructuredItem(item)"
+                class="chat-bubble"
+                :class="`role-${item.role}`"
+                :placement="item.role === 'user' ? 'end' : 'start'"
+                :variant="item.role === 'user' ? 'filled' : 'outlined'"
+                :loading="item.type === 'typing'"
+                :no-style="item.role !== 'user'"
             max-width="min(680px, calc(100vw - 96px))"
           >
             <template #avatar>
@@ -77,7 +77,6 @@
                   :enable-mermaid="false"
                   :style="markdownStyle"
                 />
-                <span v-if="item.text" class="stream-caret" aria-hidden="true"></span>
                 <span v-else class="stream-wait">{{ t('composer.parsing') }}</span>
               </div>
               <WorkProgress
@@ -283,9 +282,6 @@ const promptItems = computed(() => suggestions.value.map((suggestion) => ({
   key: suggestion,
   label: suggestion,
 })))
-
-const isStructuredItem = (item: ChatItem): boolean =>
-  item.type === 'progress' || item.type === 'failed' || item.type === 'done'
 
 const shuffle = (arr: string[]): string[] => {
   const a = [...arr]
@@ -1332,7 +1328,7 @@ const onConfirmGenerate = async (
   40% { transform: scale(1); opacity: 1; }
 }
 
-/* 流式打字机气泡:复用 assistant 气泡外观,追加闪烁光标 */
+/* 流式回复沿用普通文本排版，不显示打字机光标。 */
 .msg-bubble.streaming {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1342,21 +1338,6 @@ const onConfirmGenerate = async (
   display: inline-flex;
   gap: 5px;
   align-items: center;
-}
-
-.stream-caret {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 2px;
-  background: #D97757;
-  vertical-align: text-bottom;
-  animation: stream-blink 1s step-end infinite;
-}
-
-@keyframes stream-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
 }
 
 .progress-wrap {

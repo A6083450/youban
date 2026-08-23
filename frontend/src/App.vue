@@ -200,11 +200,11 @@ const isOngoing = (item: TripHistoryItem): boolean => {
 
 const antTheme = computed(() => ({
   token: {
-    colorPrimary: skin.value === 'google' ? '#1a73e8' : '#d97757',
-    colorSuccess: skin.value === 'google' ? '#188038' : '#3a9c7a',
-    colorError: skin.value === 'google' ? '#d93025' : '#c2413a',
-    colorText: skin.value === 'google' ? '#202124' : '#3d3229',
-    colorBgLayout: skin.value === 'google' ? '#f8fafd' : '#faf7f2',
+    colorPrimary: skin.value === 'google' ? '#3b9bb4' : '#d97757',
+    colorSuccess: skin.value === 'google' ? '#2d8c72' : '#3a9c7a',
+    colorError: skin.value === 'google' ? '#c85c5c' : '#c2413a',
+    colorText: skin.value === 'google' ? '#22313a' : '#3d3229',
+    colorBgLayout: skin.value === 'google' ? '#f5f9fc' : '#faf7f2',
     borderRadius: skin.value === 'google' ? 12 : 8,
   },
 }))
@@ -652,7 +652,7 @@ onUnmounted(() => {
 }
 
 .preference-swatch--clear {
-  background: linear-gradient(135deg, #f8fafd 0 48%, #1a73e8 52% 100%);
+  background: linear-gradient(135deg, #f5f9fc 0 48%, #3b9bb4 52% 100%);
 }
 
 /* 侧栏底部用户区 */
