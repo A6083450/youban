@@ -41,60 +41,102 @@
         @activate="returnToActiveTask"
       />
 
-      <div class="sidebar-section-title">{{ t('sidebar.plans') }}</div>
       <div class="sidebar-list">
-        <div v-if="plansLoading" class="sidebar-hint">{{ t('common.loading') }}</div>
-        <div v-else-if="plans.length === 0" class="sidebar-hint">{{ t('sidebar.empty') }}</div>
-        <div
-          v-for="item in plans"
-          :key="item.plan_id"
-          class="sidebar-item"
-          :class="{ active: activePlanId === item.plan_id }"
-        >
-          <button
-            type="button"
-            class="sidebar-item-main"
-            :aria-current="activePlanId === item.plan_id ? 'page' : undefined"
-            @click="openPlan(item.plan_id)"
-          >
-            <span class="sidebar-item-city">{{ item.city }}</span>
-            <span class="sidebar-item-date">
-              {{ item.start_date }} ~ {{ item.end_date }}
-              <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
-              <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
-              <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
-            </span>
-          </button>
-          <button
-            v-if="item.status === 'processing'"
-            type="button"
-            class="sidebar-item-resume"
-            :disabled="resumingPlanId === item.plan_id"
-            :aria-busy="resumingPlanId === item.plan_id"
-            @click.stop="resumePlan(item.plan_id)"
-            @keydown.enter.stop
-          >
-            <LoadingOutlined v-if="resumingPlanId === item.plan_id" aria-hidden="true" />
-            <PlayCircleOutlined v-else aria-hidden="true" />
-            <span>{{ resumingPlanId === item.plan_id ? t('sidebar.resuming') : t('sidebar.resumeGeneration') }}</span>
-          </button>
-          <a-popconfirm
-            :title="t('sidebar.deleteConfirm')"
-            :ok-text="t('common.ok')"
-            :cancel-text="t('common.cancel')"
-            placement="right"
-            @confirm="deletePlan(item)"
+        <section class="sidebar-section" :aria-label="t('sidebar.conversations')">
+          <div class="sidebar-section-title">{{ t('sidebar.conversations') }}</div>
+          <div v-if="recordsLoading" class="sidebar-hint">{{ t('common.loading') }}</div>
+          <div v-else-if="conversationRecords.length === 0" class="sidebar-hint">{{ t('sidebar.emptyConversations') }}</div>
+          <div
+            v-for="item in conversationRecords"
+            :key="item.record_id"
+            class="sidebar-item"
+            :class="{ active: isConversationRecordActive(item, activeConversationId) }"
           >
             <button
               type="button"
-              class="sidebar-item-delete"
-              :aria-label="t('sidebar.delete')"
-              @click.stop
+              class="sidebar-item-main"
+              :aria-current="isConversationRecordActive(item, activeConversationId) ? 'page' : undefined"
+              @click="openConversation(item.session_id)"
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <span class="sidebar-item-city">{{ item.title }}</span>
+              <span v-if="item.title_status === 'pending'" class="sidebar-item-date">
+                <span class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
+              </span>
             </button>
-          </a-popconfirm>
-        </div>
+            <a-popconfirm
+              :title="t('sidebar.deleteConfirm')"
+              :ok-text="t('common.ok')"
+              :cancel-text="t('common.cancel')"
+              placement="right"
+              @confirm="deleteRecord(item)"
+            >
+              <button
+                type="button"
+                class="sidebar-item-delete"
+                :aria-label="t('sidebar.delete')"
+                @click.stop
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </a-popconfirm>
+          </div>
+        </section>
+
+        <section class="sidebar-section" :aria-label="t('sidebar.plans')">
+          <div class="sidebar-section-title">{{ t('sidebar.plans') }}</div>
+          <div v-if="recordsLoading" class="sidebar-hint">{{ t('common.loading') }}</div>
+          <div v-else-if="plannedRecords.length === 0" class="sidebar-hint">{{ t('sidebar.empty') }}</div>
+          <div
+            v-for="item in plannedRecords"
+            :key="item.record_id"
+            class="sidebar-item"
+            :class="{ active: isPlanRecordActive(item, activePlanId) }"
+          >
+            <button
+              type="button"
+              class="sidebar-item-main"
+              :aria-current="isPlanRecordActive(item, activePlanId) ? 'page' : undefined"
+              @click="openPlan(item.plan_id)"
+            >
+              <span class="sidebar-item-city">{{ item.city || item.title }}</span>
+              <span class="sidebar-item-date">
+                {{ item.start_date }} ~ {{ item.end_date }}
+                <span v-if="item.status === 'processing'" class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
+                <span v-else-if="item.status === 'failed'" class="sidebar-item-badge failed">{{ t('sidebar.failed') }}</span>
+                <span v-else-if="isOngoing(item)" class="sidebar-item-badge ongoing">{{ t('sidebar.ongoing') }}</span>
+              </span>
+            </button>
+            <button
+              v-if="item.status === 'processing' && item.plan_id"
+              type="button"
+              class="sidebar-item-resume"
+              :disabled="resumingPlanId === item.plan_id"
+              :aria-busy="resumingPlanId === item.plan_id"
+              @click.stop="resumePlan(item.plan_id)"
+              @keydown.enter.stop
+            >
+              <LoadingOutlined v-if="resumingPlanId === item.plan_id" aria-hidden="true" />
+              <PlayCircleOutlined v-else aria-hidden="true" />
+              <span>{{ resumingPlanId === item.plan_id ? t('sidebar.resuming') : t('sidebar.resumeGeneration') }}</span>
+            </button>
+            <a-popconfirm
+              :title="t('sidebar.deleteConfirm')"
+              :ok-text="t('common.ok')"
+              :cancel-text="t('common.cancel')"
+              placement="right"
+              @confirm="deleteRecord(item)"
+            >
+              <button
+                type="button"
+                class="sidebar-item-delete"
+                :aria-label="t('sidebar.delete')"
+                @click.stop
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </a-popconfirm>
+          </div>
+        </section>
       </div>
 
       <div class="sidebar-tools">
@@ -171,8 +213,18 @@ import { LoadingOutlined, PlayCircleOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import { setAppLocale, type AppLocale } from '@/i18n'
 import { normalizeLocale } from '@/i18n/locale'
-import { plans, plansLoading, refreshPlans, PLANS_UPDATED_EVENT } from '@/stores/plans'
-import { deleteTripPlan, getStoredUser } from '@/services/api'
+import {
+  CONVERSATION_RECORDS_UPDATED_EVENT,
+  conversationRecords,
+  isConversationRecordActive,
+  isPlanRecordActive,
+  plannedRecords,
+  recordsLoading,
+  refreshRecords,
+  removeRecord,
+} from '@/stores/conversation-records'
+import { PLANS_UPDATED_EVENT } from '@/stores/plans'
+import { deleteConversation, deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
 import ActiveTripTaskButton from '@/components/ActiveTripTaskButton.vue'
 import SidebarShareCodeTool from '@/components/SidebarShareCodeTool.vue'
@@ -182,7 +234,7 @@ import { ACTIVE_TRIP_TASK_UPDATED_EVENT, readActiveTripTask } from '@/stores/act
 import { applySkin, skin } from '@/stores/skin'
 import { VISIBLE_LOCALE_OPTIONS, VISIBLE_SKIN_OPTIONS } from '@/stores/preference-options'
 import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
-import type { TripHistoryItem } from '@/types'
+import type { ConversationRecord } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 
 const { t, locale } = useI18n()
@@ -190,9 +242,12 @@ const router = useRouter()
 const route = useRoute()
 
 const activePlanId = computed(() => (route.name === 'PlanView' ? String(route.params.id || '') : ''))
+const activeConversationId = computed(() => (
+  route.name === 'ChatHome' ? String(route.query.conversation || '') : ''
+))
 
 // 行程期内(已完成且今日落在 start~end 之间)的计划,侧栏标注"进行中"
-const isOngoing = (item: TripHistoryItem): boolean => {
+const isOngoing = (item: ConversationRecord): boolean => {
   if (item.status !== 'completed' || !item.start_date || !item.end_date) return false
   const today = dayjs().format('YYYY-MM-DD')
   return item.start_date <= today && item.end_date >= today
@@ -244,14 +299,21 @@ const goNewPlan = () => {
   mobileMenuOpen.value = false
   clearPlanResultSession()
   window.dispatchEvent(new CustomEvent(NEW_PLAN_EVENT))
-  if (route.path !== '/') {
+  if (route.path !== '/' || activeConversationId.value) {
     const uid = getStoredUser()?.user_id || 'anonymous'
     localStorage.removeItem(`tripstar.chat_session.${uid}`)
     router.push('/')
   }
 }
 
-const openPlan = async (planId: string): Promise<void> => {
+const openConversation = async (sessionId: string | null): Promise<void> => {
+  if (!sessionId) return
+  mobileMenuOpen.value = false
+  clearPlanResultSession()
+  await router.push({ path: '/', query: { conversation: sessionId } })
+}
+
+const openPlan = async (planId: string | null): Promise<void> => {
   if (!planId) return
   mobileMenuOpen.value = false
   sessionStorage.removeItem('tripPlan')
@@ -281,43 +343,48 @@ const resumePlan = async (planId: string): Promise<void> => {
   }
 }
 
-const deletePlan = async (item: TripHistoryItem) => {
+const deleteRecord = async (item: ConversationRecord) => {
   try {
-    await deleteTripPlan(item.task_id)
+    if (item.session_id) await deleteConversation(item.session_id)
+    else if (item.task_id) await deleteTripPlan(item.task_id)
+    else return
+    removeRecord(item.record_id)
     message.success(t('sidebar.deleted'))
-    // 删除的正是当前打开的计划时回到首页,避免停留在一个已不存在的计划页
-    if (activePlanId.value === item.plan_id) {
-      sessionStorage.removeItem('tripPlan')
-      sessionStorage.removeItem('graphData')
-      sessionStorage.removeItem('planId')
-      router.push('/')
+    if (
+      isConversationRecordActive(item, activeConversationId.value)
+      || isPlanRecordActive(item, activePlanId.value)
+    ) {
+      clearPlanResultSession()
+      await router.push('/')
     }
-    refreshPlans()
+    void refreshRecords()
   } catch (error: any) {
     message.error(error?.message || t('sidebar.deleteFailed'))
   }
 }
 
-const onPlansUpdated = () => {
+const onRecordsUpdated = () => {
   syncActiveTripTask()
-  void refreshPlans()
+  void refreshRecords()
 }
 
 const onAuthUpdated = () => {
   syncActiveTripTask()
-  void refreshPlans()
+  void refreshRecords()
 }
 
 onMounted(() => {
   syncActiveTripTask()
-  void refreshPlans()
-  window.addEventListener(PLANS_UPDATED_EVENT, onPlansUpdated)
+  void refreshRecords()
+  window.addEventListener(CONVERSATION_RECORDS_UPDATED_EVENT, onRecordsUpdated)
+  window.addEventListener(PLANS_UPDATED_EVENT, onRecordsUpdated)
   window.addEventListener(AUTH_UPDATED_EVENT, onAuthUpdated)
   window.addEventListener(ACTIVE_TRIP_TASK_UPDATED_EVENT, syncActiveTripTask)
 })
 
 onUnmounted(() => {
-  window.removeEventListener(PLANS_UPDATED_EVENT, onPlansUpdated)
+  window.removeEventListener(CONVERSATION_RECORDS_UPDATED_EVENT, onRecordsUpdated)
+  window.removeEventListener(PLANS_UPDATED_EVENT, onRecordsUpdated)
   window.removeEventListener(AUTH_UPDATED_EVENT, onAuthUpdated)
   window.removeEventListener(ACTIVE_TRIP_TASK_UPDATED_EVENT, syncActiveTripTask)
 })

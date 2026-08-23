@@ -269,6 +269,47 @@ export interface TripHistoryItem {
   overall_suggestions?: string
 }
 
+export type ConversationRecordKind = 'conversation' | 'plan'
+export type ConversationTitleStatus = 'pending' | 'generated' | 'fallback'
+export type ConversationRecordState = 'chatting' | 'generating' | 'planned'
+
+export interface ConversationRecord {
+  record_id: string
+  kind: ConversationRecordKind
+  session_id: string | null
+  plan_id: string | null
+  task_id: string | null
+  title: string
+  title_status: ConversationTitleStatus
+  state: ConversationRecordState
+  revision: number
+  status: TripTaskStatus | null
+  user_id: string
+  city: string
+  cities: unknown[]
+  start_date: string
+  end_date: string
+  travel_days: number
+  updated_at: string
+  overall_suggestions: string
+  user_deleted_at: string | null
+}
+
+export interface ConversationSessionDetail extends ConversationRecord {
+  snapshot: Record<string, unknown>
+}
+
+export interface CreateConversationRequest {
+  session_id: string
+  first_message: string
+  snapshot: Record<string, unknown>
+}
+
+export interface UpdateConversationRequest {
+  revision: number
+  snapshot: Record<string, unknown>
+}
+
 /** 管理端:全部用户计划列表条目 */
 export interface AdminTripItem extends TripHistoryItem {
   user_id?: string

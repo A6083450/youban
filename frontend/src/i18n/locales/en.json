@@ -1,7 +1,9 @@
 {
   "sidebar": {
     "newPlan": "New plan",
+    "conversations": "Conversations",
     "plans": "Trip plans",
+    "emptyConversations": "No conversations yet",
     "empty": "No plans yet, start with one sentence",
     "processing": "Generating",
     "resumeGeneration": "Resume generation",
@@ -10,8 +12,8 @@
     "returnToGeneration": "Return to generation",
     "failed": "Failed",
     "ongoing": "On trip",
-    "delete": "Delete plan",
-    "deleteConfirm": "Delete this plan?",
+    "delete": "Delete record",
+    "deleteConfirm": "Delete this record? It will be removed from your list.",
     "deleted": "Deleted",
     "deleteFailed": "Delete failed"
   },

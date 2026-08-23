@@ -1,7 +1,9 @@
 {
   "sidebar": {
     "newPlan": "新建计划",
+    "conversations": "对话记录",
     "plans": "游玩计划",
+    "emptyConversations": "暂无对话记录",
     "empty": "还没有计划，说一句话开始吧",
     "processing": "生成中",
     "resumeGeneration": "恢复生成",
@@ -10,8 +12,8 @@
     "returnToGeneration": "返回生成对话",
     "failed": "失败",
     "ongoing": "进行中",
-    "delete": "删除计划",
-    "deleteConfirm": "确定删除这个计划吗？",
+    "delete": "删除记录",
+    "deleteConfirm": "确定删除这条记录吗？删除后将从你的列表中移除。",
     "deleted": "已删除",
     "deleteFailed": "删除失败"
   },

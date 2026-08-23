@@ -15,6 +15,9 @@ import type {
   BudgetItemInput,
   BudgetLedgerResponse,
   ChatMessage,
+  ConversationRecord,
+  ConversationSessionDetail,
+  CreateConversationRequest,
   CreateTripShareResponse,
   ExecutionEntry,
   ItemExecutionStatus,
@@ -33,6 +36,7 @@ import type {
   TripPlan,
   TripPlanResponse,
   TripTaskEvent,
+  UpdateConversationRequest,
   UserInfo,
   UserMemoryItem,
 } from '@/types'
@@ -119,6 +123,10 @@ interface RuntimeSettingsApiResponse {
 
 interface TripHistoryResponse {
   items?: TripHistoryItem[]
+}
+
+interface ConversationRecordListResponse {
+  items?: ConversationRecord[]
 }
 
 export const getRuntimeApiBaseUrl = (): string => {
@@ -623,6 +631,67 @@ export async function getTripHistory(limit = 8): Promise<TripHistoryItem[]> {
   } catch (error: any) {
     console.error('查询历史计划失败:', error)
     throw new Error(error.response?.data?.detail || error.message || t('api.queryTaskStatusFailed'))
+  }
+}
+
+export async function getConversationRecords(limit = 50): Promise<ConversationRecord[]> {
+  try {
+    const response = await apiClient.get<ConversationRecordListResponse>('/api/conversations', {
+      params: { limit },
+    })
+    return Array.isArray(response.data?.items) ? response.data.items : []
+  } catch (error: any) {
+    console.error('读取对话记录失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '读取对话记录失败')
+  }
+}
+
+export async function createConversation(
+  input: CreateConversationRequest,
+): Promise<ConversationRecord> {
+  try {
+    const response = await apiClient.post<ConversationRecord>('/api/conversations', input)
+    return response.data
+  } catch (error: any) {
+    console.error('创建对话记录失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '创建对话记录失败')
+  }
+}
+
+export async function getConversationSession(sessionId: string): Promise<ConversationSessionDetail> {
+  try {
+    const response = await apiClient.get<ConversationSessionDetail>(
+      `/api/conversations/${encodeURIComponent(sessionId)}`,
+    )
+    return response.data
+  } catch (error: any) {
+    console.error('读取对话记录详情失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '读取对话记录详情失败')
+  }
+}
+
+export async function updateConversationSession(
+  sessionId: string,
+  input: UpdateConversationRequest,
+): Promise<ConversationSessionDetail> {
+  try {
+    const response = await apiClient.put<ConversationSessionDetail>(
+      `/api/conversations/${encodeURIComponent(sessionId)}`,
+      input,
+    )
+    return response.data
+  } catch (error: any) {
+    console.error('更新对话记录失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '更新对话记录失败')
+  }
+}
+
+export async function deleteConversation(sessionId: string): Promise<void> {
+  try {
+    await apiClient.delete(`/api/conversations/${encodeURIComponent(sessionId)}`)
+  } catch (error: any) {
+    console.error('删除对话记录失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '删除对话记录失败')
   }
 }
 
