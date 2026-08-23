@@ -317,6 +317,10 @@ export interface AdminTripItem extends TripHistoryItem {
   nickname?: string
 }
 
+export interface AdminConversationRecord extends ConversationRecord {
+  nickname: string
+}
+
 export type AdminSkillAgentId =
   | 'parent-assistant'
   | 'destination-researcher'

@@ -4,26 +4,32 @@
       <h1 id="admin-trips-title" class="admin-panel-title">{{ t('admin.trips.title') }}</h1>
       <div class="admin-trips-toolbar">
         <a-input
-          v-model:value="tripsSearch"
+          v-model:value="recordsSearch"
           class="admin-trips-search"
           :placeholder="t('admin.trips.searchPlaceholder')"
           allow-clear
         >
           <template #prefix><SearchOutlined aria-hidden="true" /></template>
         </a-input>
-        <a-select v-model:value="tripsStatusFilter" class="admin-trips-status-filter" size="middle">
+        <a-segmented
+          v-model:value="visibilityFilter"
+          class="admin-record-visibility-filter"
+          :options="visibilityOptions"
+          :aria-label="t('admin.trips.visibilityLabel')"
+        />
+        <a-select v-model:value="recordsStatusFilter" class="admin-trips-status-filter" size="middle">
           <a-select-option value="all">{{ t('admin.trips.statusAll') }}</a-select-option>
           <a-select-option value="completed">{{ t('admin.trips.statusDone') }}</a-select-option>
           <a-select-option value="processing">{{ t('admin.trips.statusProcessing') }}</a-select-option>
           <a-select-option value="failed">{{ t('admin.trips.statusFailed') }}</a-select-option>
         </a-select>
-        <a-button :loading="tripsLoading" @click="loadTrips">
+        <a-button :loading="recordsLoading" @click="loadRecords">
           {{ t('admin.trips.refresh') }}
         </a-button>
       </div>
     </div>
 
-    <a-spin :spinning="tripsLoading" :tip="t('admin.loading')">
+    <a-spin :spinning="recordsLoading" :tip="t('admin.loading')">
       <div class="trips-layout">
         <aside class="trips-users" :aria-label="t('admin.trips.userFilterLabel')">
           <button
@@ -35,7 +41,7 @@
           >
             <span class="trips-user-avatar all" aria-hidden="true">✦</span>
             <span class="trips-user-label">{{ t('admin.trips.allUsers') }}</span>
-            <span class="trips-user-count">{{ trips.length }}</span>
+            <span class="trips-user-count">{{ records.length }}</span>
           </button>
           <button
             v-for="group in userGroups"
@@ -59,22 +65,25 @@
         </aside>
 
         <div class="trips-list">
-          <template v-if="filteredTrips.length">
+          <template v-if="filteredRecords.length">
             <div
-              v-for="item in filteredTrips"
-              :key="item.task_id"
+              v-for="item in filteredRecords"
+              :key="item.record_id"
               class="trip-card"
-              role="button"
-              tabindex="0"
-              @click="openDetail(item)"
-              @keydown.enter.self="openDetail(item)"
-              @keydown.space.self.prevent="openDetail(item)"
             >
               <div class="trip-card-main">
                 <div class="trip-card-info">
-                  <div class="trip-card-city">{{ item.city }}</div>
+                  <div class="trip-card-heading">
+                    <span class="trip-card-city">{{ recordTitle(item) }}</span>
+                    <span class="record-kind-badge">{{ t(adminRecordKindKey(item)) }}</span>
+                    <span v-if="item.user_deleted_at" class="record-deleted-badge">
+                      {{ t('admin.trips.userDeletedBadge') }}
+                    </span>
+                  </div>
                   <div class="trip-card-meta">
-                    <span>{{ formatTripDates(item) }} · {{ t('common.dayCount', { count: item.travel_days }) }}</span>
+                    <span v-if="item.kind === 'plan'">
+                      {{ formatTripDates(item) }} · {{ t('common.dayCount', { count: item.travel_days }) }}
+                    </span>
                     <span class="trip-card-owner">
                       <span
                         class="trip-card-owner-avatar"
@@ -88,31 +97,37 @@
                   </div>
                 </div>
                 <div class="trip-card-side">
-                  <span class="trip-status" :class="item.status || 'processing'">{{ statusText(item.status) }}</span>
+                  <span class="trip-status" :class="recordStatusClass(item)">{{ statusText(item) }}</span>
                   <span class="trip-updated">{{ formatUpdated(item.updated_at) }}</span>
                 </div>
               </div>
               <div class="trip-card-actions" @click.stop>
-                <button type="button" class="trip-action-btn view" @click="openDetail(item)">
+                <button
+                  v-if="item.kind === 'plan'"
+                  type="button"
+                  class="trip-action-btn view"
+                  @click="openDetail(item)"
+                >
                   <ExportOutlined aria-hidden="true" />
                   {{ t('admin.trips.viewDetail') }}
                 </button>
                 <a-popconfirm
-                  :title="t('admin.trips.deleteConfirm')"
+                  :title="t('admin.trips.permanentDeleteConfirm')"
                   :ok-text="t('common.ok')"
                   :cancel-text="t('common.cancel')"
                   ok-type="danger"
                   placement="topRight"
-                  @confirm="removeTrip(item)"
+                  @confirm="removeRecord(item)"
                 >
                   <button
                     type="button"
                     class="trip-action-btn delete"
-                    :disabled="item.status === 'processing' || deletingId === item.task_id"
+                    :disabled="!isAdminRecordPermanentlyDeletable(item) || deletingId === item.record_id"
+                    :title="!isAdminRecordPermanentlyDeletable(item) ? t('admin.trips.processingDeleteDisabled') : undefined"
                     @click.stop
                   >
                     <DeleteOutlined aria-hidden="true" />
-                    {{ t('admin.trips.delete') }}
+                    {{ t('admin.trips.permanentDelete') }}
                   </button>
                 </a-popconfirm>
               </div>
@@ -131,8 +146,19 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { DeleteOutlined, ExportOutlined, SearchOutlined } from '@ant-design/icons-vue'
-import { adminDeleteTrip, adminGetAllTrips, isAdminAuthError } from '@/services/api'
-import type { AdminTripItem } from '@/types'
+import {
+  adminGetConversationRecords,
+  adminPermanentlyDeleteRecord,
+  isAdminAuthError,
+} from '@/services/api'
+import {
+  adminRecordKindKey,
+  filterAdminRecords,
+  isAdminRecordPermanentlyDeletable,
+  type AdminRecordStatusFilter,
+  type AdminRecordVisibility,
+} from '@/admin/conversation-records'
+import type { AdminConversationRecord } from '@/types'
 
 const props = defineProps<{
   onUnauthorized: () => void
@@ -140,14 +166,21 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const router = useRouter()
-const trips = ref<AdminTripItem[]>([])
-const tripsLoading = ref(false)
-const tripsSearch = ref('')
-const tripsStatusFilter = ref<'all' | 'completed' | 'processing' | 'failed'>('all')
+const records = ref<AdminConversationRecord[]>([])
+const recordsLoading = ref(false)
+const recordsSearch = ref('')
+const visibilityFilter = ref<AdminRecordVisibility>('all')
+const recordsStatusFilter = ref<AdminRecordStatusFilter>('all')
 const selectedUserKey = ref<string>('all')
 const deletingId = ref('')
 
-const openDetail = (item: AdminTripItem) => {
+const visibilityOptions = computed(() => [
+  { value: 'all', label: t('admin.trips.visibilityAll') },
+  { value: 'active', label: t('admin.trips.visibilityActive') },
+  { value: 'user_deleted', label: t('admin.trips.visibilityUserDeleted') },
+])
+
+const openDetail = (item: AdminConversationRecord) => {
   const planId = item.plan_id || item.task_id
   if (!planId) return
   sessionStorage.removeItem('tripPlan')
@@ -156,15 +189,15 @@ const openDetail = (item: AdminTripItem) => {
   router.push(`/plan/${planId}`)
 }
 
-const removeTrip = async (item: AdminTripItem) => {
+const removeRecord = async (item: AdminConversationRecord) => {
   if (deletingId.value) return
-  deletingId.value = item.task_id
+  deletingId.value = item.record_id
   try {
-    await adminDeleteTrip(item.task_id)
-    trips.value = trips.value.filter((trip) => trip.task_id !== item.task_id)
+    await adminPermanentlyDeleteRecord(item.record_id)
+    records.value = records.value.filter((record) => record.record_id !== item.record_id)
     if (
       selectedUserKey.value !== 'all' &&
-      !trips.value.some((trip) => (trip.user_id || 'anonymous') === selectedUserKey.value)
+      !records.value.some((record) => (record.user_id || 'anonymous') === selectedUserKey.value)
     ) {
       selectedUserKey.value = 'all'
     }
@@ -180,15 +213,32 @@ const removeTrip = async (item: AdminTripItem) => {
   }
 }
 
-const statusText = (status?: string) => {
-  if (status === 'completed') return t('admin.trips.statusDone')
-  if (status === 'failed') return t('admin.trips.statusFailed')
-  return t('admin.trips.statusProcessing')
+const statusText = (record: AdminConversationRecord) => {
+  if (record.state === 'generating' || record.status === 'processing') {
+    return t('admin.trips.statusProcessing')
+  }
+  if (record.status === 'completed') return t('admin.trips.statusDone')
+  if (record.status === 'failed') return t('admin.trips.statusFailed')
+  return t('admin.trips.statusChatting')
 }
 
-const formatTripDates = (record: AdminTripItem) => {
+const recordStatusClass = (record: AdminConversationRecord) => {
+  if (record.state === 'generating' || record.status === 'processing') return 'processing'
+  if (record.status === 'completed') return 'completed'
+  if (record.status === 'failed') return 'failed'
+  return 'chatting'
+}
+
+const recordTitle = (record: AdminConversationRecord) => {
+  if (record.title) return record.title
+  if (record.city) return record.city
+  return record.kind === 'plan' ? t('admin.trips.untitledPlan') : t('admin.trips.untitledConversation')
+}
+
+const formatTripDates = (record: AdminConversationRecord) => {
   const start = record.start_date || ''
   const end = record.end_date || ''
+  if (!start && !end) return t('admin.trips.datePending')
   if (start.slice(0, 4) === end.slice(0, 4) && end.length >= 10) {
     return `${start} ~ ${end.slice(5)}`
   }
@@ -206,7 +256,7 @@ interface TripUserGroup {
 
 const userGroups = computed<TripUserGroup[]>(() => {
   const groups = new Map<string, TripUserGroup>()
-  for (const item of trips.value) {
+  for (const item of records.value) {
     const key = item.user_id || 'anonymous'
     const existing = groups.get(key)
     if (existing) {
@@ -229,29 +279,21 @@ const userGroups = computed<TripUserGroup[]>(() => {
   })
 })
 
-const filteredTrips = computed(() => {
-  const keyword = tripsSearch.value.trim().toLowerCase()
-  return trips.value.filter((item) => {
-    if (selectedUserKey.value !== 'all' && (item.user_id || 'anonymous') !== selectedUserKey.value) {
-      return false
-    }
-    if (tripsStatusFilter.value !== 'all' && (item.status || 'processing') !== tripsStatusFilter.value) {
-      return false
-    }
-    if (!keyword) return true
-    const nickname = (item.nickname || t('admin.trips.anonymous')).toLowerCase()
-    const city = (item.city || '').toLowerCase()
-    return nickname.includes(keyword) || city.includes(keyword)
-  })
-})
+const filteredRecords = computed(() => filterAdminRecords(records.value, {
+  visibility: visibilityFilter.value,
+  status: recordsStatusFilter.value,
+  query: recordsSearch.value,
+  userKey: selectedUserKey.value,
+  anonymousLabel: t('admin.trips.anonymous'),
+}))
 
-const loadTrips = async () => {
-  tripsLoading.value = true
+const loadRecords = async () => {
+  recordsLoading.value = true
   try {
-    trips.value = await adminGetAllTrips()
+    records.value = await adminGetConversationRecords('all')
     if (
       selectedUserKey.value !== 'all' &&
-      !trips.value.some((item) => (item.user_id || 'anonymous') === selectedUserKey.value)
+      !records.value.some((item) => (item.user_id || 'anonymous') === selectedUserKey.value)
     ) {
       selectedUserKey.value = 'all'
     }
@@ -262,12 +304,12 @@ const loadTrips = async () => {
     }
     message.error(error?.message || t('admin.trips.loadFailed'))
   } finally {
-    tripsLoading.value = false
+    recordsLoading.value = false
   }
 }
 
 onMounted(() => {
-  void loadTrips()
+  void loadRecords()
 })
 </script>
 
@@ -302,6 +344,16 @@ onMounted(() => {
 
 .admin-trips-search {
   width: 240px;
+}
+
+.admin-record-visibility-filter {
+  flex: 0 0 auto;
+}
+
+.admin-record-visibility-filter :deep(.ant-segmented-item-label) {
+  min-height: 30px;
+  padding-inline: 11px;
+  line-height: 30px;
 }
 
 .admin-trips-status-filter {
@@ -446,11 +498,43 @@ onMounted(() => {
   min-width: 0;
 }
 
+.trip-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .trip-card-city {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: #3d3229;
   font-size: 16px;
   font-weight: 700;
   line-height: 1.45;
+}
+
+.record-kind-badge,
+.record-deleted-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.record-kind-badge {
+  background: rgba(61, 50, 41, 0.07);
+  color: #6e655d;
+}
+
+.record-deleted-badge {
+  background: rgba(196, 74, 54, 0.1);
+  color: #a53928;
 }
 
 .trip-card-meta {
@@ -506,6 +590,11 @@ onMounted(() => {
 .trip-status.failed {
   background: rgba(196, 74, 54, 0.1);
   color: #a53928;
+}
+
+.trip-status.chatting {
+  background: rgba(77, 117, 154, 0.11);
+  color: #3f688f;
 }
 
 .trip-updated {
@@ -614,6 +703,21 @@ onMounted(() => {
   .admin-trips-search {
     width: 100%;
     grid-column: 1 / -1;
+  }
+
+  .admin-record-visibility-filter {
+    min-width: 0;
+    grid-column: 1 / -1;
+  }
+
+  .admin-record-visibility-filter :deep(.ant-segmented-group) {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-record-visibility-filter :deep(.ant-segmented-item-label) {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .admin-trips-status-filter {

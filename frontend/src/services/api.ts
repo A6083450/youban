@@ -10,6 +10,7 @@ import type {
   AdminSkillListFilters,
   AdminSkillListResponse,
   AdminSkillMutationResponse,
+  AdminConversationRecord,
   AdminTripItem,
   BackendRuntimeSettings,
   BudgetItemInput,
@@ -40,6 +41,7 @@ import type {
   UserInfo,
   UserMemoryItem,
 } from '@/types'
+import { adminRecordDeletePath, type AdminRecordVisibility } from '@/admin/conversation-records'
 import { i18n } from '@/i18n'
 import { completeTripPlanResponse } from '@/utils/planConversation.js'
 
@@ -403,6 +405,33 @@ export async function adminDeleteTrip(taskId: string): Promise<void> {
   } catch (error: any) {
     console.error('后台删除计划失败:', error)
     throw toAdminError(error, '删除计划失败')
+  }
+}
+
+export async function adminGetConversationRecords(
+  visibility: AdminRecordVisibility = 'all',
+  limit = 500,
+): Promise<AdminConversationRecord[]> {
+  try {
+    const response = await apiClient.get<{ success: boolean; items: AdminConversationRecord[] }>(
+      '/api/admin/records',
+      { headers: adminAuthHeaders(), params: { visibility, limit } },
+    )
+    return response.data.items ?? []
+  } catch (error: any) {
+    console.error('读取后台对话记录失败:', error)
+    throw toAdminError(error, '读取记录列表失败')
+  }
+}
+
+export async function adminPermanentlyDeleteRecord(recordId: string): Promise<void> {
+  try {
+    await apiClient.delete(adminRecordDeletePath(recordId), {
+      headers: adminAuthHeaders(),
+    })
+  } catch (error: any) {
+    console.error('后台永久删除记录失败:', error)
+    throw toAdminError(error, '永久删除记录失败')
   }
 }
 
