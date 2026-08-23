@@ -1,6 +1,7 @@
 {
   "sidebar": {
     "newPlan": "New plan",
+    "newConversation": "New conversation",
     "conversations": "Conversations",
     "plans": "Trip plans",
     "emptyConversations": "No conversations yet",

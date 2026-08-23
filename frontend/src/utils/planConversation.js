@@ -6,6 +6,12 @@ export function attachConversationSession(request, sessionId) {
   return { ...request, session_id: normalized }
 }
 
+export async function beginGenerationRetry(taskId, restartAll, dependencies) {
+  const task = await dependencies.retry(taskId, restartAll)
+  dependencies.notifyRecordsUpdated()
+  return task
+}
+
 export function buildArchivedConversation(items) {
   return items
     .filter((item) => (item?.type === 'text' || item?.type === 'draft')

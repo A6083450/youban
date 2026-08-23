@@ -7,6 +7,15 @@ export function attachConversationSession<T extends object>(
   sessionId?: string | null,
 ): T | (T & { session_id: string })
 
+export function beginGenerationRetry<T>(
+  taskId: string,
+  restartAll: boolean,
+  dependencies: {
+    retry: (taskId: string, restartAll: boolean) => Promise<T>
+    notifyRecordsUpdated: () => void
+  },
+): Promise<T>
+
 export function buildArchivedConversation(
   items: Array<{ role?: string; type?: string; text?: unknown }>
 ): ChatMessage[]

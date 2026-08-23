@@ -2,6 +2,7 @@ export const ACTIVE_TRIP_TASK_UPDATED_EVENT = 'youban:active-trip-task-updated'
 
 export interface ActiveTripTaskRecord {
   readonly taskId: string
+  readonly sessionId?: string
   readonly city: string
   readonly days: number
   readonly userText: string
@@ -21,7 +22,8 @@ const isActiveTripTaskRecord = (value: unknown): value is ActiveTripTaskRecord =
   if (!('days' in value) || typeof value.days !== 'number') return false
   if (!('userText' in value) || typeof value.userText !== 'string') return false
 
-  return (!('startDate' in value) || isOptionalString(value.startDate))
+  return (!('sessionId' in value) || isOptionalString(value.sessionId))
+    && (!('startDate' in value) || isOptionalString(value.startDate))
     && (!('endDate' in value) || isOptionalString(value.endDate))
 }
 

@@ -2,10 +2,27 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   attachConversationSession,
+  beginGenerationRetry,
   buildArchivedConversation,
   canUseCachedPlan,
   completeTripPlanResponse,
 } from './planConversation.js'
+
+test('refreshes conversation records immediately after a retry starts generating', async () => {
+  const events = []
+
+  const task = await beginGenerationRetry('task-1', true, {
+    retry: async (taskId, restartAll) => {
+      events.push(`retry:${taskId}:${restartAll}`)
+      return { task_id: taskId, ws_url: '/api/trip/ws/task-1' }
+    },
+    notifyRecordsUpdated: () => { events.push('records') },
+  })
+  events.push('watch')
+
+  assert.equal(task.task_id, 'task-1')
+  assert.deepEqual(events, ['retry:task-1:true', 'records', 'watch'])
+})
 
 test('adds the durable conversation id to a confirmed plan request', () => {
   const request = attachConversationSession({ city: '新疆', execution_token: 'signed' }, 'session-1')

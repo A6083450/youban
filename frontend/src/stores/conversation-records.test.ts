@@ -87,11 +87,12 @@ describe('conversation records store', () => {
   test('inserts a pending conversation immediately and replaces its generated title', () => {
     createOptimisticConversationRecord({
       sessionId: 'session-1',
-      firstMessage: '帮我安排北京三日游',
+      title: '新对话',
       userId: 'user-1',
     })
 
     expect(conversationRecords.value).toHaveLength(1)
+    expect(conversationRecords.value[0]?.title).toBe('新对话')
     expect(conversationRecords.value[0]?.title_status).toBe('pending')
 
     upsertRecord(record({ title: '北京三日游', title_status: 'generated' }))
@@ -187,6 +188,23 @@ describe('conversation records store', () => {
     })
 
     expect(getConversationSession).toHaveBeenCalledTimes(2)
+  })
+
+  test('keeps the localized optimistic title while the generated title is pending', async () => {
+    createOptimisticConversationRecord({
+      sessionId: 'session-1',
+      title: 'New conversation',
+      userId: 'user-1',
+    })
+
+    await waitForConversationTitle('session-1', {
+      getConversationSession: async () => record({ title: '新对话', title_status: 'pending' }),
+      getUserId: () => 'user-1',
+      pause: async () => undefined,
+      maxAttempts: 1,
+    })
+
+    expect(records.value[0]?.title).toBe('New conversation')
   })
 
   test('derives generating badge and session resume visibility from record lifecycle state', () => {

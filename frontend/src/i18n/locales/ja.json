@@ -1,6 +1,7 @@
 {
   "sidebar": {
     "newPlan": "新規プラン",
+    "newConversation": "新しい会話",
     "plans": "旅行プラン",
     "empty": "まだプランがありません",
     "processing": "生成中",

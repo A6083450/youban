@@ -171,7 +171,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { Bubble, BubbleList, Prompts, Welcome } from 'vue-element-plus-x'
@@ -194,7 +194,7 @@ import {
 } from '@/services/api'
 import { getCurrentLocale } from '@/i18n'
 import { notifyPlansUpdated, plans, refreshPlans } from '@/stores/plans'
-import { currentUser } from '@/stores/auth'
+import { currentUser, registerBeforeAuthTransition } from '@/stores/auth'
 import { clearActiveTripTask, readActiveTripTask, saveActiveTripTask } from '@/stores/activeTripTask'
 import {
   createOptimisticConversationRecord,
@@ -208,20 +208,36 @@ import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { formatChatDraft, migrateLegacyDraftItems, shouldShowDraftActions } from '@/utils/chatDraft.js'
 import {
   acceptConversationRevision,
+  activeTaskFromConversation,
+  captureConversationOperation,
+  captureConversationPersistence,
+  ConversationPersistenceQueue,
+  conversationPersistenceStorageKey,
+  conversationPersistenceStoragePrefix,
+  conversationSelectionAction,
   createConversationIdentity,
   firstUserMessage,
+  isConversationOperationCurrent,
   isCurrentConversationSelection,
   isLegacyImportEligible,
+  legacyImportFollowUp,
   legacyImportMarkerKey,
+  mergeRestoredActiveTask,
   normalizeServerSnapshot,
+  pendingSubmissionItemId,
+  parseConversationPersistenceEnvelope,
+  persistConversationFallback,
   queryConversationId,
   reserveConversationId,
   resetConversationIdentity,
   toServerSnapshot,
   type ChatSessionSnapshot,
+  type ConversationOperationContext,
+  type ConversationPersistenceCapture,
+  type PendingConversationSubmission,
   type SnapshotItem,
 } from '@/utils/conversationSession'
-import { attachConversationSession, buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
+import { attachConversationSession, beginGenerationRetry, buildArchivedConversation, NEW_PLAN_EVENT } from '@/utils/planConversation.js'
 import type { PlanGenerationOutcome } from '@/utils/confirmationOrchestration.js'
 import type { ChatMessage, ConversationSessionDetail, ParsedTripDraft, TripCheckpointSummary, TripConfirmReplyResponse, TripHistoryItem, TripParseApiResponse, TripPlanResponse, TripTaskDetail, TripTaskEvent, TripTaskStage } from '@/types'
 
@@ -290,8 +306,19 @@ let operationToken = 0
 let isAlive = true
 
 const userId = () => currentUser.value?.user_id || 'anonymous'
-const ownsOperation = (token: number, ownerId: string) =>
-  isAlive && token === operationToken && ownerId === userId()
+const beginOperation = (): ConversationOperationContext => captureConversationOperation({
+  token: ++operationToken,
+  ownerId: userId(),
+  sessionId: conversationIdentity.sessionId,
+})
+const ownsOperation = (context: ConversationOperationContext): boolean =>
+  isConversationOperationCurrent(context, {
+    token: operationToken,
+    ownerId: userId(),
+    sessionId: conversationIdentity.sessionId,
+    alive: isAlive,
+  })
+const invalidateOperations = (): void => { operationToken += 1 }
 // 当前行程草稿的对话锚点:不完整时指向追问消息,完整时指向带操作按钮的草稿消息
 const pendingConfirmId = ref<number | null>(null)
 const pendingDraft = ref<ParsedTripDraft | null>(null)
@@ -303,6 +330,7 @@ const conversationIdentity = reactive(createConversationIdentity())
 let conversationFirstMessage = ''
 let restoreRequestToken = 0
 let routeRestoreReady = false
+let pendingSubmission: PendingConversationSubmission | null = null
 
 // 首页示例建议:从 i18n 候选池里随机抽取一批展示,点"换一批"轮换,避免每次进入都是同一组。
 // 待 mem0 记忆架构落地后,改为按用户历史偏好个性化推荐,新用户仍回退到此热门列表。
@@ -404,6 +432,10 @@ const stageText = (stage: TripTaskStage) => {
 // ─── 对话会话持久化:本地兼容缓存 + 服务端 revision 快照 ───
 const chatSessionStorageKey = (ownerId = userId()): string => `tripstar.chat_session.${ownerId}`
 
+const removeLegacyChatSnapshot = (ownerId: string): void => {
+  try { localStorage.removeItem(chatSessionStorageKey(ownerId)) } catch { /* ignore */ }
+}
+
 const buildChatSnapshot = (): ChatSessionSnapshot => toServerSnapshot(
   items.value as SnapshotItem[],
   {
@@ -415,22 +447,38 @@ const buildChatSnapshot = (): ChatSessionSnapshot => toServerSnapshot(
   },
 )
 
-const persistLocalChatSession = () => {
+const readPersistedConversationCaptures = (ownerId: string): ConversationPersistenceCapture[] => {
   try {
-    const snapshot = buildChatSnapshot()
-    // 没有任何有效对话时清掉,避免残留空会话
-    if (snapshot.items.length === 0 && !snapshot.pendingUserText) {
-      localStorage.removeItem(chatSessionStorageKey())
-      return
+    const prefix = conversationPersistenceStoragePrefix(ownerId)
+    const captures: ConversationPersistenceCapture[] = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const raw = localStorage.getItem(key)
+      const capture = raw ? parseConversationPersistenceEnvelope(raw, ownerId) : null
+      if (capture) captures.push(capture)
     }
-    localStorage.setItem(chatSessionStorageKey(), JSON.stringify(snapshot))
+    return captures
+  } catch {
+    return []
+  }
+}
+
+const removePersistedConversationCapture = (capture: ConversationPersistenceCapture): void => {
+  if (!capture.sessionId) return
+  try {
+    localStorage.removeItem(conversationPersistenceStorageKey(capture.ownerId, capture.sessionId))
+  } catch { /* ignore */ }
+}
+
+const persistLocalChatSession = (capture = captureCurrentPersistence()) => {
+  try {
+    // 旧键只保存尚无服务端身份的草稿;任何 durable 写入都会再次退役它。
+    persistConversationFallback(localStorage, chatSessionStorageKey(capture.ownerId), capture)
   } catch { /* 存储不可用时静默降级 */ }
 }
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null
 let suppressChatPersistence = false
-let serverWriteInFlight = false
-let serverWritePending = false
 
 const applyChatSnapshot = (snapshot: ChatSessionSnapshot) => {
   suppressChatPersistence = true
@@ -457,61 +505,79 @@ const applyConversationDetail = (detail: ConversationSessionDetail): ChatSession
   return snapshot
 }
 
-const flushServerChatSession = async (): Promise<void> => {
-  const sessionId = conversationIdentity.sessionId
-  if (!sessionId || suppressChatPersistence) return
-  if (serverWriteInFlight) {
-    serverWritePending = true
-    return
-  }
-  serverWriteInFlight = true
-  const revision = conversationIdentity.revision
-  const snapshot = buildChatSnapshot()
+const writeConversationPersistence = async (
+  capture: ReturnType<typeof captureConversationPersistence>,
+) => {
+  persistLocalChatSession(capture)
+  const { ownerId, sessionId, snapshot } = capture
+  if (!sessionId) return
   try {
-    const updated = await updateConversationSession(sessionId, { revision, snapshot })
-    if (conversationIdentity.sessionId === sessionId) {
+    const updated = await updateConversationSession(
+      sessionId,
+      { revision: capture.revision, snapshot },
+      ownerId,
+    )
+    if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
       acceptConversationRevision(conversationIdentity, sessionId, updated.revision)
       upsertRecord(updated)
     }
+    removePersistedConversationCapture(capture)
+    return { revision: updated.revision }
   } catch (error: unknown) {
-    if (error instanceof ConversationSessionRevisionConflictError
-      && conversationIdentity.sessionId === sessionId) {
+    if (error instanceof ConversationSessionRevisionConflictError) {
       try {
-        const current = await getConversationSession(sessionId)
-        if (conversationIdentity.sessionId === sessionId) applyConversationDetail(current)
-      } catch { /* 记录已删除或暂时不可用时保留当前本地内容 */ }
+        const current = await getConversationSession(sessionId, ownerId)
+        if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
+          applyConversationDetail(current)
+        }
+        removePersistedConversationCapture(capture)
+        return { revision: current.revision, discardPendingForSession: true }
+      } catch {
+        return { retryPending: true }
+      }
     }
-  } finally {
-    serverWriteInFlight = false
-    if (serverWritePending) {
-      serverWritePending = false
-      void flushServerChatSession()
-    }
+    return { retryPending: true }
   }
+}
+
+const persistenceQueue = new ConversationPersistenceQueue(writeConversationPersistence)
+for (const capture of readPersistedConversationCaptures(userId())) {
+  persistenceQueue.schedule(capture)
+}
+
+function captureCurrentPersistence() {
+  return captureConversationPersistence({
+    ownerId: userId(),
+    sessionId: conversationIdentity.sessionId,
+    revision: conversationIdentity.revision,
+    snapshot: buildChatSnapshot(),
+  })
 }
 
 const persistSoon = () => {
   if (suppressChatPersistence) return
-  if (persistTimer) clearTimeout(persistTimer)
-  persistTimer = setTimeout(() => {
-    persistTimer = null
-    if (!suppressChatPersistence) {
-      persistLocalChatSession()
-      void flushServerChatSession()
-    }
-  }, 200)
+  persistenceQueue.schedule(captureCurrentPersistence())
 }
 
-const clearChatSession = () => {
+const flushCurrentPersistence = async (): Promise<boolean> => {
+  if (!suppressChatPersistence) persistenceQueue.schedule(captureCurrentPersistence())
+  return persistenceQueue.flush()
+}
+
+const unregisterBeforeAuthTransition = registerBeforeAuthTransition(flushCurrentPersistence)
+
+const clearChatSession = (options: { preserveLocal?: boolean } = {}) => {
   suppressChatPersistence = true
   restoreRequestToken += 1
-  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
-  try { localStorage.removeItem(chatSessionStorageKey()) } catch { /* ignore */ }
+  if (!options.preserveLocal) {
+    removeLegacyChatSnapshot(userId())
+  }
   if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
     removeRecord(conversationIdentity.pendingSessionId)
   }
   resetConversationIdentity(conversationIdentity)
   conversationFirstMessage = ''
+  pendingSubmission = null
 }
 
 const readChatSession = (): ChatSessionSnapshot | null => {
@@ -574,18 +640,17 @@ const openPlan = (planId: string) => {
   router.push(`/plan/${planId}`)
 }
 
-const focusFailedCard = (taskId: string, token: number, ownerId: string) => nextTick(() => {
-  if (!ownsOperation(token, ownerId)) return
+const focusFailedCard = (taskId: string, context: ConversationOperationContext) => nextTick(() => {
+  if (!ownsOperation(context)) return
   document.getElementById(`trip-failure-${taskId}`)?.querySelector<HTMLButtonElement>('button')?.focus()
 })
 
-const handlePlanResponse = (
+const handlePlanResponse = async (
   response: TripPlanResponse,
   progressId: number,
-  token: number,
-  ownerId: string,
-): boolean => {
-  if (!ownsOperation(token, ownerId)) return false
+  context: ConversationOperationContext,
+): Promise<boolean> => {
+  if (!ownsOperation(context)) return false
   const planId = String(response.plan_id || '').trim()
   if (response.success && response.data && planId) {
     sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
@@ -599,7 +664,11 @@ const handlePlanResponse = (
       city: response.data.city,
       days: response.data.days.length,
     })
-    clearChatSession()
+    const persisted = await flushCurrentPersistence()
+    if (!ownsOperation(context)) return false
+    generating.value = false
+    busy.value = false
+    clearChatSession({ preserveLocal: !persisted })
     notifyRecordsUpdated()
     void router.push(`/plan/${planId}`)
     return true
@@ -619,9 +688,13 @@ const clearPlanResultSession = () => {
   sessionStorage.removeItem('planId')
 }
 
-const resetConversation = () => {
-  if (busy.value || generating.value) return
-  clearChatSession()
+const resetConversation = async () => {
+  invalidateOperations()
+  restoreRequestToken += 1
+  generating.value = false
+  busy.value = false
+  const persisted = await flushCurrentPersistence()
+  clearChatSession({ preserveLocal: !persisted })
   items.value = []
   pendingConfirmId.value = null
   pendingDraft.value = null
@@ -641,8 +714,9 @@ const resumeActiveTask = async (expectedTaskId = '') => {
   const record = readActiveTripTask(ownerId)
   if (!record) return
   if (expectedTaskId && record.taskId !== expectedTaskId) return
+  if (record.sessionId && record.sessionId !== conversationIdentity.sessionId) return
 
-  const token = ++operationToken
+  const context = beginOperation()
   const restoredFailure = items.value.find(
     (item): item is Extract<ChatItem, { type: 'failed' }> =>
       item.type === 'failed' && item.taskId === record.taskId,
@@ -672,17 +746,17 @@ const resumeActiveTask = async (expectedTaskId = '') => {
   try {
     const response = await watchTripTask(record.taskId, {
       onTaskEvent: (event) => {
-        if (!ownsOperation(token, ownerId)) return
+        if (!ownsOperation(context)) return
         lastTaskEvent = event
         applyTaskEvent(status, event)
       },
     })
-    if (handlePlanResponse(response, progressId, token, ownerId)) {
+    if (await handlePlanResponse(response, progressId, context)) {
       clearActiveTripTask(record.taskId, ownerId)
       notifyRecordsUpdated()
     }
   } catch (error: unknown) {
-    if (!ownsOperation(token, ownerId)) return
+    if (!ownsOperation(context)) return
     replaceItem(progressId, failedItem(
       record.taskId,
       record.city,
@@ -694,7 +768,7 @@ const resumeActiveTask = async (expectedTaskId = '') => {
     notifyPlansUpdated()
     notifyRecordsUpdated()
   } finally {
-    if (ownsOperation(token, ownerId)) {
+    if (ownsOperation(context)) {
       generating.value = false
       busy.value = false
     }
@@ -710,7 +784,7 @@ const retryFailedItem = async (
 
   const ownerId = userId()
   const activeTaskIdAtClick = readActiveTripTask(ownerId)?.taskId ?? null
-  const token = ++operationToken
+  const context = beginOperation()
   generating.value = true
   busy.value = true
   const status = reactive<WorkProgressStatus>({
@@ -723,10 +797,14 @@ const retryFailedItem = async (
   let lastTaskEvent: TripTaskEvent | undefined
 
   try {
-    const task = await retryTripPlan(item.taskId, restartAll)
+    const task = await beginGenerationRetry(item.taskId, restartAll, {
+      retry: retryTripPlan,
+      notifyRecordsUpdated,
+    })
     if (task.task_id !== item.taskId) {
       throw new Error(t('home.messages.generateRetry'))
     }
+    if (!ownsOperation(context)) return
     const currentActiveTaskId = readActiveTripTask(ownerId)?.taskId ?? null
     const canClaimActive = currentActiveTaskId === null
       || currentActiveTaskId === item.taskId
@@ -735,6 +813,7 @@ const retryFailedItem = async (
       const [startDate, endDate] = item.dateRange?.match(/\d{4}-\d{2}-\d{2}/g) ?? []
       saveActiveTripTask({
         taskId: task.task_id,
+        sessionId: context.sessionId || undefined,
         city: item.city,
         days: startDate && endDate ? dayjs(endDate).diff(dayjs(startDate), 'day') + 1 : 0,
         userText: '',
@@ -742,24 +821,24 @@ const retryFailedItem = async (
         endDate,
       }, ownerId)
     }
-    if (!ownsOperation(token, ownerId)) return
+    if (!ownsOperation(context)) return
     if (!canClaimActive) throw new Error(t('home.messages.generateRetry'))
     replaceItem(item.id, { role: 'assistant', type: 'progress', status })
-    persistLocalChatSession()
-    void flushServerChatSession()
+    await flushCurrentPersistence()
+    if (!ownsOperation(context)) return
     const response = await watchTripTask(item.taskId, {
       onTaskEvent: (event) => {
-        if (!ownsOperation(token, ownerId)) return
+        if (!ownsOperation(context)) return
         lastTaskEvent = event
         applyTaskEvent(status, event)
       },
     }, task.ws_url)
-    if (handlePlanResponse(response, item.id, token, ownerId)) {
+    if (await handlePlanResponse(response, item.id, context)) {
       clearActiveTripTask(item.taskId, ownerId)
       notifyRecordsUpdated()
     }
   } catch (error: unknown) {
-    if (!ownsOperation(token, ownerId)) return
+    if (!ownsOperation(context)) return
     replaceItem(item.id, failedItem(
       item.taskId,
       item.city,
@@ -770,9 +849,9 @@ const retryFailedItem = async (
     ))
     notifyPlansUpdated()
     notifyRecordsUpdated()
-    focusFailedCard(item.taskId, token, ownerId)
+    focusFailedCard(item.taskId, context)
   } finally {
-    if (ownsOperation(token, ownerId)) {
+    if (ownsOperation(context)) {
       generating.value = false
       busy.value = false
     }
@@ -799,12 +878,13 @@ const updateConversationRoute = (sessionId: string) => {
 const ensureServerConversation = async (firstMessageText: string): Promise<boolean> => {
   if (conversationIdentity.sessionId) return true
   const ownerId = userId()
+  const requestOperationToken = operationToken
   const snapshot = buildChatSnapshot()
   const sessionId = reserveConversationId(conversationIdentity)
   conversationFirstMessage ||= firstUserMessage(snapshot) || firstMessageText.trim()
   createOptimisticConversationRecord({
     sessionId,
-    firstMessage: conversationFirstMessage,
+    title: t('sidebar.newConversation'),
     userId: userId(),
   })
 
@@ -814,16 +894,22 @@ const ensureServerConversation = async (firstMessageText: string): Promise<boole
       first_message: conversationFirstMessage,
       snapshot,
     })
-    if (userId() !== ownerId || conversationIdentity.pendingSessionId !== sessionId) return false
+    if (operationToken !== requestOperationToken
+      || userId() !== ownerId
+      || conversationIdentity.pendingSessionId !== sessionId) return false
     if (!acceptConversationRevision(conversationIdentity, sessionId, created.revision)) return false
+    removeLegacyChatSnapshot(ownerId)
     upsertRecord(created)
-    persistLocalChatSession()
+    pendingSubmission = null
+    persistSoon()
     notifyRecordsUpdated()
     updateConversationRoute(sessionId)
     void waitForConversationTitle(sessionId)
     return true
   } catch (error: unknown) {
-    if (userId() !== ownerId || conversationIdentity.pendingSessionId !== sessionId) return false
+    if (operationToken !== requestOperationToken
+      || userId() !== ownerId
+      || conversationIdentity.pendingSessionId !== sessionId) return false
     message.error(error instanceof Error ? error.message : '对话记录保存失败，请重试')
     return false
   }
@@ -832,9 +918,13 @@ const ensureServerConversation = async (firstMessageText: string): Promise<boole
 const restoreServerConversation = async (sessionId: string): Promise<void> => {
   const ownerId = userId()
   const requestToken = ++restoreRequestToken
-  operationToken += 1
+  const persistedCapture = readPersistedConversationCaptures(ownerId)
+    .find((capture) => capture.sessionId === sessionId)
+  invalidateOperations()
   generating.value = false
   busy.value = false
+  const outgoingPersisted = await flushCurrentPersistence()
+  if (requestToken !== restoreRequestToken || userId() !== ownerId) return
   try {
     const detail = await getConversationSession(sessionId)
     if (!isCurrentConversationSelection({
@@ -849,12 +939,34 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
       removeRecord(conversationIdentity.pendingSessionId)
     }
     resetConversationIdentity(conversationIdentity)
+    pendingSubmission = null
     conversationIdentity.pendingSessionId = sessionId
-    const snapshot = applyConversationDetail(detail)
+    const snapshot = !outgoingPersisted && persistedCapture
+      ? (() => {
+          acceptConversationRevision(
+            conversationIdentity,
+            sessionId,
+            persistedCapture.revision,
+          )
+          conversationFirstMessage = firstUserMessage(persistedCapture.snapshot)
+          applyChatSnapshot(persistedCapture.snapshot)
+          return persistedCapture.snapshot
+        })()
+      : applyConversationDetail(detail)
     if (!snapshot) return
-    persistLocalChatSession()
-    if (detail.task_id) void resumeActiveTask(detail.task_id)
-    else resumeInterruptedSnapshot(snapshot)
+    persistSoon()
+    const restoredActiveTask = activeTaskFromConversation(detail)
+    if (restoredActiveTask) {
+      const localActiveTask = readActiveTripTask(ownerId)
+      if (!localActiveTask
+        || localActiveTask.taskId !== restoredActiveTask.taskId
+        || localActiveTask.sessionId !== restoredActiveTask.sessionId) {
+        saveActiveTripTask(mergeRestoredActiveTask(localActiveTask, restoredActiveTask), ownerId)
+      }
+      void resumeActiveTask(restoredActiveTask.taskId)
+    } else {
+      resumeInterruptedSnapshot(snapshot)
+    }
   } catch (error: unknown) {
     if (requestToken === restoreRequestToken && userId() === ownerId) {
       message.error(error instanceof Error ? error.message : '读取对话记录失败')
@@ -876,27 +988,58 @@ const importLegacyConversation = async (): Promise<boolean> => {
   applyChatSnapshot(snapshot)
   const initialMessage = firstUserMessage(snapshot)
   if (!initialMessage) return false
+  const retryText = snapshot.pendingUserText || initialMessage
+  const retryItem = [...items.value].reverse().find(
+    (item) => item.role === 'user' && item.type === 'text' && item.text === retryText,
+  )
+  if (retryItem) {
+    pendingSubmission = {
+      sessionId: reserveConversationId(conversationIdentity),
+      itemId: retryItem.id,
+      text: retryText,
+    }
+  }
   const created = await ensureServerConversation(initialMessage)
-  if (created) {
+  const followUp = legacyImportFollowUp(created)
+  if (followUp.markImported) {
     try { localStorage.setItem(markerKey, '1') } catch { /* ignore */ }
+  }
+  if (!followUp.resumeInterrupted) {
+    composerRef.value?.setText(retryText)
+    return true
   }
   if (readActiveTripTask(userId())) void resumeActiveTask()
   else resumeInterruptedSnapshot(snapshot)
   return true
 }
 
-const initializeConversationSelection = async () => {
+const initializeConversationSelection = async (initial = true) => {
   const selected = queryConversationId(route.query.conversation)
-  if (selected) {
-    if (selected !== conversationIdentity.sessionId) await restoreServerConversation(selected)
+  const activeTaskSessionId = readActiveTripTask(userId())?.sessionId || ''
+  const action = conversationSelectionAction({
+    selectedSessionId: selected,
+    currentSessionId: conversationIdentity.sessionId || '',
+    activeTaskSessionId,
+    initial,
+  })
+  if (action.type === 'restore') {
+    if (!selected) {
+      updateConversationRoute(action.sessionId)
+      return
+    }
+    await restoreServerConversation(action.sessionId)
     return
   }
-  if (!await importLegacyConversation()) void resumeActiveTask()
+  if (action.type === 'blank') {
+    await resetConversation()
+    return
+  }
+  if (action.type === 'resume-local' && !await importLegacyConversation()) void resumeActiveTask()
 }
 
 onMounted(() => {
   routeRestoreReady = true
-  void initializeConversationSelection()
+  void initializeConversationSelection(true)
   if (!plans.value.length) void refreshPlans()
   window.addEventListener(NEW_PLAN_EVENT, resetConversation)
   // 浏览器滚动恢复与字体布局可能晚于首帧,短暂校正确保刷新也落在最新消息
@@ -906,14 +1049,20 @@ onMounted(() => {
   }
 })
 
+onBeforeRouteLeave(async () => {
+  await flushCurrentPersistence()
+})
+
 onUnmounted(() => {
   isAlive = false
-  operationToken += 1
+  invalidateOperations()
+  unregisterBeforeAuthTransition()
   window.removeEventListener(NEW_PLAN_EVENT, resetConversation)
   if (previousScrollRestoration !== null) {
     window.history.scrollRestoration = previousScrollRestoration
   }
-  if (persistTimer) clearTimeout(persistTimer)
+  persistenceQueue.schedule(captureCurrentPersistence())
+  void persistenceQueue.flush()
   restoreRequestToken += 1
 })
 
@@ -923,11 +1072,12 @@ watch(() => route.query.conversation, (value) => {
   if (!routeRestoreReady) return
   const selected = queryConversationId(value)
   if (selected === conversationIdentity.sessionId) return
-  if (selected) void restoreServerConversation(selected)
+  void initializeConversationSelection(false)
 })
-watch(() => currentUser.value?.user_id, () => {
-  operationToken += 1
+watch(() => currentUser.value?.user_id, async () => {
+  invalidateOperations()
   restoreRequestToken += 1
+  await persistenceQueue.flush()
   if (!conversationIdentity.sessionId && conversationIdentity.pendingSessionId) {
     removeRecord(conversationIdentity.pendingSessionId)
   }
@@ -944,7 +1094,10 @@ watch(() => currentUser.value?.user_id, () => {
   nextId = 1
   nextTick(() => {
     suppressChatPersistence = false
-    if (routeRestoreReady) void initializeConversationSelection()
+    for (const capture of readPersistedConversationCaptures(userId())) {
+      persistenceQueue.schedule(capture)
+    }
+    if (routeRestoreReady) void initializeConversationSelection(true)
   })
 })
 watch(() => items.value.length, (length) => {
@@ -995,6 +1148,7 @@ const handlePendingReply = async (
   draft: ParsedTripDraft,
   currentUserItemId: number
 ) => {
+  const context = beginOperation()
   busy.value = true
   pendingUserText.value = text
   persistSoon()
@@ -1011,7 +1165,11 @@ const handlePendingReply = async (
   ): Promise<TripConfirmReplyResponse> =>
     new Promise((resolve, reject) => {
       confirmTripReplyStream(replyText, replyDraft, language, history, readinessToken, {
-        onDelta: (d) => { acc += d; setStreamingText(streamId, acc) },
+        onDelta: (d) => {
+          if (!ownsOperation(context)) return
+          acc += d
+          setStreamingText(streamId, acc)
+        },
         onFinal: (payload) => resolve(payload),
         onError: (msg) => reject(new Error(msg)),
       }).catch(reject)
@@ -1028,9 +1186,14 @@ const handlePendingReply = async (
       },
       {
         confirmReply: streamingConfirmReply,
-        generate: onConfirmGenerate,
+        generate: (confirmedDraft, executionToken) => onConfirmGenerate(
+          confirmedDraft,
+          executionToken,
+          context,
+        ),
       }
     )
+    if (!ownsOperation(context)) return
     const { effect } = result
 
     if (effect.type === 'generate') {
@@ -1085,15 +1248,18 @@ const handlePendingReply = async (
       }
     }
   } finally {
-    pendingUserText.value = null
-    busy.value = false
-    persistSoon()
+    if (ownsOperation(context)) {
+      pendingUserText.value = null
+      busy.value = false
+      persistSoon()
+    }
   }
 }
 
 // 解析需求/推荐/追问:流式打字机版。不在此 push 用户消息,便于刷新后对同一条
 // 用户消息重新发起(自动重发续上)
 const runParseStream = async (text: string, userItemId: number) => {
+  const context = beginOperation()
   busy.value = true
   pendingUserText.value = text
   persistSoon()
@@ -1104,10 +1270,15 @@ const runParseStream = async (text: string, userItemId: number) => {
   try {
     const history = getConversationHistory(userItemId)
     await parseTripTextStream(text, getCurrentLocale(), history, {
-      onDelta: (d) => { acc += d; setStreamingText(streamId, acc) },
+      onDelta: (d) => {
+        if (!ownsOperation(context)) return
+        acc += d
+        setStreamingText(streamId, acc)
+      },
       onFinal: (res) => { finalRes = res },
       onError: () => { streamError = true },
     })
+    if (!ownsOperation(context)) return
     if (streamError || !finalRes) throw new Error(t('composer.parseFailed'))
     const res: TripParseApiResponse = finalRes
 
@@ -1124,15 +1295,18 @@ const runParseStream = async (text: string, userItemId: number) => {
         : streamId
     }
   } catch (error: any) {
+    if (!ownsOperation(context)) return
     replaceItem(streamId, {
       role: 'assistant',
       type: 'text',
       text: error?.message || t('composer.parseFailed'),
     })
   } finally {
-    pendingUserText.value = null
-    busy.value = false
-    persistSoon()
+    if (ownsOperation(context)) {
+      pendingUserText.value = null
+      busy.value = false
+      persistSoon()
+    }
   }
 }
 
@@ -1163,13 +1337,28 @@ const handleUserSend = async (text: string) => {
   if (busy.value) return
   // 用户主动发送新消息时重新跟随最新对话
   followingLatest.value = true
-  const userItemId = pushItem({ role: 'user', type: 'text', text })
+  let userItemId: number
+  if (!conversationIdentity.sessionId) {
+    const pendingSessionId = reserveConversationId(conversationIdentity)
+    const reusableItemId = pendingSubmissionItemId(pendingSubmission, text, pendingSessionId)
+    const reusableItem = reusableItemId === null
+      ? undefined
+      : items.value.find((item) => item.id === reusableItemId && item.role === 'user' && item.type === 'text')
+    userItemId = reusableItem?.id ?? pushItem({ role: 'user', type: 'text', text })
+    pendingSubmission = { sessionId: pendingSessionId, itemId: userItemId, text }
+  } else {
+    userItemId = pushItem({ role: 'user', type: 'text', text })
+  }
 
   if (!conversationIdentity.sessionId) {
+    const submissionToken = operationToken
+    const submissionOwnerId = userId()
     busy.value = true
     const created = await ensureServerConversation(text)
+    if (submissionToken !== operationToken || submissionOwnerId !== userId()) return
     busy.value = false
     if (!created) {
+      composerRef.value?.setText(text)
       await restoreComposerFocus()
       return
     }
@@ -1190,19 +1379,20 @@ const handleUserSend = async (text: string) => {
 
 const onConfirmGenerate = async (
   draft: ParsedTripDraft,
-  executionToken: string
+  executionToken: string,
+  context: ConversationOperationContext,
 ): Promise<PlanGenerationOutcome> => {
+  if (!ownsOperation(context)) return { status: 'submit_failed' }
   if (generating.value) return { status: 'submit_failed' }
   const baseRequest = buildTripPlanRequest(draft, executionToken, getCurrentLocale())
   if (!baseRequest) {
     message.warning(t('home.messages.travelDaysTooLong'))
     return { status: 'submit_failed' }
   }
-  const requestData = attachConversationSession(baseRequest, conversationIdentity.sessionId)
+  const requestData = attachConversationSession(baseRequest, context.sessionId)
   requestData.conversation = buildArchivedConversation(items.value)
   const travelDays = requestData.travel_days
-  const ownerId = userId()
-  const token = ++operationToken
+  const ownerId = context.ownerId
 
   generating.value = true
   busy.value = true
@@ -1221,15 +1411,17 @@ const onConfirmGenerate = async (
     sessionStorage.removeItem('tripPlan')
     sessionStorage.removeItem('graphData')
     sessionStorage.removeItem('planId')
-    await flushServerChatSession()
+    await flushCurrentPersistence()
+    if (!ownsOperation(context)) return { status: 'submit_failed' }
 
     const response = await generateTripPlan(requestData, {
       onTaskCreated: (task) => {
-        if (!ownsOperation(token, ownerId)) return
+        if (!ownsOperation(context)) return
         // 拿到 task_id 立即落地,刷新页面后可恢复;并让侧栏立刻出现"生成中"的任务
         createdTaskId = task.task_id
         saveActiveTripTask({
           taskId: task.task_id,
+          sessionId: context.sessionId || undefined,
           city: draft.city,
           days: travelDays,
           userText: draft.origin_text || draft.free_text_input || '',
@@ -1240,13 +1432,13 @@ const onConfirmGenerate = async (
         notifyRecordsUpdated()
       },
       onTaskEvent: (event) => {
-        if (!ownsOperation(token, ownerId)) return
+        if (!ownsOperation(context)) return
         lastTaskEvent = event
         applyTaskEvent(status, event)
       },
     })
 
-    const completed = handlePlanResponse(response, progressId, token, ownerId)
+    const completed = await handlePlanResponse(response, progressId, context)
     const outcome: PlanGenerationOutcome = completed
       ? { status: 'completed' }
       : { status: 'watch_failed', taskId: createdTaskId }
@@ -1255,7 +1447,7 @@ const onConfirmGenerate = async (
     }
     return outcome
   } catch (error: unknown) {
-    if (!ownsOperation(token, ownerId)) return createdTaskId
+    if (!ownsOperation(context)) return createdTaskId
       ? { status: 'watch_failed', taskId: createdTaskId }
       : { status: 'submit_failed' }
     replaceItem(progressId, createdTaskId
@@ -1277,7 +1469,7 @@ const onConfirmGenerate = async (
       ? { status: 'watch_failed', taskId: createdTaskId }
       : { status: 'submit_failed' }
   } finally {
-    if (ownsOperation(token, ownerId)) {
+    if (ownsOperation(context)) {
       generating.value = false
       busy.value = false
     }

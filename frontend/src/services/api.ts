@@ -219,7 +219,7 @@ apiClient.interceptors.request.use(
       config.headers.delete('Content-Type')
     }
     const user = getStoredUser()
-    if (user?.user_id) {
+    if (user?.user_id && !config.headers.has('X-User-Id')) {
       config.headers['X-User-Id'] = user.user_id
     }
     const adminToken = typeof window === 'undefined'
@@ -658,10 +658,14 @@ export async function createConversation(
   }
 }
 
-export async function getConversationSession(sessionId: string): Promise<ConversationSessionDetail> {
+export async function getConversationSession(
+  sessionId: string,
+  ownerId?: string,
+): Promise<ConversationSessionDetail> {
   try {
     const response = await apiClient.get<ConversationSessionDetail>(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
+      ownerId ? { headers: { 'X-User-Id': ownerId } } : undefined,
     )
     return response.data
   } catch (error: any) {
@@ -680,11 +684,13 @@ export class ConversationSessionRevisionConflictError extends Error {
 export async function updateConversationSession(
   sessionId: string,
   input: UpdateConversationRequest,
+  ownerId?: string,
 ): Promise<ConversationSessionDetail> {
   try {
     const response = await apiClient.put<ConversationSessionDetail>(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
       input,
+      ownerId ? { headers: { 'X-User-Id': ownerId } } : undefined,
     )
     return response.data
   } catch (error: any) {

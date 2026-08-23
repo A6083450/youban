@@ -313,8 +313,6 @@ const goNewPlan = () => {
   clearPlanResultSession()
   window.dispatchEvent(new CustomEvent(NEW_PLAN_EVENT))
   if (route.path !== '/' || activeConversationId.value) {
-    const uid = getStoredUser()?.user_id || 'anonymous'
-    localStorage.removeItem(`tripstar.chat_session.${uid}`)
     router.push('/')
   }
 }
@@ -343,7 +341,8 @@ const syncActiveTripTask = (): void => {
 const returnToActiveTask = async (): Promise<void> => {
   mobileMenuOpen.value = false
   clearPlanResultSession()
-  await router.push('/')
+  const sessionId = activeTripTask.value?.sessionId?.trim()
+  await router.push(sessionId ? { path: '/', query: { conversation: sessionId } } : '/')
 }
 
 const resumePlan = async (planId: string): Promise<void> => {

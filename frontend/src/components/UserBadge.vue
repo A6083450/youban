@@ -38,9 +38,9 @@ const initial = computed(() =>
   (currentUser.value?.nickname || '?').trim().charAt(0).toUpperCase(),
 )
 
-const handleLogout = () => {
-  logout()
-  router.replace('/login')
+const handleLogout = async () => {
+  await logout()
+  await router.replace('/login')
 }
 </script>
 

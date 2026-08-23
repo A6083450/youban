@@ -51,7 +51,11 @@ export const upsertRecord = (record: ConversationRecord): void => {
     records.value = [record, ...records.value]
     return
   }
-  records.value.splice(index, 1, record)
+  const existing = records.value[index]
+  const visibleRecord = existing?.title_status === 'pending' && record.title_status === 'pending'
+    ? { ...record, title: existing.title }
+    : record
+  records.value.splice(index, 1, visibleRecord)
 }
 
 export const removeRecord = (recordId: string): void => {
@@ -83,7 +87,7 @@ export const shouldShowConversationResume = (record: ConversationRecord): boolea
 
 export const createOptimisticConversationRecord = (input: {
   sessionId: string
-  firstMessage: string
+  title: string
   userId: string
 }): ConversationRecord => {
   const now = new Date().toISOString()
@@ -93,7 +97,7 @@ export const createOptimisticConversationRecord = (input: {
     session_id: input.sessionId,
     plan_id: null,
     task_id: null,
-    title: input.firstMessage.trim() || '新对话',
+    title: input.title.trim(),
     title_status: 'pending',
     state: 'chatting',
     revision: 0,

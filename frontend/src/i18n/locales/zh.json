@@ -1,6 +1,7 @@
 {
   "sidebar": {
     "newPlan": "新建计划",
+    "newConversation": "新对话",
     "conversations": "对话记录",
     "plans": "游玩计划",
     "emptyConversations": "暂无对话记录",

@@ -6,6 +6,18 @@ export const AUTH_UPDATED_EVENT = 'tripstar:auth-updated'
 
 export const currentUser = ref<UserInfo | null>(getStoredUser())
 
+type BeforeAuthTransition = () => unknown | Promise<unknown>
+const beforeAuthTransitionListeners = new Set<BeforeAuthTransition>()
+
+export const registerBeforeAuthTransition = (listener: BeforeAuthTransition): (() => void) => {
+  beforeAuthTransitionListeners.add(listener)
+  return () => { beforeAuthTransitionListeners.delete(listener) }
+}
+
+const waitForBeforeAuthTransition = async (): Promise<void> => {
+  await Promise.allSettled([...beforeAuthTransitionListeners].map((listener) => listener()))
+}
+
 const emitAuthUpdated = () => {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_UPDATED_EVENT))
@@ -14,13 +26,15 @@ const emitAuthUpdated = () => {
 
 export async function loginWithNickname(nickname: string): Promise<UserInfo> {
   const user = await authLogin(nickname)
+  await waitForBeforeAuthTransition()
   setStoredUser(user)
   currentUser.value = user
   emitAuthUpdated()
   return user
 }
 
-export function logout(): void {
+export async function logout(): Promise<void> {
+  await waitForBeforeAuthTransition()
   setStoredUser(null)
   currentUser.value = null
   emitAuthUpdated()
@@ -31,7 +45,7 @@ export async function restoreSession(): Promise<void> {
   if (!currentUser.value) return
   const user = await authMe()
   if (!user) {
-    logout()
+    await logout()
   } else {
     setStoredUser(user)
     currentUser.value = user
