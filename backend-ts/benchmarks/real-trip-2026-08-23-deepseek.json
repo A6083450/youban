@@ -1,0 +1,348 @@
+{
+  "benchmark": "real-trip-generation",
+  "input": "国庆新疆玩一个月帮我计划下",
+  "base_url": "http://127.0.0.1:7861",
+  "percentile_method": "nearest-rank",
+  "generated_at": "2026-08-23T05:53:11.266Z",
+  "samples": [
+    {
+      "run": 1,
+      "success": true,
+      "generation_ms": 26152,
+      "end_to_end_ms": 54315,
+      "parse_ms": 27038,
+      "confirm_ms": 1115,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 17,
+        "planning": 2676,
+        "attraction_search": 8786,
+        "weather_search": 8787,
+        "reviewing": 18872,
+        "completed": 26152
+      },
+      "plan_id": "5f27c58f",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "阿勒泰（喀纳斯）",
+        "伊犁（伊宁）",
+        "库车",
+        "库尔勒",
+        "喀什",
+        "塔什库尔干（帕米尔）",
+        "和田",
+        "吐鲁番",
+        "返程乌鲁木齐"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 2,
+      "success": true,
+      "generation_ms": 25398,
+      "end_to_end_ms": 80062,
+      "parse_ms": 53068,
+      "confirm_ms": 1590,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 6,
+        "planning": 2391,
+        "attraction_search": 6514,
+        "weather_search": 6515,
+        "reviewing": 20713,
+        "completed": 25398
+      },
+      "plan_id": "757c9646",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "阿勒泰",
+        "可可托海",
+        "伊犁",
+        "吐鲁番",
+        "库尔勒",
+        "库车",
+        "喀什",
+        "塔什库尔干",
+        "和田",
+        "乌鲁木齐（返程）"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 3,
+      "success": true,
+      "generation_ms": 25142,
+      "end_to_end_ms": 71995,
+      "parse_ms": 45281,
+      "confirm_ms": 1567,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 5,
+        "planning": 1270,
+        "attraction_search": 4994,
+        "weather_search": 4995,
+        "reviewing": 19467,
+        "completed": 25142
+      },
+      "plan_id": "8622dace",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐及周边（天山天池）",
+        "吐鲁番",
+        "可可托海/富蕴",
+        "布尔津+喀纳斯",
+        "禾木",
+        "乌尔禾魔鬼城",
+        "赛里木湖",
+        "伊犁（那拉提/喀拉峻/伊宁）",
+        "库车",
+        "喀什",
+        "帕米尔高原/塔县",
+        "和田",
+        "轮台塔里木胡杨林",
+        "库尔勒"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 4,
+      "success": true,
+      "generation_ms": 22498,
+      "end_to_end_ms": 79386,
+      "parse_ms": 54701,
+      "confirm_ms": 2183,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 3,
+        "planning": 2818,
+        "attraction_search": 10256,
+        "weather_search": 10256,
+        "reviewing": 17612,
+        "completed": 22498
+      },
+      "plan_id": "ecd59f60",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐（含天山天池）",
+        "阿勒泰·喀纳斯·禾木",
+        "伊犁（赛里木湖·那拉提）",
+        "库车",
+        "喀什",
+        "帕米尔高原·塔什库尔干",
+        "和田",
+        "库尔勒",
+        "吐鲁番"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 5,
+      "success": true,
+      "generation_ms": 18770,
+      "end_to_end_ms": 53750,
+      "parse_ms": 33279,
+      "confirm_ms": 1698,
+      "clarification_turns": 0,
+      "stage_ms": {
+        "hotel_search": 3,
+        "planning": 2152,
+        "attraction_search": 7043,
+        "weather_search": 7043,
+        "reviewing": 13855,
+        "completed": 18770
+      },
+      "plan_id": "93a01313",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "阿勒泰",
+        "伊犁",
+        "吐鲁番",
+        "库尔勒",
+        "阿克苏",
+        "喀什",
+        "和田"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 6,
+      "success": true,
+      "generation_ms": 20401,
+      "end_to_end_ms": 53832,
+      "parse_ms": 30885,
+      "confirm_ms": 2537,
+      "clarification_turns": 0,
+      "stage_ms": {
+        "hotel_search": 11,
+        "planning": 1729,
+        "attraction_search": 6616,
+        "weather_search": 6616,
+        "reviewing": 14804,
+        "completed": 20401
+      },
+      "plan_id": "63c39ea7",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "吐鲁番",
+        "伊犁",
+        "阿勒泰/喀纳斯",
+        "巴音布鲁克/独库公路",
+        "喀什",
+        "塔什库尔干(帕米尔高原)",
+        "和田/南疆环线"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 7,
+      "success": true,
+      "generation_ms": 23885,
+      "end_to_end_ms": 83210,
+      "parse_ms": 57256,
+      "confirm_ms": 2064,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 3,
+        "planning": 224,
+        "attraction_search": 3159,
+        "weather_search": 3159,
+        "reviewing": 18887,
+        "completed": 23885
+      },
+      "plan_id": "1f63d125",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "吐鲁番",
+        "天山天池",
+        "伊犁（伊宁/赛里木湖/那拉提）",
+        "阿勒泰·喀纳斯",
+        "可可托海",
+        "库尔勒（博斯腾湖）",
+        "库车",
+        "阿克苏",
+        "喀什（含帕米尔塔县可选）",
+        "轮台·塔里木胡杨林",
+        "和田"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 8,
+      "success": true,
+      "generation_ms": 19895,
+      "end_to_end_ms": 64700,
+      "parse_ms": 43581,
+      "confirm_ms": 1220,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 5,
+        "planning": 2346,
+        "attraction_search": 6470,
+        "weather_search": 6470,
+        "reviewing": 14902,
+        "completed": 19895
+      },
+      "plan_id": "c2ca4aca",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "吐鲁番",
+        "阿勒泰（喀纳斯/禾木）",
+        "伊犁（伊宁/那拉提/赛里木湖）",
+        "库车",
+        "喀什（含塔县/帕米尔）",
+        "和田",
+        "库尔勒/若羌",
+        "乌鲁木齐（返程）"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 9,
+      "success": true,
+      "generation_ms": 21611,
+      "end_to_end_ms": 64576,
+      "parse_ms": 37176,
+      "confirm_ms": 5785,
+      "clarification_turns": 0,
+      "stage_ms": {
+        "hotel_search": 3,
+        "planning": 351,
+        "attraction_search": 7508,
+        "weather_search": 7508,
+        "reviewing": 16250,
+        "completed": 21611
+      },
+      "plan_id": "add4d79a",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "喀纳斯/阿勒泰",
+        "伊犁河谷",
+        "独库公路/天山",
+        "库车/喀什",
+        "帕米尔高原",
+        "和田/沙漠公路",
+        "吐鲁番/哈密"
+      ],
+      "quality_errors": []
+    },
+    {
+      "run": 10,
+      "success": true,
+      "generation_ms": 25714,
+      "end_to_end_ms": 58439,
+      "parse_ms": 30691,
+      "confirm_ms": 2022,
+      "clarification_turns": 1,
+      "stage_ms": {
+        "hotel_search": 4,
+        "planning": 2068,
+        "attraction_search": 7284,
+        "weather_search": 7284,
+        "reviewing": 17688,
+        "completed": 25714
+      },
+      "plan_id": "27822904",
+      "travel_days": 30,
+      "cities": [
+        "乌鲁木齐",
+        "阿勒泰（喀纳斯/布尔津）",
+        "伊宁（伊犁）",
+        "吐鲁番",
+        "库尔勒",
+        "库车",
+        "喀什",
+        "塔县（帕米尔高原）",
+        "和田",
+        "返程/机动缓冲（乌鲁木齐）"
+      ],
+      "quality_errors": []
+    }
+  ],
+  "summary": {
+    "run_count": 10,
+    "successful_runs": 10,
+    "success_rate": 1,
+    "generation_ms": {
+      "p50": 22498,
+      "p95": 26152,
+      "max": 26152
+    },
+    "end_to_end_ms": {
+      "p50": 64576,
+      "p95": 83210,
+      "max": 83210
+    },
+    "thresholds": {
+      "p50_ms": 30000,
+      "p95_ms": 35000
+    },
+    "passed": true
+  }
+}

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "audit:python-tests": "bun run scripts/generate-python-test-disposition.ts --check",
     "browser:skills-fixture": "bun run scripts/skill-admin-browser-fixture.ts",
+    "bench:real-trip": "bun run scripts/benchmark-real-trip.ts",
     "bench:pi-subagents": "bun run scripts/benchmark-pi-subagents.ts",
     "profile:cpu": "bun --cpu-prof-md --cpu-prof-dir=profiles scripts/benchmark-pi-subagents.ts",
     "profile:heap": "bun --heap-prof-md --heap-prof-dir=profiles scripts/benchmark-pi-subagents.ts",

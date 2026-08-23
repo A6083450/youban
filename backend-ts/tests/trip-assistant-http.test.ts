@@ -171,6 +171,121 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(llm.prompts[0]).toContain("国庆帮我安排大理七天");
   });
 
+  it("trims city stays to the 30-day planning limit without breaking their sum", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "neutral",
+      reply: "草稿已整理。",
+      cities: [
+        { city: "乌鲁木齐", days: 10 },
+        { city: "伊犁", days: 10 },
+        { city: "喀什", days: 15 },
+      ],
+      start_date: "2026-10-01",
+      transportation: "",
+      accommodation: "   ",
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "国庆新疆玩一个月帮我计划下",
+      language: "zh-CN",
+      today: "2026-08-23",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.trip).toEqual(expect.objectContaining({
+      cities: [
+        { city: "乌鲁木齐", days: 10 },
+        { city: "伊犁", days: 10 },
+        { city: "喀什", days: 10 },
+      ],
+      travel_days: 30,
+      start_date: "2026-10-01",
+      end_date: "2026-10-30",
+      transportation: "公共交通",
+      accommodation: "经济型酒店",
+    }));
+  });
+
+  it("expands a vague Xinjiang month draft into a concrete 30-day route", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "neutral",
+      reply: "草稿已整理。",
+      cities: [{ city: "新疆", days: 15 }],
+      start_date: "2026-10-01",
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "国庆新疆玩一个月帮我计划下",
+      language: "zh-CN",
+      today: "2026-08-23",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.trip.travel_days).toBe(30);
+    expect(result.trip.end_date).toBe("2026-10-30");
+    expect(result.trip.cities.length).toBeGreaterThan(1);
+    expect(result.trip.cities.reduce((total: number, city: Record<string, any>) => total + city.days, 0)).toBe(30);
+    expect(result.trip.cities.every((city: Record<string, any>) => city.city !== "新疆")).toBeTrue();
+  });
+
+  it("fills a multi-city Xinjiang month draft to 30 days", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "neutral",
+      reply: "草稿已整理。",
+      cities: [
+        { city: "乌鲁木齐", days: 10 },
+        { city: "伊犁", days: 10 },
+        { city: "喀什", days: 9 },
+      ],
+      start_date: "2026-10-01",
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "国庆新疆玩一个月帮我计划下",
+      language: "zh-CN",
+      today: "2026-08-23",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.trip.travel_days).toBe(30);
+    expect(result.trip.end_date).toBe("2026-10-30");
+    expect(result.trip.cities.reduce((total: number, city: Record<string, any>) => total + city.days, 0)).toBe(30);
+  });
+
+  it("does not expand a shorter South and North Xinjiang request to 30 days", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "neutral",
+      reply: "草稿已整理。",
+      cities: [
+        { city: "乌鲁木齐", days: 5 },
+        { city: "喀什", days: 5 },
+      ],
+      start_date: "2026-10-01",
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "国庆南北疆玩10天",
+      language: "zh-CN",
+      today: "2026-08-23",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.trip.travel_days).toBe(10);
+    expect(result.trip.end_date).toBe("2026-10-10");
+  });
+
   it("streams parse reply deltas, one final payload, and DONE", async () => {
     const chunks = [
       '{"action":"chat","emotion":"neutral",',
@@ -284,6 +399,51 @@ describe("trip parse/confirm HTTP and SSE", () => {
       decision_id: "",
       execution_token: "",
     }));
+  });
+
+  it("honors an explicit execution command even when the model asks for confirmation again", async () => {
+    const draft = {
+      city: "乌鲁木齐",
+      cities: [{ city: "乌鲁木齐", days: 3 }],
+      start_date: "2026-10-01",
+      end_date: "2026-10-03",
+      travel_days: 3,
+    };
+    const output = JSON.stringify({
+      action: "ask_confirmation",
+      confidence: 0.2,
+      message: "还需要确认吗？",
+    });
+    const { runtime, ledger } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "确认，立即按这个方案生成",
+      draft,
+      language: "zh-CN",
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.action).toBe("confirm");
+    expect(result.confidence).toBe(1);
+    expect(result.execution_token).not.toBe("");
+    expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
+  });
+
+  it("never treats a negated confirmation phrase as explicit authorization", async () => {
+    const output = JSON.stringify({
+      action: "ask_confirmation",
+      confidence: 0.2,
+      message: "请确认是否生成。",
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "我不确定，先不要生成",
+      draft: { cities: [{ city: "乌鲁木齐", days: 3 }] },
+      language: "zh-CN",
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.action).toBe("ask_confirmation");
+    expect(result.execution_token).toBe("");
   });
 
   it("routes parse and confirm through the same authenticated persistent parent scope", async () => {

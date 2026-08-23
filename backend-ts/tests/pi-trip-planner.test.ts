@@ -29,6 +29,20 @@ const POIS = ["P1", "P2", "P3", "P4"].map((poiId, index) => ({
   location: { longitude: 100 + index, latitude: 25 + index },
 }));
 
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+}
+
 class FakeResearch implements TripResearchSources {
   calls: string[] = [];
   async searchAttractions(city: string) {
@@ -50,9 +64,13 @@ class FakeAgents implements StructuredAgentRunner {
   active = 0;
   maxActive = 0;
   hallucinate = false;
+  hallucinateResearch = false;
+  misalignSegmentMetadata = false;
   mealCost: number | null = null;
   failSummary = false;
   failReview = false;
+  finalizationDelayMs = 0;
+  omitLastSegmentDay = false;
 
   async run(request: StructuredAgentRequest): Promise<unknown> {
     this.requests.push({
@@ -63,19 +81,21 @@ class FakeAgents implements StructuredAgentRunner {
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
     try {
-      await Bun.sleep(5);
+      const isFinalization = request.agent === "summary" || request.agent === "itinerary-reviewer";
+      await sleepWithSignal(5 + (isFinalization ? this.finalizationDelayMs : 0), request.signal);
       const input = request.input as Record<string, any>;
       if (request.agent === "destination-researcher") {
-        return { selected_poi_ids: POIS.map((poi) => poi.poi_id) };
+        return { selected_poi_ids: this.hallucinateResearch ? ["FAKE"] : POIS.map((poi) => poi.poi_id) };
       }
       if (request.agent === "segment-planner") {
         const segment = input.segment as Record<string, any>;
         const candidates = input.attractions as Array<Record<string, any>>;
-        return {
-          days: segment.day_indices.map((dayIndex: number, offset: number) => ({
-            date: new Date(Date.UTC(2026, 9, dayIndex + 1)).toISOString().slice(0, 10),
-            day_index: dayIndex,
-            city: segment.city,
+        const days = segment.day_indices.map((dayIndex: number, offset: number) => ({
+            date: this.misalignSegmentMetadata
+              ? "2027-01-01"
+              : new Date(Date.UTC(2026, 9, dayIndex + 1)).toISOString().slice(0, 10),
+            day_index: this.misalignSegmentMetadata ? dayIndex + 99 : dayIndex,
+            city: this.misalignSegmentMetadata ? "错误城市" : segment.city,
             description: `第${dayIndex + 1}天`,
             transportation: "公共交通",
             accommodation: "湖景酒店",
@@ -89,8 +109,8 @@ class FakeAgents implements StructuredAgentRunner {
               name: "午餐",
               estimated_cost: this.mealCost,
             }],
-          })),
-        };
+          }));
+        return { days: this.omitLastSegmentDay ? days.slice(0, -1) : days };
       }
       if (request.agent === "summary") {
         if (this.failSummary) throw new Error("summary unavailable");
@@ -152,6 +172,15 @@ describe("PiTripPlanner", () => {
       "summary",
     ];
     expect(agents.requests.map((request) => request.agent).sort()).toEqual(expectedAgents.sort());
+    const summaryRequest = agents.requests.find((request) => request.agent === "summary")!;
+    const reviewRequest = agents.requests.find((request) => request.agent === "itinerary-reviewer")!;
+    expect((summaryRequest.schema as any).properties.overall_suggestions.maxLength).toBe(800);
+    expect((reviewRequest.schema as any).properties.issues).toEqual(expect.objectContaining({
+      maxItems: 6,
+      items: expect.objectContaining({ maxLength: 240 }),
+    }));
+    expect((summaryRequest.input as any).days[0].attractions[0]).toEqual({ name: "景点1", poi_id: "P1" });
+    expect((summaryRequest.input as any).days[0].attractions[0].location).toBeUndefined();
     expect(agents.maxActive).toBeGreaterThanOrEqual(2);
     expect(run.snapshots.length).toBeGreaterThanOrEqual(7);
     expect(run.progress).toEqual(expect.arrayContaining([
@@ -188,11 +217,102 @@ describe("PiTripPlanner", () => {
     expect(agents.requests).toEqual([]);
   });
 
-  it("rejects segment attractions that are absent from the assigned trusted pool", async () => {
+  it("replaces untrusted segment attractions with unique server-assigned candidates", async () => {
     const agents = new FakeAgents();
     agents.hallucinate = true;
     const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
-    await expect(planner.plan(REQUEST, context().value)).rejects.toThrow("未通过高德候选池验证");
+    const result = await planner.plan(REQUEST, context().value);
+    const attractions = ((result.data as Record<string, any>).days as Array<Record<string, any>>)
+      .flatMap((day) => day.attractions);
+
+    expect(attractions).toHaveLength(4);
+    expect(attractions.map((item) => item.poi_id).sort()).toEqual(POIS.map((poi) => poi.poi_id).sort());
+    expect(attractions.every((item) => item.name.startsWith("景点"))).toBeTrue();
+  });
+
+  it("falls back to ranked trusted candidates when the research child selects only unknown ids", async () => {
+    const agents = new FakeAgents();
+    agents.hallucinateResearch = true;
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
+    const result = await planner.plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days).toHaveLength(4);
+    expect(days.flatMap((day) => day.attractions).every((item) =>
+      POIS.some((poi) => poi.poi_id === item.poi_id))).toBeTrue();
+  });
+
+  it("overrides model-provided dates, indices, and cities with deterministic segment metadata", async () => {
+    const agents = new FakeAgents();
+    agents.misalignSegmentMetadata = true;
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
+    const result = await planner.plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days.map(({ date, day_index, city }) => ({ date, day_index, city }))).toEqual([
+      { date: "2026-10-01", day_index: 0, city: "大理" },
+      { date: "2026-10-02", day_index: 1, city: "大理" },
+      { date: "2026-10-03", day_index: 2, city: "大理" },
+      { date: "2026-10-04", day_index: 3, city: "大理" },
+    ]);
+  });
+
+  it("fills a missing model day from deterministic segment metadata", async () => {
+    const agents = new FakeAgents();
+    agents.omitLastSegmentDay = true;
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents });
+    const result = await planner.plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days).toHaveLength(4);
+    expect(days.map((day) => day.day_index)).toEqual([0, 1, 2, 3]);
+    expect(days[3]).toEqual(expect.objectContaining({
+      date: "2026-10-04",
+      city: "大理",
+      transportation: "待确认",
+      accommodation: "待确认",
+      meals: [],
+    }));
+    const segmentRequest = agents.requests.find((request) => request.agent === "segment-planner")!;
+    expect((segmentRequest.schema as any).properties.days).toEqual(expect.objectContaining({
+      minItems: 4,
+      maxItems: 4,
+    }));
+  });
+
+  it("keeps a segment usable without inventing POIs when research has no trusted candidates", async () => {
+    class EmptyResearch extends FakeResearch {
+      override async searchAttractions(city: string) {
+        this.calls.push(`attractions:${city}`);
+        return [];
+      }
+    }
+    class PlaceholderAgents extends FakeAgents {
+      override async run(request: StructuredAgentRequest): Promise<unknown> {
+        if (request.agent === "destination-researcher") return { selected_poi_ids: [] };
+        if (request.agent !== "segment-planner") return super.run(request);
+        const segment = (request.input as Record<string, any>).segment as Record<string, any>;
+        return {
+          days: segment.day_indices.map((dayIndex: number) => ({
+            date: new Date(Date.UTC(2026, 9, dayIndex + 1)).toISOString().slice(0, 10),
+            day_index: dayIndex,
+            city: segment.city,
+            description: "候选信息不足，保留自由活动",
+            transportation: "待确认",
+            accommodation: "待确认",
+            hotel: null,
+            attractions: [{ name: "待确认", poi_id: "unknown" }],
+            meals: [],
+          })),
+        };
+      }
+    }
+    const planner = new PiTripPlanner({ research: new EmptyResearch(), agents: new PlaceholderAgents() });
+    const result = await planner.plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days).toHaveLength(4);
+    expect(days.every((day) => Array.isArray(day.attractions) && day.attractions.length === 0)).toBeTrue();
   });
 
   it("applies deterministic scheduling and budget guardrails to the final plan", async () => {
@@ -237,6 +357,25 @@ describe("PiTripPlanner", () => {
       status: "failed",
       error: "review unavailable",
     }));
+  });
+
+  it("bounds slow summary and review work and falls back without losing the plan", async () => {
+    const agents = new FakeAgents();
+    agents.finalizationDelayMs = 100;
+    const run = context();
+    const startedAt = performance.now();
+    const result = await new PiTripPlanner({
+      research: new FakeResearch(),
+      agents,
+      finalizationTimeoutMs: 15,
+    } as any).plan(REQUEST, run.value);
+
+    expect(performance.now() - startedAt).toBeLessThan(80);
+    expect((result.data as Record<string, any>).overall_suggestions).toContain("行程已按日期生成");
+    expect(result.review).toEqual({ issues: [] });
+    const checkpoint = run.snapshots.at(-1) as Record<string, any>;
+    expect(checkpoint.summary.status).toBe("failed");
+    expect(checkpoint.review.status).toBe("failed");
   });
 
   it("starts a ready city's segments before slower city research finishes", async () => {

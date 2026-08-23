@@ -57,13 +57,13 @@ export function createYoubanSubagentDefinitions(
   defineAgent(
     "summary",
     "Summarize a complete itinerary without changing its facts.",
-    "Summarize only the supplied itinerary. Do not add destinations, prices, bookings, or claims that are absent from the input.",
+    "Summarize only the supplied itinerary in at most 800 Chinese characters. Be concise and do not add destinations, prices, bookings, or claims that are absent from the input.",
     snapshot,
   ),
   defineAgent(
     "itinerary-reviewer",
     "Review itinerary consistency, feasibility, accessibility, and budget.",
-    "Report concrete violations against the supplied facts and constraints. Do not silently repair the plan or invent missing evidence.",
+    "Return at most 6 concise, highest-impact violations against the supplied facts and constraints. Do not silently repair the plan or invent missing evidence.",
     snapshot,
   ),
   defineAgent(

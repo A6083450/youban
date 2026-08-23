@@ -9,6 +9,32 @@ interface StepResult {
   elapsed_ms: number;
 }
 
+interface SmokeHistoryItem {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const SMOKE_INPUT = "明天去广州玩一天，1个人，公共交通，喜欢人文景点";
+const SMOKE_CLARIFICATION = "确认具体安排：明天去广州玩1天，1个人，公共交通，经济型酒店，喜欢人文景点。请直接生成可执行草稿，不再追问。";
+
+export async function resolveSmokeDraft(
+  parseTurn: (text: string, history: SmokeHistoryItem[]) => Promise<Record<string, any>>,
+): Promise<Record<string, any>> {
+  const history: SmokeHistoryItem[] = [];
+  let parsed = await parseTurn(SMOKE_INPUT, history);
+  if (parsed.trip && Array.isArray(parsed.trip.cities) && parsed.trip.cities.length > 0) return parsed.trip;
+  if (!["clarify", "recommend"].includes(String(parsed.action))) {
+    throw new Error(`parse did not return an executable trip: ${JSON.stringify(parsed)}`);
+  }
+  history.push(
+    { role: "user", content: SMOKE_INPUT },
+    { role: "assistant", content: String(parsed.reply ?? parsed.clarify_question ?? "请补充行程信息") },
+  );
+  parsed = await parseTurn(SMOKE_CLARIFICATION, history);
+  if (parsed.trip && Array.isArray(parsed.trip.cities) && parsed.trip.cities.length > 0) return parsed.trip;
+  throw new Error(`parse did not return an executable trip after clarification: ${JSON.stringify(parsed)}`);
+}
+
 function optionsFromArgv(argv: string[]): SmokeOptions {
   const baseUrl = argv.find((arg) => arg.startsWith("--base-url="))?.slice("--base-url=".length)
     ?? process.env.YOUBAN_SMOKE_BASE_URL
@@ -98,19 +124,10 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
   const today = new Date().toISOString().slice(0, 10);
   let draft: Record<string, any> = {};
   await timed(results, "parse", async () => {
-    const parsed = await jsonRequest(options, "/api/trip/parse", {
+    draft = await resolveSmokeDraft((text, history) => jsonRequest(options, "/api/trip/parse", {
       method: "POST",
-      body: JSON.stringify({
-        text: "明天去广州玩一天，1个人，公共交通，喜欢人文景点",
-        language: "zh-CN",
-        today,
-        history: [],
-      }),
-    }, userId);
-    draft = parsed.trip;
-    if (!draft || !Array.isArray(draft.cities) || draft.cities.length === 0) {
-      throw new Error(`parse did not return an executable trip: ${JSON.stringify(parsed)}`);
-    }
+      body: JSON.stringify({ text, language: "zh-CN", today, history }),
+    }, userId));
   });
 
   let token = "";

@@ -29,6 +29,11 @@ export interface WeatherForecast {
   report_time: string;
 }
 
+interface ResolvedDistrict {
+  name: string;
+  adcode: string;
+}
+
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 interface AmapOptions {
@@ -36,6 +41,9 @@ interface AmapOptions {
   fetch?: Fetch;
   baseUrl?: string;
   timeoutMs?: number;
+  minimumRequestIntervalMs?: number;
+  rateLimitRetryMs?: number;
+  rateLimitRetries?: number;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -65,12 +73,21 @@ export class AmapResearchSources {
   private readonly fetch: Fetch;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly minimumRequestIntervalMs: number;
+  private readonly rateLimitRetryMs: number;
+  private readonly rateLimitRetries: number;
+  private requestStartQueue = Promise.resolve();
+  private nextRequestAt = 0;
+  private readonly districtCache = new Map<string, Promise<ResolvedDistrict | null>>();
 
   constructor(options: AmapOptions) {
     this.apiKey = options.apiKey.trim();
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.baseUrl = (options.baseUrl ?? "https://restapi.amap.com").replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? 8_000;
+    this.minimumRequestIntervalMs = Math.max(0, options.minimumRequestIntervalMs ?? 125);
+    this.rateLimitRetryMs = Math.max(0, options.rateLimitRetryMs ?? 250);
+    this.rateLimitRetries = Math.max(0, Math.floor(options.rateLimitRetries ?? 2));
   }
 
   async searchAttractions(city: string, preferences: string[]): Promise<TrustedPoi[]> {
@@ -84,10 +101,12 @@ export class AmapResearchSources {
 
   async searchPoi(keywords: string, city: string, types = "110000"): Promise<TrustedPoi[]> {
     if (!this.apiKey || !city.trim() || !keywords.trim()) return [];
+    const district = await this.resolveDistrict(city);
+    if (!district) return [];
     const payload = await this.getJson("/v5/place/text", {
       key: this.apiKey,
       keywords: keywords.trim(),
-      region: city.trim(),
+      region: district.adcode,
       city_limit: "true",
       types,
       page_size: "20",
@@ -141,19 +160,11 @@ export class AmapResearchSources {
 
   async getWeather(city: string): Promise<WeatherForecast[]> {
     if (!this.apiKey || !city.trim()) return [];
-    const district = await this.getJson("/v3/config/district", {
-      key: this.apiKey,
-      keywords: city.trim(),
-      subdistrict: "0",
-      extensions: "base",
-    });
-    if (!district || stringValue(district.status) !== "1" || !Array.isArray(district.districts)) return [];
-    const match = district.districts.find(record);
-    const adcode = match ? stringValue(match.adcode) : "";
-    if (!adcode) return [];
+    const district = await this.resolveDistrict(city);
+    if (!district) return [];
     const payload = await this.getJson("/v3/weather/weatherInfo", {
       key: this.apiKey,
-      city: adcode,
+      city: district.adcode,
       extensions: "all",
       output: "JSON",
     });
@@ -163,8 +174,8 @@ export class AmapResearchSources {
     return forecast.casts.flatMap((raw): WeatherForecast[] => {
       if (!record(raw) || !/^\d{4}-\d{2}-\d{2}$/.test(stringValue(raw.date))) return [];
       return [{
-        city: stringValue(forecast.city) || city.trim(),
-        adcode: stringValue(forecast.adcode) || adcode,
+        city: stringValue(forecast.city) || district.name,
+        adcode: stringValue(forecast.adcode) || district.adcode,
         date: stringValue(raw.date),
         week: stringValue(raw.week),
         day_weather: stringValue(raw.dayweather),
@@ -183,13 +194,65 @@ export class AmapResearchSources {
   private async getJson(path: string, params: Record<string, string>): Promise<Record<string, unknown> | null> {
     const url = new URL(path, `${this.baseUrl}/`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-    try {
-      const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs) });
-      if (!response.ok) return null;
-      const payload: unknown = await response.json();
-      return record(payload) ? payload : null;
-    } catch {
-      return null;
+    for (let attempt = 0; attempt <= this.rateLimitRetries; attempt += 1) {
+      await this.waitForRequestSlot();
+      try {
+        const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs) });
+        if (!response.ok) return null;
+        const payload: unknown = await response.json();
+        if (!record(payload)) return null;
+        if (stringValue(payload.infocode) !== "10021") return payload;
+      } catch {
+        return null;
+      }
+      if (attempt < this.rateLimitRetries) {
+        await new Promise((resolve) => setTimeout(resolve, this.rateLimitRetryMs * (attempt + 1)));
+      }
     }
+    return null;
+  }
+
+  private resolveDistrict(city: string): Promise<ResolvedDistrict | null> {
+    const key = city.trim();
+    const cached = this.districtCache.get(key);
+    if (cached) return cached;
+    const resolving = this.findDistrict(key);
+    this.districtCache.set(key, resolving);
+    return resolving;
+  }
+
+  private async findDistrict(city: string): Promise<ResolvedDistrict | null> {
+    const ignored = new Set(["机动缓冲", "跨城", "天气", "休整", "返程", "转场", "缓冲"]);
+    const aliases = new Map([
+      ["帕米尔", "塔什库尔干"],
+      ["帕米尔高原", "塔什库尔干"],
+      ["塔县", "塔什库尔干"],
+    ]);
+    const keywords = [...new Set(city.normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? [])]
+      .map((value) => value.trim())
+      .filter((value) => value.length >= 2 && !ignored.has(value));
+    for (const keyword of [...new Set(keywords.map((value) => aliases.get(value) ?? value))]) {
+      const payload = await this.getJson("/v3/config/district", {
+        key: this.apiKey,
+        keywords: keyword,
+        subdistrict: "0",
+        extensions: "base",
+      });
+      if (!payload || stringValue(payload.status) !== "1" || !Array.isArray(payload.districts)) continue;
+      const match = payload.districts.find((entry) => record(entry) && stringValue(entry.adcode));
+      if (!record(match)) continue;
+      return { name: stringValue(match.name) || keyword, adcode: stringValue(match.adcode) };
+    }
+    return null;
+  }
+
+  private waitForRequestSlot(): Promise<void> {
+    const turn = this.requestStartQueue.then(async () => {
+      const delay = Math.max(0, this.nextRequestAt - performance.now());
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      this.nextRequestAt = performance.now() + this.minimumRequestIntervalMs;
+    });
+    this.requestStartQueue = turn.catch(() => {});
+    return turn;
   }
 }

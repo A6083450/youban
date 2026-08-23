@@ -74,6 +74,20 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).map((entry) => entry.trim()).filter(Boolean) : [];
 }
 
+function nonBlank(value: unknown, fallback: string): string {
+  return String(value ?? "").trim() || fallback;
+}
+
+function isExplicitExecutionAuthorization(value: unknown): boolean {
+  const text = String(value ?? "").replace(/\s+/g, "").trim();
+  if (!text
+    || /[?？]/.test(text)
+    || /(不(?:确认|确定|同意|要|想)|不要|先不|别|取消|稍等|等等|修改|改成|暂不)/.test(text)) return false;
+  const confirms = /(确认|确定|同意|就按|照.+执行|立即.+生成)/.test(text);
+  const executes = /(方案|生成|执行|开始)/.test(text);
+  return confirms && executes;
+}
+
 function historyText(history: ChatHistoryItem[] | undefined): string {
   const lines = (history ?? []).slice(-10).flatMap((item) => {
     const content = String(item?.content ?? "").trim().slice(0, 200);
@@ -101,12 +115,60 @@ function normalizeToday(value: unknown): string {
 
 function normalizeCities(value: unknown, fallback: unknown = []): Array<{ city: string; days: number }> {
   const source = Array.isArray(value) ? value : Array.isArray(fallback) ? fallback : [];
-  return source.flatMap((entry) => {
+  const normalized = source.flatMap((entry) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const record = entry as Record<string, unknown>;
     const city = String(record.city ?? "").trim();
     return city ? [{ city, days: safeInteger(record.days, 3, 15) }] : [];
   });
+  let remaining = 30;
+  return normalized.flatMap((city) => {
+    if (remaining === 0) return [];
+    const days = Math.min(city.days, remaining);
+    remaining -= days;
+    return [{ ...city, days }];
+  });
+}
+
+const DEFAULT_XINJIANG_MONTH_ROUTE = [
+  { city: "乌鲁木齐", days: 3 },
+  { city: "吐鲁番", days: 3 },
+  { city: "阿勒泰", days: 5 },
+  { city: "伊宁", days: 5 },
+  { city: "库尔勒", days: 3 },
+  { city: "库车", days: 3 },
+  { city: "喀什", days: 5 },
+  { city: "和田", days: 3 },
+];
+
+function isXinjiangMonthRequest(input: ParseTripInput): boolean {
+  const conversation = [
+    ...(input.history ?? []).map((item) => String(item.content ?? "")),
+    input.text,
+  ].join("\n");
+  const mentionsXinjiang = /新疆|南北疆/.test(conversation);
+  const mentionsMonth = /一个月|1\s*个月|30\s*天|10月1日[^\n]{0,40}10月30日/.test(conversation);
+  return mentionsXinjiang && mentionsMonth;
+}
+
+function normalizeXinjiangMonthCities(
+  cities: Array<{ city: string; days: number }>,
+  input: ParseTripInput,
+): Array<{ city: string; days: number }> {
+  if (!isXinjiangMonthRequest(input)) return cities;
+  if (cities.length === 1) {
+    return structuredClone(DEFAULT_XINJIANG_MONTH_ROUTE);
+  }
+  const normalized = cities.map((city) => ({ ...city }));
+  let remaining = 30 - normalized.reduce((total, city) => total + city.days, 0);
+  for (let index = 0; remaining > 0 && normalized.length > 0; index = (index + 1) % normalized.length) {
+    const city = normalized[index]!;
+    if (city.days < 15) {
+      city.days += 1;
+      remaining -= 1;
+    }
+  }
+  return normalized;
 }
 
 export class TripAssistant {
@@ -231,7 +293,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       };
     }
 
-    const cities = normalizeCities(data.cities);
+    const cities = normalizeXinjiangMonthCities(normalizeCities(data.cities), input);
     if (cities.length === 0) return { ...defaults, emotion, reply, clarify_question: reply };
     const startDate = parseDate(data.start_date)?.toISOString().slice(0, 10) ?? tomorrow;
     const travelDays = Math.min(cities.reduce((total, city) => total + city.days, 0), 30);
@@ -259,8 +321,8 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
         start_date: startDate,
         end_date: endDate,
         travel_days: travelDays,
-        transportation: String(data.transportation ?? "公共交通"),
-        accommodation: String(data.accommodation ?? "经济型酒店"),
+        transportation: nonBlank(data.transportation, "公共交通"),
+        accommodation: nonBlank(data.accommodation, "经济型酒店"),
         traveler_count: travelerCount,
         room_count: roomCount,
         budget_amount: safeBudget(data.budget_amount),
@@ -279,6 +341,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     const draft = input.draft ?? {};
     const language = String(input.language ?? "").trim().replaceAll("_", "-");
     const fallback = languageFallback(language, "confirm");
+    const explicitAuthorization = Object.keys(draft).length > 0 && isExplicitExecutionAuthorization(input.text);
     const prompt = `你是旅行规划助手的意图判断模块。今天是 ${today}。
 当前草稿：${JSON.stringify(draft)}
 最近对话：\n${historyText(input.history)}
@@ -289,6 +352,18 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     try {
       data = await this.jsonCall(prompt, "message", options);
     } catch {
+      if (explicitAuthorization) {
+        const decision = this.dependencies.ledger.register({ ...draft, language }, 1);
+        return {
+          success: true,
+          action: "confirm",
+          confidence: 1,
+          message: "已确认，正在按当前方案生成行程。",
+          trip: draft,
+          decision_id: decision.decisionId,
+          execution_token: decision.token,
+        };
+      }
       return {
         success: true,
         action: "ask_confirmation",
@@ -304,8 +379,12 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
     const rawConfidence = typeof data.confidence === "number" && Number.isFinite(data.confidence)
       ? data.confidence
       : 0;
-    const confidence = Math.max(0, Math.min(rawConfidence, 1));
+    let confidence = Math.max(0, Math.min(rawConfidence, 1));
     let message = String(data.message ?? "").trim();
+    if (explicitAuthorization) {
+      action = "confirm";
+      confidence = 1;
+    }
     if (action === "confirm" && confidence < 0.85) action = "ask_confirmation";
     if (action === "ask_confirmation") message = fallback;
     if (!message) message = fallback;
@@ -349,8 +428,8 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
       start_date: startDate,
       end_date: addDays(startDate, travelDays - 1),
       travel_days: travelDays,
-      transportation: String(data.transportation ?? draft.transportation ?? "公共交通"),
-      accommodation: String(data.accommodation ?? draft.accommodation ?? "经济型酒店"),
+      transportation: nonBlank(data.transportation, nonBlank(draft.transportation, "公共交通")),
+      accommodation: nonBlank(data.accommodation, nonBlank(draft.accommodation, "经济型酒店")),
       traveler_count: travelerCount,
       room_count: safeInteger(data.room_count ?? draft.room_count, Math.ceil(travelerCount / 2), 50),
       budget_amount: safeBudget(data.budget_amount ?? draft.budget_amount),

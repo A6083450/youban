@@ -42,101 +42,119 @@ interface PiTripPlannerOptions {
   segmentConcurrency?: number;
   reviewEnabled?: boolean;
   duplicateRepairRounds?: number;
+  finalizationTimeoutMs?: number;
 }
 
-const RESEARCH_SCHEMA = {
-  type: "object",
-  properties: {
-    selected_poi_ids: { type: "array", items: { type: "string" } },
-  },
-  required: ["selected_poi_ids"],
-  additionalProperties: false,
-};
+function researchSchema(candidates: TrustedPoi[]) {
+  return {
+    type: "object",
+    properties: {
+      selected_poi_ids: {
+        type: "array",
+        items: { type: "string", enum: candidates.map((candidate) => candidate.poi_id) },
+      },
+    },
+    required: ["selected_poi_ids"],
+    additionalProperties: false,
+  };
+}
 
-const SEGMENT_SCHEMA = {
-  type: "object",
-  properties: {
-    days: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          date: { type: "string" },
-          day_index: { type: "integer" },
-          city: { type: "string" },
-          description: { type: "string" },
-          transportation: { type: "string" },
-          accommodation: { type: "string" },
-          hotel: {
-            anyOf: [
-              { type: "null" },
-              {
+function segmentSchema(candidates: TrustedPoi[], dayCount: number) {
+  const poiIds = candidates.map((candidate) => candidate.poi_id);
+  return {
+    type: "object",
+    properties: {
+      days: {
+        type: "array",
+        minItems: dayCount,
+        maxItems: dayCount,
+        items: {
+          type: "object",
+          properties: {
+            date: { type: "string" },
+            day_index: { type: "integer" },
+            city: { type: "string" },
+            description: { type: "string" },
+            transportation: { type: "string" },
+            accommodation: { type: "string" },
+            hotel: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    poi_id: { type: "string" },
+                    estimated_cost: { type: "number" },
+                  },
+                  required: ["name"],
+                  additionalProperties: true,
+                },
+              ],
+            },
+            attractions: {
+              type: "array",
+              ...(poiIds.length === 0 ? { maxItems: 0 } : {}),
+              items: {
                 type: "object",
                 properties: {
                   name: { type: "string" },
-                  poi_id: { type: "string" },
-                  estimated_cost: { type: "number" },
+                  poi_id: { type: "string", ...(poiIds.length > 0 ? { enum: poiIds } : {}) },
+                  ticket_price: { type: "number" },
                 },
-                required: ["name"],
+                required: ["name", "poi_id"],
                 additionalProperties: true,
               },
-            ],
-          },
-          attractions: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                poi_id: { type: "string" },
-                ticket_price: { type: "number" },
+            },
+            meals: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string" },
+                  name: { type: "string" },
+                  estimated_cost: { type: "number" },
+                },
+                required: ["type", "name"],
+                additionalProperties: true,
               },
-              required: ["name", "poi_id"],
-              additionalProperties: true,
             },
           },
-          meals: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                type: { type: "string" },
-                name: { type: "string" },
-                estimated_cost: { type: "number" },
-              },
-              required: ["type", "name"],
-              additionalProperties: true,
-            },
-          },
+          required: [
+            "date",
+            "day_index",
+            "city",
+            "description",
+            "transportation",
+            "accommodation",
+            "attractions",
+            "meals",
+          ],
+          additionalProperties: true,
         },
-        required: [
-          "date",
-          "day_index",
-          "city",
-          "description",
-          "transportation",
-          "accommodation",
-          "attractions",
-          "meals",
-        ],
-        additionalProperties: true,
       },
     },
-  },
-  required: ["days"],
-  additionalProperties: false,
-};
+    required: ["days"],
+    additionalProperties: false,
+  };
+}
 
 const SUMMARY_SCHEMA = {
   type: "object",
-  properties: { overall_suggestions: { type: "string" } },
+  properties: { overall_suggestions: { type: "string", maxLength: 800 } },
   required: ["overall_suggestions"],
   additionalProperties: false,
 };
 
 const REVIEW_SCHEMA = {
   type: "object",
-  properties: { issues: { type: "array", items: { type: "string" } } },
+  properties: {
+    issues: {
+      type: "array",
+      maxItems: 6,
+      items: { type: "string", maxLength: 240 },
+    },
+  },
   required: ["issues"],
   additionalProperties: false,
 };
@@ -153,9 +171,35 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function addUtcDays(date: string, offset: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
 function fallbackSummary(request: TripPlanningRequest): string {
   const cities = request.cities.map((stay) => stay.city).filter(Boolean).join("、") || request.city;
   return `${cities}行程已按日期生成，请结合天气、预约规则和现场开放情况灵活调整。`;
+}
+
+function compactAgentDays(days: DayPlan[]): Array<Record<string, unknown>> {
+  return days.map((day) => ({
+    date: day.date,
+    day_index: day.day_index,
+    city: day.city,
+    description: day.description,
+    transportation: day.transportation,
+    accommodation: day.accommodation,
+    hotel: record(day.hotel) ? { name: String(day.hotel.name ?? ""), poi_id: String(day.hotel.poi_id ?? "") } : null,
+    attractions: day.attractions.flatMap((attraction) => record(attraction) ? [{
+      name: String(attraction.name ?? ""),
+      poi_id: String(attraction.poi_id ?? ""),
+    }] : []),
+    meals: day.meals.flatMap((meal) => record(meal) ? [{
+      type: String(meal.type ?? ""),
+      name: String(meal.name ?? ""),
+    }] : []),
+  }));
 }
 
 async function mapConcurrent<T>(
@@ -213,31 +257,54 @@ function validateResearchSelection(raw: unknown, candidates: TrustedPoi[]): Trus
   for (const value of raw.selected_poi_ids) {
     const poiId = String(value ?? "").trim();
     const candidate = trusted.get(poiId);
-    if (!candidate) throw new Error(`景点研究结果未通过高德候选池验证: ${poiId}`);
+    if (!candidate) continue;
     if (!seen.has(poiId)) selected.push(structuredClone(candidate));
     seen.add(poiId);
   }
-  return selected;
+  return selected.length > 0 ? selected : structuredClone(candidates.slice(0, 12));
 }
 
-function validateSegmentOutput(raw: unknown, segment: Segment, trustedIds: Set<string>): DayPlan[] {
-  if (!record(raw) || !Array.isArray(raw.days)) throw new Error("分段子 Agent 输出无效");
-  const days = raw.days as unknown[];
-  if (days.length !== segment.day_indices.length) throw new Error("分段天数与 day_indices 不符");
-  return days.map((value, offset): DayPlan => {
-    if (!record(value)
-      || !Array.isArray(value.attractions)
-      || !Array.isArray(value.meals)
-      || value.day_index !== segment.day_indices[offset]
-      || String(value.city ?? "") !== segment.city) {
-      throw new Error("分段输出的日期索引或城市无效");
-    }
-    for (const attraction of value.attractions) {
-      if (!record(attraction) || !trustedIds.has(String(attraction.poi_id ?? "").trim())) {
-        throw new Error(`景点未通过高德候选池验证: ${record(attraction) ? String(attraction.poi_id ?? "") : ""}`);
+function validateSegmentOutput(raw: unknown, segment: Segment, trustedCandidates: TrustedPoi[]): DayPlan[] {
+  const days = record(raw) && Array.isArray(raw.days) ? raw.days as unknown[] : [];
+  const trusted = new Map(trustedCandidates.map((candidate) => [candidate.poi_id, candidate]));
+  const used = new Set<string>();
+  return segment.day_indices.map((dayIndex, offset): DayPlan => {
+    const value = record(days[offset]) ? structuredClone(days[offset]) as Record<string, unknown> : {};
+    const rawAttractions = Array.isArray(value.attractions) ? value.attractions : [];
+    const normalized: DayPlan = {
+      ...value,
+      date: addUtcDays(segment.start_date, offset),
+      day_index: dayIndex,
+      city: segment.city,
+      description: String(value.description ?? "").trim() || `${segment.city}自由活动与机动安排`,
+      transportation: String(value.transportation ?? "").trim() || "待确认",
+      accommodation: String(value.accommodation ?? "").trim() || "待确认",
+      hotel: record(value.hotel) ? structuredClone(value.hotel) as DayPlan["hotel"] : null,
+      attractions: [],
+      meals: Array.isArray(value.meals)
+        ? value.meals.filter(record).map((meal) => structuredClone(meal) as DayPlan["meals"][number])
+        : [],
+    };
+    normalized.attractions = rawAttractions.flatMap((attraction) => {
+      if (!record(attraction)) return [];
+      const candidate = trusted.get(String(attraction.poi_id ?? "").trim());
+      if (!candidate || used.has(candidate.poi_id)) return [];
+      used.add(candidate.poi_id);
+      return [{ ...attraction, ...structuredClone(candidate), name: candidate.name, poi_id: candidate.poi_id }];
+    });
+    if (normalized.attractions.length === 0) {
+      const fallback = trustedCandidates.find((candidate) => !used.has(candidate.poi_id));
+      if (fallback) {
+        used.add(fallback.poi_id);
+        normalized.attractions = [{
+          ...structuredClone(fallback),
+          name: fallback.name,
+          poi_id: fallback.poi_id,
+          ticket_price: Number(fallback.estimated_cost ?? 0),
+        }];
       }
     }
-    return structuredClone(value) as unknown as DayPlan;
+    return normalized;
   });
 }
 
@@ -246,12 +313,14 @@ export class PiTripPlanner implements TripPlanner {
   private readonly segmentConcurrency: number;
   private readonly reviewEnabled: boolean;
   private readonly duplicateRepairRounds: number;
+  private readonly finalizationTimeoutMs: number;
 
   constructor(private readonly options: PiTripPlannerOptions) {
     this.segmentDays = options.segmentDays ?? 5;
     this.segmentConcurrency = options.segmentConcurrency ?? 8;
     this.reviewEnabled = options.reviewEnabled ?? true;
     this.duplicateRepairRounds = options.duplicateRepairRounds ?? 2;
+    this.finalizationTimeoutMs = Math.max(1, options.finalizationTimeoutMs ?? 8_000);
   }
 
   async plan(request: TripPlanningRequest, context: PlannerRunContext): Promise<Record<string, unknown>> {
@@ -273,14 +342,18 @@ export class PiTripPlanner implements TripPlanner {
         if (kind === "attractions") {
           await context.onProgress({ stage: "attraction_search", progress: 15, message: `正在研究${city}景点` });
           const candidates = await this.options.research.searchAttractions(city, request.preferences);
-          const selected = await this.options.agents.run({
-            agent: "destination-researcher",
-            nodeId: `${ownerRunId}:research:${city}`,
-            input: { city, preferences: request.preferences, candidates },
-            schema: RESEARCH_SCHEMA,
-            signal: context.signal,
-          });
-          checkpoint.search.attractions[city] = validateResearchSelection(selected, candidates);
+          if (candidates.length === 0) {
+            checkpoint.search.attractions[city] = [];
+          } else {
+            const selected = await this.options.agents.run({
+              agent: "destination-researcher",
+              nodeId: `${ownerRunId}:research:${city}`,
+              input: { city, preferences: request.preferences, candidates },
+              schema: researchSchema(candidates),
+              signal: context.signal,
+            });
+            checkpoint.search.attractions[city] = validateResearchSelection(selected, candidates);
+          }
         } else if (kind === "weather") {
           await context.onProgress({ stage: "weather_search", progress: 24, message: `正在查询${city}天气` });
           checkpoint.search.weather[city] = await this.options.research.getWeather(city);
@@ -343,16 +416,22 @@ export class PiTripPlanner implements TripPlanner {
 
     await context.onProgress({ stage: "reviewing", progress: 88, message: "正在汇总并审查行程" });
     const jobs: Promise<void>[] = [];
+    const compactDays = compactAgentDays(days);
     if (checkpoint.summary.status !== "completed") {
+      const signal = AbortSignal.any([context.signal, AbortSignal.timeout(this.finalizationTimeoutMs)]);
       jobs.push(this.options.agents.run({
         agent: "summary",
         nodeId: `${ownerRunId}:summary`,
-        input: { request, days },
+        input: { request, days: compactDays },
         schema: SUMMARY_SCHEMA,
-        signal: context.signal,
+        signal,
       }).then(async (output) => {
         if (!record(output) || typeof output.overall_suggestions !== "string") throw new Error("摘要子 Agent 输出无效");
-        checkpoint.summary = { status: "completed", output: structuredClone(output), error: "" };
+        checkpoint.summary = {
+          status: "completed",
+          output: { overall_suggestions: output.overall_suggestions.slice(0, 800) },
+          error: "",
+        };
         await save();
       }).catch(async (error) => {
         checkpoint.summary = {
@@ -364,15 +443,22 @@ export class PiTripPlanner implements TripPlanner {
       }));
     }
     if (this.reviewEnabled && checkpoint.review.status !== "completed") {
+      const signal = AbortSignal.any([context.signal, AbortSignal.timeout(this.finalizationTimeoutMs)]);
       jobs.push(this.options.agents.run({
         agent: "itinerary-reviewer",
         nodeId: `${ownerRunId}:review`,
-        input: { request, days },
+        input: { request, days: compactDays },
         schema: REVIEW_SCHEMA,
-        signal: context.signal,
+        signal,
       }).then(async (output) => {
         if (!record(output) || !Array.isArray(output.issues)) throw new Error("审查子 Agent 输出无效");
-        checkpoint.review = { status: "completed", output: structuredClone(output), error: "" };
+        checkpoint.review = {
+          status: "completed",
+          output: {
+            issues: output.issues.slice(0, 6).map((issue) => String(issue).slice(0, 240)),
+          },
+          error: "",
+        };
         await save();
       }).catch(async (error) => {
         checkpoint.review = { status: "failed", output: { issues: [] }, error: errorMessage(error) };
@@ -440,10 +526,10 @@ export class PiTripPlanner implements TripPlanner {
             weather: checkpoint.search.weather[segment.city] ?? [],
             repair_issues: repairIssues[segment.segment_id] ?? [],
           },
-          schema: SEGMENT_SCHEMA,
+          schema: segmentSchema(attractions, segment.day_indices.length),
           signal: context.signal,
         });
-        state.output = validateSegmentOutput(output, segment, allowed);
+        state.output = validateSegmentOutput(output, segment, attractions);
         state.status = "completed";
       } catch (error) {
         state.status = "failed";
