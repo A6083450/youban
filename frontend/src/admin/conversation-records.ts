@@ -21,6 +21,9 @@ export type AdminRecordPageFetcher = (
   page: Readonly<AdminRecordPage>,
 ) => Promise<AdminConversationRecord[]>
 
+export const ADMIN_RECORD_MAX_PAGES = 100
+export const ADMIN_RECORD_MAX_RECORDS = 50_000
+
 export const adminRecordKindKey = (
   record: Pick<AdminConversationRecord, 'kind'>,
 ): 'admin.trips.kindConversation' | 'admin.trips.kindPlan' => (
@@ -66,12 +69,20 @@ export const loadAllAdminRecordPages = async (
 ): Promise<AdminConversationRecord[]> => {
   const records = new Map<string, AdminConversationRecord>()
   let offset = 0
-  while (true) {
+  for (let pageIndex = 0; pageIndex < ADMIN_RECORD_MAX_PAGES; pageIndex += 1) {
     const page = await fetchPage(visibility, { limit: pageSize, offset })
+    let added = 0
     for (const record of page) {
-      if (!records.has(record.record_id)) records.set(record.record_id, record)
+      if (records.has(record.record_id)) continue
+      records.set(record.record_id, record)
+      added += 1
+      if (records.size >= ADMIN_RECORD_MAX_RECORDS) break
     }
-    if (page.length < pageSize) break
+    if (
+      page.length < pageSize
+      || added === 0
+      || records.size >= ADMIN_RECORD_MAX_RECORDS
+    ) break
     offset += page.length
   }
   return [...records.values()]
@@ -90,6 +101,9 @@ export const createAdminRecordVisibilityLoader = (
 ) => {
   let generation = 0
   return {
+    invalidate(): void {
+      generation += 1
+    },
     async load(visibility: AdminRecordVisibility): Promise<AdminRecordVisibilityLoadResult> {
       const requestGeneration = ++generation
       try {

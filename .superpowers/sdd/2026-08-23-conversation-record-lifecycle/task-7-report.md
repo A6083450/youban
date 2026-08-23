@@ -73,3 +73,34 @@
 - Response compatibility, namespaced IDs, encoded permanent-delete paths, and the separate legacy trip-delete route are unchanged.
 - The user selector and counts intentionally reflect the currently selected visibility result; no hidden all-visibility request or 500-row truncation was reintroduced.
 - No unrelated worktree changes were staged. Backend timings and the existing appearance, theme, and chat changes remain untouched.
+
+## Review Fix Round 2: Bounded Paging and Delete/List Races
+
+### RED/GREEN Evidence
+
+- RED: a full 500-row page repeated forever exceeded the test's bounded fourth call and threw `pagination did not terminate`.
+- RED: unique full pages continued beyond the 100-page contract and threw `pagination exceeded hard page limit`.
+- RED: the delete/list race failed with `loader.invalidate is not a function`, allowing an already-issued list generation to remain current after DELETE.
+- GREEN: `cd frontend && bun test src/admin/conversation-records.test.ts` passed with 10 tests, 0 failures, and 27 assertions.
+
+### Implementation
+
+- The complete-page loader now stops when a full page contributes no new namespaced record IDs, while a duplicate-overlap page still advances whenever it contributes at least one new ID.
+- Added conservative hard bounds of 100 pages and 50,000 unique records, preventing a changing or defective server response from keeping the admin request alive indefinitely.
+- Added explicit list-generation invalidation. A successful permanent delete invalidates every earlier list request before locally removing the row, then reloads the currently selected visibility as the new authoritative generation.
+- Existing generation and visibility guards ensure a visibility change during DELETE is honored and the late pre-delete response cannot resurrect the removed record.
+
+### Verification
+
+- Focused admin tests: `cd frontend && bun test src/admin/conversation-records.test.ts src/admin/navigation.test.ts src/admin/skill-management.test.ts` passed with 32 tests, 0 failures, and 357 assertions.
+- Full frontend suite: `cd frontend && bun test src` passed with 162 tests, 0 failures, and 513 assertions across 25 files.
+- Frontend type check: `cd frontend && bunx vue-tsc --noEmit` passed with no diagnostics.
+- Production build: `cd frontend && bun run build` passed with only the existing unresolved static-resource and chunk-size warnings.
+- `git diff --check` passed.
+- Backend code was unchanged, so the backend suite was not rerun in this review round.
+
+### Self-review and Concerns
+
+- The 50,000-record bound is intentionally a defensive ceiling. Normal server pagination, including the existing more-than-500 regression, remains unchanged below that ceiling.
+- Permanent-delete routing, namespaced IDs, processing-state protection, and local user/status/search projections are unchanged.
+- No unrelated worktree changes were staged; backend timings and the existing appearance, theme, and chat work remain untouched.

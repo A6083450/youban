@@ -198,6 +198,7 @@ const removeRecord = async (item: AdminConversationRecord) => {
   deletingId.value = item.record_id
   try {
     await adminPermanentlyDeleteRecord(item.record_id)
+    visibilityLoader.invalidate()
     records.value = records.value.filter((record) => record.record_id !== item.record_id)
     if (
       selectedUserKey.value !== 'all' &&
@@ -205,6 +206,7 @@ const removeRecord = async (item: AdminConversationRecord) => {
     ) {
       selectedUserKey.value = 'all'
     }
+    await loadRecords()
     message.success(t('admin.trips.deleted'))
   } catch (error: any) {
     if (isAdminAuthError(error)) {
