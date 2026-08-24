@@ -475,6 +475,8 @@ export interface BackendRuntimeSettings {
   openai_api_key: string
   openai_base_url: string
   openai_model: string
+  llm_thinking_enabled: boolean
+  llm_thinking_visible: boolean
 }
 
 export interface RuntimeSettings {
@@ -487,6 +489,8 @@ export interface RuntimeSettings {
   openai_api_key: string
   openai_base_url: string
   openai_model: string
+  llm_thinking_enabled: boolean
+  llm_thinking_visible: boolean
 }
 
 // ============ AI 行程问答类型 ============

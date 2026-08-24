@@ -65,6 +65,8 @@ const DEFAULT_RUNTIME_BACKEND_SETTINGS: BackendRuntimeSettings = {
   openai_api_key: '',
   openai_base_url: '',
   openai_model: '',
+  llm_thinking_enabled: false,
+  llm_thinking_visible: false,
 }
 
 export const RUNTIME_SETTINGS_UPDATED_EVENT = 'tripstar:runtime-settings-updated'
@@ -203,6 +205,8 @@ const normalizeBackendRuntimeSettings = (
   openai_model:
     normalizeText(data?.openai_model ?? DEFAULT_RUNTIME_BACKEND_SETTINGS.openai_model) ||
     DEFAULT_RUNTIME_BACKEND_SETTINGS.openai_model,
+  llm_thinking_enabled: Boolean(data?.llm_thinking_enabled),
+  llm_thinking_visible: Boolean(data?.llm_thinking_visible),
 })
 
 const emitRuntimeSettingsUpdated = () => {
@@ -360,6 +364,8 @@ export async function saveAdminRuntimeSettings(settings: RuntimeSettings): Promi
     openai_api_key: settings.openai_api_key,
     openai_base_url: settings.openai_base_url,
     openai_model: settings.openai_model,
+    llm_thinking_enabled: Boolean(settings.llm_thinking_enabled),
+    llm_thinking_visible: Boolean(settings.llm_thinking_enabled && settings.llm_thinking_visible),
   }
   setRuntimeApiBaseUrl(targetApiBaseUrl)
 

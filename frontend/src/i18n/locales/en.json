@@ -178,8 +178,14 @@
       "googleMapsProxy": "Google Maps Proxy",
       "openaiBaseUrl": "OpenAI-Compatible Base URL",
       "openaiModel": "OpenAI-Compatible Model",
+      "thinkingEnabled": "Enable model thinking",
+      "thinkingVisible": "Show model thinking",
       "openaiApiKey": "OpenAI-Compatible API Key",
       "xhsCookie": "Xiaohongshu Cookie"
+    },
+    "help": {
+      "thinkingEnabled": "Allow the model to use its thinking process.",
+      "thinkingVisible": "Show model thinking in generated output. It is hidden when thinking is disabled."
     },
     "placeholders": {
       "apiBaseUrl": "e.g. http://localhost:8000",

@@ -178,8 +178,14 @@
       "googleMapsProxy": "Google Maps 代理地址",
       "openaiBaseUrl": "OpenAI 兼容格式 Base URL",
       "openaiModel": "OpenAI 兼容格式 Model",
+      "thinkingEnabled": "启用模型思考",
+      "thinkingVisible": "显示模型思考",
       "openaiApiKey": "OpenAI 兼容格式 API Key",
       "xhsCookie": "小红书 Cookie"
+    },
+    "help": {
+      "thinkingEnabled": "允许模型使用思考过程。",
+      "thinkingVisible": "在生成内容中显示模型思考；关闭思考后会自动隐藏。"
     },
     "placeholders": {
       "apiBaseUrl": "例如：http://localhost:8000",

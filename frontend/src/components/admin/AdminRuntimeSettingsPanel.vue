@@ -30,6 +30,21 @@
             allow-clear
           />
         </a-form-item>
+        <a-form-item
+          :label="t('settings.labels.thinkingEnabled')"
+          :help="t('settings.help.thinkingEnabled')"
+        >
+          <a-switch v-model:checked="settingsForm.llm_thinking_enabled" />
+        </a-form-item>
+        <a-form-item
+          :label="t('settings.labels.thinkingVisible')"
+          :help="t('settings.help.thinkingVisible')"
+        >
+          <a-switch
+            v-model:checked="settingsForm.llm_thinking_visible"
+            :disabled="!settingsForm.llm_thinking_enabled"
+          />
+        </a-form-item>
         <a-form-item :label="t('settings.labels.openaiApiKey')">
           <a-input-password v-model:value="settingsForm.openai_api_key" allow-clear />
         </a-form-item>
@@ -71,6 +86,8 @@ const settingsForm = reactive<RuntimeSettings>({
   openai_api_key: '',
   openai_base_url: '',
   openai_model: '',
+  llm_thinking_enabled: false,
+  llm_thinking_visible: false,
 })
 
 const loadSettings = async () => {
@@ -90,6 +107,7 @@ const loadSettings = async () => {
 }
 
 const saveNow = async () => {
+  if (!settingsForm.llm_thinking_enabled) settingsForm.llm_thinking_visible = false
   settingsSaving.value = true
   try {
     const saved = await saveAdminRuntimeSettings({ ...settingsForm })

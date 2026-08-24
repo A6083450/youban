@@ -171,8 +171,14 @@
       "googleMapsProxy": "Google Maps プロキシ",
       "openaiBaseUrl": "OpenAI 格式 Base URL",
       "openaiModel": "OpenAI 格式 Model",
+      "thinkingEnabled": "モデルの思考を有効にする",
+      "thinkingVisible": "モデルの思考を表示",
       "openaiApiKey": "OpenAI 格式 API Key",
       "xhsCookie": "小紅書 Cookie"
+    },
+    "help": {
+      "thinkingEnabled": "モデルが思考プロセスを使用できるようにします。",
+      "thinkingVisible": "生成内容にモデルの思考を表示します。思考を無効にすると非表示になります。"
     },
     "placeholders": {
       "apiBaseUrl": "例: http://localhost:8000",
