@@ -80,6 +80,11 @@ import { normalizeTripPlanningRequest } from "../domain/trip-request.ts";
 import { SqliteUserRepository, UserInputError } from "../domain/users.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
+import {
+  startPlanGeneration,
+  type PlanGenerationCurrent,
+  type PlanGenerationRun,
+} from "../services/plan-generation-coordinator.ts";
 import type { ParentAgentScope, YoubanParentAgent } from "../agents/persistent-parent-agent.ts";
 import {
   adminSkillValidationFailure,
@@ -120,6 +125,10 @@ export interface HttpRuntimeOptions {
   skillService?: AdminSkillService;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   conversationTitleService?: ConversationTitleService;
+  planningClock?: {
+    now?: () => number;
+    sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  };
   serviceFactories?: {
     parentAgent?: (options: DefaultParentAgentOptions) => YoubanParentAgent;
     planner?: (options: DefaultTripPlannerOptions) => TripPlanner;
@@ -196,8 +205,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const tasks = new SqliteTaskStore(databasePath);
   const users = new SqliteUserRepository(databasePath);
   const conversations = new ConversationRepository(databasePath);
+  const conversationSessions = new ConversationSessionRepository(databasePath);
   const conversationRecords = new ConversationRecordService(
-    new ConversationSessionRepository(databasePath),
+    conversationSessions,
     tasks,
     imagesDir,
   );
@@ -306,6 +316,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const unsubscribers = new Map<string, () => void>();
   const webSockets = new Map<string, { close(code?: number, reason?: string): void }>();
   const activeRuns = new Set<Promise<void>>();
+  const activePlanning = new Map<string, {
+    controller: AbortController;
+    coordinator?: PlanGenerationRun;
+  }>();
   const activeServiceCalls = new Set<Promise<unknown>>();
   const titleJobs = new Map<string, Promise<void>>();
   let serviceGate = Promise.resolve();
@@ -623,20 +637,35 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     throw error;
   };
 
-  const runPlanning = async (taskId: string): Promise<void> => {
-    const startedAt = Date.now();
+  const cancelPlanning = (taskId: string): void => {
+    const active = activePlanning.get(taskId);
+    if (!active) return;
+    active.coordinator?.cancel();
+    if (!active.controller.signal.aborted) {
+      active.controller.abort(new Error("plan generation cancelled"));
+    }
+  };
+
+  const runPlanning = async (
+    taskId: string,
+    active: { controller: AbortController; coordinator?: PlanGenerationRun },
+  ): Promise<void> => {
+    const now = options.planningClock?.now ?? Date.now;
+    const startedAt = now();
     try {
       const initial = tasks.get(taskId);
       if (!initial?.request_payload) throw new Error("原始行程请求不可重试");
-      const checkpoint = normalizeCheckpoint(initial.checkpoint);
-      const result = await withServices(({ planner: activePlanner }) => activePlanner.plan(
+      let latestCheckpoint = normalizeCheckpoint(initial.checkpoint);
+      const signal = AbortSignal.any([planningAbort.signal, active.controller.signal]);
+      const enhanced = withServices(({ planner: activePlanner }) => activePlanner.plan(
         initial.request_payload as TripPlanningRequest,
         {
-          checkpoint,
-          signal: planningAbort.signal,
+          checkpoint: latestCheckpoint,
+          signal,
           onCheckpoint(nextCheckpoint) {
+            latestCheckpoint = structuredClone(nextCheckpoint);
             const current = tasks.get(taskId);
-            if (!current || closed) throw new Error("任务不存在");
+            if (!current || closed || current.status !== "processing") return;
             tasks.save({
               ...current,
               checkpoint: structuredClone(nextCheckpoint) as unknown as Record<string, unknown>,
@@ -644,7 +673,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           },
           onProgress(update) {
             const current = tasks.get(taskId);
-            if (!current || closed) throw new Error("任务不存在");
+            if (!current || closed || current.status !== "processing") return;
             tasks.save({
               ...current,
               stage: update.stage,
@@ -655,21 +684,106 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           },
         },
       ));
-      const current = tasks.get(taskId);
-      if (!current || closed) return;
-      tasks.save({
-        ...current,
-        status: "completed",
-        stage: "completed",
-        progress: 100,
-        message: "旅行计划生成完成",
-        result,
-        error: null,
-        execution: { elapsed_ms: Date.now() - startedAt },
-      }, { immediate: true });
+      const request = initial.request_payload as TripPlanningRequest;
+      const coordinator = startPlanGeneration({
+        request,
+        signal,
+        enhanced,
+        latestCheckpoint: () => latestCheckpoint,
+        now,
+        sleep: options.planningClock?.sleep,
+        publishFirst(quality, result, metadata) {
+          const current = tasks.get(taskId);
+          if (!current
+            || closed
+            || signal.aborted
+            || current.status !== "processing") return false;
+          tasks.save({
+            ...current,
+            status: "completed",
+            stage: "completed",
+            progress: 100,
+            message: "旅行计划生成完成",
+            result,
+            error: null,
+            plan_quality: quality,
+            enhancement_status: metadata.enhancementStatus,
+            deadline_seconds: metadata.deadlineSeconds,
+            generation_elapsed_ms: metadata.elapsedMs,
+            fast_plan_revision: metadata.fastPlanRevision,
+            execution: { elapsed_ms: metadata.elapsedMs },
+          }, { immediate: true });
+          return true;
+        },
+        readCurrent(): PlanGenerationCurrent | null {
+          const current = tasks.get(taskId);
+          if (!current || closed || signal.aborted || tasks.isUserDeleted(taskId)) return null;
+          const result = current.result !== null
+            && typeof current.result === "object"
+            && !Array.isArray(current.result)
+            ? current.result as Record<string, unknown>
+            : null;
+          return {
+            status: current.status,
+            quality: current.plan_quality,
+            result,
+            fastPlanRevision: current.fast_plan_revision,
+          };
+        },
+        publishEnhancement(result, expectedFastRevision, metadata) {
+          const current = tasks.get(taskId);
+          if (!current
+            || closed
+            || signal.aborted
+            || tasks.isUserDeleted(taskId)
+            || current.status !== "completed"
+            || current.plan_quality !== "fast"
+            || current.fast_plan_revision !== expectedFastRevision
+            || planRevision((current.result as Record<string, unknown> | null)?.data) !== expectedFastRevision) {
+            return false;
+          }
+          tasks.save({
+            ...current,
+            result,
+            plan_quality: "enhanced",
+            enhancement_status: "completed",
+            generation_elapsed_ms: metadata.elapsedMs,
+            execution: { ...current.execution, elapsed_ms: metadata.elapsedMs },
+          }, { immediate: true });
+          return true;
+        },
+        updateEnhancement(enhancementStatus, message, elapsedMs) {
+          const current = tasks.get(taskId);
+          if (!current
+            || closed
+            || signal.aborted
+            || tasks.isUserDeleted(taskId)
+            || current.status !== "completed"
+            || current.plan_quality !== "fast") return false;
+          tasks.save({
+            ...current,
+            enhancement_status: enhancementStatus,
+            generation_elapsed_ms: elapsedMs,
+            message: message ? `旅行计划已生成；增强版本生成失败：${message}` : current.message,
+            execution: { ...current.execution, elapsed_ms: elapsedMs },
+          }, { immediate: true });
+          return true;
+        },
+      });
+      active.coordinator = coordinator;
+      await coordinator.firstPublished;
+      const first = tasks.get(taskId);
+      if (first?.status === "completed") {
+        try {
+          conversationRecords.markCompleted(taskId);
+        } catch {
+          // The persisted task result is authoritative over its conversation projection.
+        }
+      }
+      await coordinator.enhancementSettled;
     } catch (error) {
       const current = tasks.get(taskId);
-      if (!current || closed) return;
+      if (!current || closed || current.status !== "processing") return;
       const message = error instanceof Error ? error.message : String(error);
       tasks.save({
         ...current,
@@ -678,7 +792,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         progress: 100,
         message,
         error: message,
-        execution: { elapsed_ms: Date.now() - startedAt },
+        execution: { elapsed_ms: now() - startedAt },
       }, { immediate: true });
       try {
         conversationRecords.markFailed(taskId);
@@ -687,17 +801,21 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }
       return;
     }
-    try {
-      conversationRecords.markCompleted(taskId);
-    } catch {
-      // The persisted task result is authoritative over its conversation projection.
-    }
   };
 
   const startPlanning = (taskId: string): void => {
-    const run = Promise.resolve().then(() => runPlanning(taskId));
+    cancelPlanning(taskId);
+    const active = { controller: new AbortController() } as {
+      controller: AbortController;
+      coordinator?: PlanGenerationRun;
+    };
+    activePlanning.set(taskId, active);
+    const run = Promise.resolve().then(() => runPlanning(taskId, active));
     activeRuns.add(run);
-    void run.finally(() => activeRuns.delete(run));
+    void run.finally(() => {
+      activeRuns.delete(run);
+      if (activePlanning.get(taskId) === active) activePlanning.delete(taskId);
+    });
   };
 
   const editTrip = async (
@@ -941,6 +1059,17 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .delete("/api/admin/records/:recordId", ({ params, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
+      if (params.recordId.startsWith("task:")) {
+        const taskId = params.recordId.slice("task:".length);
+        if (tasks.get(taskId)?.status !== "processing") cancelPlanning(taskId);
+      } else if (params.recordId.startsWith("session:")) {
+        const sessionId = params.recordId.slice("session:".length);
+        const session = conversationSessions.listAll().find((item) => item.sessionId === sessionId);
+        const task = session?.planId
+          ? tasks.all().find((item) => item.plan_id === session.planId)
+          : undefined;
+        if (task?.status !== "processing") cancelPlanning(task?.task_id ?? "");
+      }
       const result = conversationRecords.permanentlyDeleteRecord(params.recordId);
       if (result.status === "not_found") return status(404, { detail: "记录不存在" });
       if (result.status === "conflict") {
@@ -962,6 +1091,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .delete("/api/admin/trips/:taskId", ({ params, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
+      if (tasks.get(params.taskId)?.status !== "processing") cancelPlanning(params.taskId);
       const result = conversationRecords.permanentlyDeleteTask(params.taskId);
       if (result.status === "not_found") return status(404, { detail: "计划不存在" });
       if (result.status === "conflict") {
@@ -1078,9 +1208,17 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       },
     })
     .delete("/api/conversations/:sessionId", ({ params, headers, status }) => {
+      const userId = (headers["x-user-id"] ?? "").trim();
+      const session = conversationSessions.getOwned(params.sessionId, userId);
+      const linkedTask = session?.planId
+        ? tasks.all().find((task) => task.plan_id === session.planId && task.user_id === userId)
+        : undefined;
+      if (linkedTask?.status === "completed" && linkedTask.plan_quality === "fast") {
+        cancelPlanning(linkedTask.task_id);
+      }
       const removed = conversationRecords.softDeleteSession(
         params.sessionId,
-        (headers["x-user-id"] ?? "").trim(),
+        userId,
       );
       return removed ? { success: true as const } : status(404, { detail: "会话不存在" });
     }, {
@@ -1270,6 +1408,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         details: [],
         result: null,
         error: null,
+        plan_quality: null,
+        enhancement_status: null,
+        deadline_seconds: null,
+        generation_elapsed_ms: null,
+        fast_plan_revision: null,
+        execution: {},
         checkpoint: body.restart_all
           ? emptyCheckpoint() as unknown as Record<string, unknown>
           : task.checkpoint,
@@ -1286,13 +1430,23 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status === "completed") {
-        return {
+        const response: Record<string, unknown> = {
           task_id: task.task_id,
           plan_id: task.plan_id,
           status: "completed",
           result: task.result,
           execution: task.execution,
         };
+        for (const [key, value] of Object.entries({
+          plan_quality: task.plan_quality,
+          enhancement_status: task.enhancement_status,
+          deadline_seconds: task.deadline_seconds,
+          generation_elapsed_ms: task.generation_elapsed_ms,
+          fast_plan_revision: task.fast_plan_revision,
+        })) {
+          if (value !== null) response[key] = value;
+        }
+        return response;
       }
       if (task.status === "failed") {
         const response: Record<string, unknown> = {
@@ -1605,6 +1759,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
       }
       const userId = validAdminToken(headers) ? task.user_id : (headers["x-user-id"] ?? "").trim();
+      cancelPlanning(task.task_id);
       if (!conversationRecords.softDeletePlan(task.plan_id, userId)) {
         return status(404, { detail: "计划不存在" });
       }
@@ -1784,6 +1939,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     if (closed) return;
     closed = true;
     planningAbort.abort(new Error("服务正在关闭"));
+    for (const taskId of activePlanning.keys()) cancelPlanning(taskId);
     for (const socket of webSockets.values()) socket.close(1012, "服务正在关闭");
     webSockets.clear();
     for (const unsubscribe of unsubscribers.values()) unsubscribe();

@@ -26,6 +26,19 @@ export const TripTaskStatusSchema = Type.Union([
   Type.Literal("failed"),
 ]);
 
+export const PlanQualitySchema = Type.Union([
+  Type.Literal("fast"),
+  Type.Literal("enhanced"),
+]);
+
+export const EnhancementStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("running"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("skipped"),
+]);
+
 export const TripTaskStageSchema = Type.Union([
   Type.Literal("submitted"),
   Type.Literal("initializing"),
@@ -71,6 +84,11 @@ export const TripTaskEventSchema = Type.Object({
   result: Type.Optional(Type.Unknown()),
   checkpoint_summary: Type.Optional(TripCheckpointSummarySchema),
   request_payload: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  plan_quality: Type.Optional(PlanQualitySchema),
+  enhancement_status: Type.Optional(EnhancementStatusSchema),
+  deadline_seconds: Type.Optional(Type.Number({ minimum: 0 })),
+  generation_elapsed_ms: Type.Optional(Type.Number({ minimum: 0 })),
+  fast_plan_revision: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 export const TripHistoryItemSchema = Type.Object({

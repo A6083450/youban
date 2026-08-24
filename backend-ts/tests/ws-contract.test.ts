@@ -3,11 +3,66 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PlannerRunContext, TripPlanner } from "../src/agents/trip-planner.ts";
+import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
 import { createTaskState } from "../src/domain/task-store.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 
 const runtimes: HttpRuntime[] = [];
 const tempDirs: string[] = [];
+
+class ManualClock {
+  private time = 0;
+  private sleepers: Array<{
+    due: number;
+    resolve: () => void;
+    reject: (reason?: unknown) => void;
+    signal: AbortSignal;
+    abort: () => void;
+  }> = [];
+
+  readonly now = () => this.time;
+  readonly sleep = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(signal.reason);
+      const entry = {
+        due: this.time + milliseconds,
+        resolve,
+        reject,
+        signal,
+        abort: () => undefined,
+      };
+      entry.abort = () => {
+        this.sleepers = this.sleepers.filter((candidate) => candidate !== entry);
+        reject(signal.reason);
+      };
+      this.sleepers.push(entry);
+      signal.addEventListener("abort", entry.abort, { once: true });
+    });
+
+  advanceBy(milliseconds: number): void {
+    const target = this.time + milliseconds;
+    for (const entry of this.sleepers.filter((candidate) => candidate.due <= target)) {
+      this.time = entry.due;
+      this.sleepers = this.sleepers.filter((candidate) => candidate !== entry);
+      entry.signal.removeEventListener("abort", entry.abort);
+      entry.resolve();
+    }
+    this.time = target;
+  }
+}
+
+class SlowPlanner implements TripPlanner {
+  started = false;
+
+  plan(_request: TripPlanningRequest, context: PlannerRunContext): Promise<Record<string, unknown>> {
+    this.started = true;
+    return new Promise((_, reject) => {
+      if (context.signal.aborted) return reject(context.signal.reason);
+      context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+    });
+  }
+}
 
 function startRuntime(): { runtime: HttpRuntime; baseUrl: string } {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-ws-"));
@@ -20,10 +75,10 @@ function startRuntime(): { runtime: HttpRuntime; baseUrl: string } {
   return { runtime, baseUrl: `ws://127.0.0.1:${port}` };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const runtime of runtimes.splice(0)) {
     runtime.app.stop(true);
-    runtime.close();
+    await runtime.close();
   }
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -114,6 +169,60 @@ function handshakeStatus(url: string): Promise<number> {
 }
 
 describe("trip task websocket contract", () => {
+  it("publishes a slow seven-day request through the existing terminal frame at 5.5 seconds", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-ws-deadline-"));
+    tempDirs.push(dataDir);
+    const clock = new ManualClock();
+    const planner = new SlowPlanner();
+    const runtime = createHttpRuntime({
+      dataDir,
+      planner,
+      planningClock: { now: clock.now, sleep: clock.sleep },
+    });
+    runtimes.push(runtime);
+    runtime.app.listen({ hostname: "127.0.0.1", port: 0 });
+    const port = runtime.app.server?.port;
+    if (!port) throw new Error("test server did not bind a port");
+    const draft = {
+      city: "大理",
+      cities: [{ city: "大理", days: 7 }],
+      start_date: "2026-10-01",
+      end_date: "2026-10-07",
+      travel_days: 7,
+      transportation: "公共交通",
+      accommodation: "舒适型酒店",
+      preferences: ["自然风光"],
+      traveler_count: 2,
+      room_count: 1,
+      budget_amount: 8_000,
+      budget_basis: "group_total" as const,
+      language: "zh-CN",
+    };
+    const token = runtime.assistant.ledger.register(draft, 0.95).token;
+    const acceptedResponse = await runtime.app.handle(new Request(`http://127.0.0.1:${port}/api/trip/plan`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-user-id": "owner-1" },
+      body: JSON.stringify({ ...draft, execution_token: token }),
+    }));
+    const accepted = await acceptedResponse.json() as Record<string, any>;
+    while (!planner.started) await Bun.sleep(0);
+
+    const result = await collectWhile(
+      `ws://127.0.0.1:${port}/api/trip/ws/${accepted.task_id}?user_id=owner-1`,
+      () => clock.advanceBy(5_500),
+    );
+
+    expect(result.code).toBe(1000);
+    expect(result.messages[0]).toEqual(expect.objectContaining({ status: "processing" }));
+    expect(result.messages.at(-1)).toEqual(expect.objectContaining({
+      status: "completed",
+      progress: 100,
+      plan_quality: "fast",
+      enhancement_status: "running",
+      result: expect.objectContaining({ success: true }),
+    }));
+  });
+
   it("sends a failed frame before closing a missing task with 1008", async () => {
     const { baseUrl } = startRuntime();
     const result = await collect(`${baseUrl}/api/trip/ws/missing`);
@@ -144,11 +253,22 @@ describe("trip task websocket contract", () => {
       progress: 100,
       message: "旅行计划生成完成",
       result: plan,
+      plan_quality: "fast",
+      enhancement_status: "running",
+      deadline_seconds: 6,
+      generation_elapsed_ms: 5_500,
+      fast_plan_revision: "revision-1",
     }), { immediate: true });
     const result = await collect(`${baseUrl}/api/trip/ws/complete?user_id=owner-1`);
     expect(result.code).toBe(1000);
     expect(result.messages).toEqual([
-      expect.objectContaining({ task_id: "complete", status: "completed", result: plan }),
+      expect.objectContaining({
+        task_id: "complete",
+        status: "completed",
+        result: plan,
+        plan_quality: "fast",
+        enhancement_status: "running",
+      }),
     ]);
   });
 

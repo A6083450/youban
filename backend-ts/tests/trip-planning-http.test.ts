@@ -6,8 +6,7 @@ import type {
   PlannerRunContext,
   TripPlanner,
 } from "../src/agents/trip-planner.ts";
-import type { TripPlanningRequest } from "../src/domain/orchestrator.ts";
-import type { PlanningCheckpoint } from "../src/domain/orchestrator.ts";
+import { emptyCheckpoint, type PlanningCheckpoint, type TripPlanningRequest } from "../src/domain/orchestrator.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
 
 const runtimes: HttpRuntime[] = [];
@@ -74,6 +73,111 @@ class BlockingPlanner implements TripPlanner {
   close(): void { this.closed = true; }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+class ManualClock {
+  private time = 0;
+  private nextId = 0;
+  private sleepers: Array<{
+    id: number;
+    due: number;
+    resolve: () => void;
+    reject: (reason?: unknown) => void;
+    signal: AbortSignal;
+    abort: () => void;
+  }> = [];
+
+  readonly now = () => this.time;
+  readonly sleep = (milliseconds: number, signal: AbortSignal): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(signal.reason);
+      const id = ++this.nextId;
+      const abort = () => {
+        this.sleepers = this.sleepers.filter((entry) => entry.id !== id);
+        reject(signal.reason);
+      };
+      this.sleepers.push({
+        id,
+        due: this.time + milliseconds,
+        resolve,
+        reject,
+        signal,
+        abort,
+      });
+      signal.addEventListener("abort", abort, { once: true });
+    });
+
+  get pendingCount(): number { return this.sleepers.length; }
+
+  advanceBy(milliseconds: number): void {
+    const target = this.time + milliseconds;
+    const ready = this.sleepers
+      .filter((entry) => entry.due <= target)
+      .sort((left, right) => left.due - right.due);
+    for (const entry of ready) {
+      this.time = entry.due;
+      this.sleepers = this.sleepers.filter((candidate) => candidate.id !== entry.id);
+      entry.signal.removeEventListener("abort", entry.abort);
+      entry.resolve();
+    }
+    this.time = target;
+  }
+}
+
+class DeadlinePlanner implements TripPlanner {
+  readonly runs: Array<{
+    request: TripPlanningRequest;
+    context: PlannerRunContext;
+    result: ReturnType<typeof deferred<Record<string, unknown>>>;
+  }> = [];
+
+  plan(request: TripPlanningRequest, context: PlannerRunContext): Promise<Record<string, unknown>> {
+    const result = deferred<Record<string, unknown>>();
+    this.runs.push({ request: structuredClone(request), context, result });
+    return Promise.race([
+      result.promise,
+      new Promise<Record<string, unknown>>((_, reject) => {
+        if (context.signal.aborted) return reject(context.signal.reason);
+        context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+      }),
+    ]);
+  }
+
+  succeed(index: number, marker = "enhanced"): void {
+    const run = this.runs[index]!;
+    run.result.resolve(enhancedPlan(run.request, marker));
+  }
+
+  fail(index: number, message = "规划模型暂时不可用"): void {
+    this.runs[index]!.result.reject(new Error(message));
+  }
+}
+
+function enhancedPlan(request: TripPlanningRequest, marker = "enhanced"): Record<string, unknown> {
+  return {
+    success: true,
+    data: {
+      ...request,
+      marker,
+      days: Array.from({ length: request.travel_days }, (_, dayIndex) => ({
+        date: new Date(Date.parse(`${request.start_date}T00:00:00Z`) + dayIndex * 86_400_000)
+          .toISOString().slice(0, 10),
+        day_index: dayIndex,
+        city: request.city,
+        attractions: [],
+      })),
+    },
+  };
+}
+
 function makeRuntime(planner = new FakePlanner()): { runtime: HttpRuntime; planner: FakePlanner } {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-plan-http-"));
   tempDirs.push(dataDir);
@@ -82,8 +186,8 @@ function makeRuntime(planner = new FakePlanner()): { runtime: HttpRuntime; plann
   return { runtime, planner };
 }
 
-afterEach(() => {
-  for (const runtime of runtimes.splice(0)) runtime.close();
+afterEach(async () => {
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -103,7 +207,188 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
+function makeDeadlineRuntime(): { runtime: HttpRuntime; planner: DeadlinePlanner; clock: ManualClock } {
+  const dataDir = mkdtempSync(join(tmpdir(), "youban-deadline-http-"));
+  tempDirs.push(dataDir);
+  const planner = new DeadlinePlanner();
+  const clock = new ManualClock();
+  const runtime = createHttpRuntime({
+    dataDir,
+    planner,
+    planningClock: { now: clock.now, sleep: clock.sleep },
+  });
+  runtimes.push(runtime);
+  return { runtime, planner, clock };
+}
+
+async function submit(runtime: HttpRuntime): Promise<Record<string, any>> {
+  const token = runtime.assistant.ledger.register(DRAFT, 0.95).token;
+  const response = await request(runtime.app, "POST", "/api/trip/plan", {
+    ...DRAFT,
+    execution_token: token,
+  });
+  expect(response.status).toBe(200);
+  return response.json() as Promise<Record<string, any>>;
+}
+
 describe("trip planning HTTP lifecycle", () => {
+  it("publishes fast at the trigger, freezes terminal state, then applies unchanged enhancement", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.status === "completed");
+    const fast = runtime.tasks.get(accepted.task_id)!;
+    expect(fast).toEqual(expect.objectContaining({
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      plan_quality: "fast",
+      enhancement_status: "running",
+      deadline_seconds: 6,
+      generation_elapsed_ms: 5_500,
+      fast_plan_revision: expect.any(String),
+    }));
+    expect(((fast.result as Record<string, any>).data.days)).toHaveLength(3);
+
+    await planner.runs[0]!.context.onProgress({
+      stage: "reviewing",
+      progress: 95,
+      message: "晚到的进度不能覆盖终态",
+    });
+    await planner.runs[0]!.context.onCheckpoint({
+      ...emptyCheckpoint(),
+      summary: { status: "completed", output: { overall_suggestions: "late" }, error: "" },
+    });
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      result: fast.result,
+    }));
+
+    planner.succeed(0);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.enhancement_status === "completed");
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "completed",
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }));
+    const status = await request(runtime.app, "GET", `/api/trip/status/${accepted.task_id}`);
+    expect(await status.json()).toEqual(expect.objectContaining({
+      status: "completed",
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }));
+  });
+
+  it("skips a background enhancement after the user-visible plan is edited", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.plan_quality === "fast");
+    const edited = runtime.tasks.get(accepted.task_id)!;
+    const result = structuredClone(edited.result) as Record<string, any>;
+    result.data.days[0].description = "用户编辑后的内容";
+    runtime.tasks.save({ ...edited, result }, { immediate: true });
+
+    planner.succeed(0);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.enhancement_status === "skipped");
+    const preserved = runtime.tasks.get(accepted.task_id)!;
+    expect(preserved.plan_quality).toBe("fast");
+    expect((preserved.result as Record<string, any>).data.days[0].description).toBe("用户编辑后的内容");
+  });
+
+  it("keeps a completed fast plan when the background planner fails", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.plan_quality === "fast");
+    const fastResult = runtime.tasks.get(accepted.task_id)?.result;
+
+    planner.fail(0, "enhanced unavailable");
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.enhancement_status === "failed");
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      plan_quality: "fast",
+      result: fastResult,
+    }));
+  });
+
+  it("cancels a deleted fast task and never applies a late result", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.plan_quality === "fast");
+    const fastResult = runtime.tasks.get(accepted.task_id)?.result;
+
+    const deleted = await request(runtime.app, "DELETE", `/api/trip/plan/${accepted.task_id}`);
+    expect(deleted.status).toBe(200);
+    expect(planner.runs[0]!.context.signal.aborted).toBe(true);
+    planner.succeed(0, "too-late");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      plan_quality: "fast",
+      result: fastResult,
+    }));
+  });
+
+  it("starts a fresh deadline window when retrying the same task id", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    planner.fail(0);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.status === "failed");
+    expect(clock.pendingCount).toBe(0);
+    clock.advanceBy(10_000);
+
+    const retry = await request(runtime.app, "POST", `/api/trip/plan/${accepted.task_id}/retry`, {
+      restart_all: false,
+    });
+    expect(retry.status).toBe(200);
+    expect((await retry.json() as Record<string, unknown>).task_id).toBe(accepted.task_id);
+    await waitFor(() => planner.runs.length === 2);
+    clock.advanceBy(5_499);
+    await Promise.resolve();
+    expect(runtime.tasks.get(accepted.task_id)?.status).toBe("processing");
+    clock.advanceBy(1);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.status === "completed");
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      task_id: accepted.task_id,
+      plan_quality: "fast",
+      generation_elapsed_ms: 5_500,
+    }));
+  });
+
+  it("cancels background enhancement on global shutdown without a late write", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.plan_quality === "fast");
+    const fastResult = runtime.tasks.get(accepted.task_id)?.result;
+
+    runtime.beginShutdown();
+    expect(planner.runs[0]!.context.signal.aborted).toBe(true);
+    planner.succeed(0, "too-late");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "completed",
+      plan_quality: "fast",
+      result: fastResult,
+    }));
+  });
+
   it("drains the active service generation before applying runtime settings", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-plan-refresh-"));
     tempDirs.push(dataDir);

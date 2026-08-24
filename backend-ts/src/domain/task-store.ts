@@ -4,6 +4,8 @@ import { YoubanDatabase } from "./database.ts";
 import { ensurePlanItemIds } from "./plan-items.ts";
 
 export type TripTaskStatus = "processing" | "completed" | "failed";
+export type PlanQuality = "fast" | "enhanced";
+export type EnhancementStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export type TripTaskStage =
   | "submitted"
   | "initializing"
@@ -39,6 +41,11 @@ export interface TripTaskState {
   checkpoint: Record<string, unknown>;
   execution: Record<string, unknown>;
   budget_items: unknown[] | null;
+  plan_quality: PlanQuality | null;
+  enhancement_status: EnhancementStatus | null;
+  deadline_seconds: number | null;
+  generation_elapsed_ms: number | null;
+  fast_plan_revision: string | null;
 }
 
 export interface TripHistoryItem {
@@ -85,6 +92,11 @@ export function createTaskState(
     checkpoint: {},
     execution: {},
     budget_items: null,
+    plan_quality: null,
+    enhancement_status: null,
+    deadline_seconds: null,
+    generation_elapsed_ms: null,
+    fast_plan_revision: null,
     ...overrides,
   };
 }
@@ -104,6 +116,15 @@ export function buildTaskEvent(task: TripTaskState, includeResult = true): Recor
   if (task.error) event.error = task.error;
   if (task.status === "failed" && task.request_payload) {
     event.request_payload = clone(task.request_payload);
+  }
+  for (const key of [
+    "plan_quality",
+    "enhancement_status",
+    "deadline_seconds",
+    "generation_elapsed_ms",
+    "fast_plan_revision",
+  ] as const) {
+    if (task[key] !== null && task[key] !== undefined) event[key] = task[key];
   }
   if (includeResult && task.result !== null) event.result = clone(task.result);
   return event;
@@ -165,18 +186,34 @@ export class SqliteTaskStore {
   private loadAndRecover(): void {
     const rows = this.database.orm.select().from(tasksTable).all();
     for (const row of rows) {
-      const task = JSON.parse(row.payload) as TripTaskState;
+      const saved = JSON.parse(row.payload) as TripTaskState;
+      const task: TripTaskState = {
+        ...saved,
+        plan_quality: saved.plan_quality ?? null,
+        enhancement_status: saved.enhancement_status ?? null,
+        deadline_seconds: saved.deadline_seconds ?? null,
+        generation_elapsed_ms: saved.generation_elapsed_ms ?? null,
+        fast_plan_revision: saved.fast_plan_revision ?? null,
+      };
       const itemIdsAdded = ensurePlanItemIds(task.result);
       this.cache.set(task.task_id, task);
       this.updatedAt.set(task.task_id, row.updatedAt);
+      let recovered = false;
       if (task.status !== "completed" && task.status !== "failed") {
         task.status = "failed";
         task.stage = "failed";
         task.progress = 100;
         task.error = RESTART_ERROR;
         task.message = RESTART_ERROR;
-        this.write(task);
-      } else if (itemIdsAdded) {
+        recovered = true;
+      } else if (task.status === "completed"
+        && task.plan_quality === "fast"
+        && (task.enhancement_status === "pending" || task.enhancement_status === "running")) {
+        task.enhancement_status = "failed";
+        task.message = "快速计划可以正常使用，后台补充因服务重启未完成。";
+        recovered = true;
+      }
+      if (recovered || itemIdsAdded) {
         this.write(task);
       }
     }

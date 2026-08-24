@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SqliteTaskStore,
+  buildTaskEvent,
   createTaskState,
   type TripTaskState,
 } from "../src/domain/task-store.ts";
@@ -24,6 +25,36 @@ afterEach(() => {
 });
 
 describe("SqliteTaskStore", () => {
+  it("initializes deadline metadata and emits only non-null compatible fields", () => {
+    const task = createTaskState("task-metadata");
+    expect(task).toEqual(expect.objectContaining({
+      plan_quality: null,
+      enhancement_status: null,
+      deadline_seconds: null,
+      generation_elapsed_ms: null,
+      fast_plan_revision: null,
+    }));
+    expect(buildTaskEvent(task)).not.toEqual(expect.objectContaining({
+      plan_quality: expect.anything(),
+    }));
+
+    const event = buildTaskEvent({
+      ...task,
+      plan_quality: "fast",
+      enhancement_status: "running",
+      deadline_seconds: 6,
+      generation_elapsed_ms: 5_500,
+      fast_plan_revision: "revision-1",
+    });
+    expect(event).toEqual(expect.objectContaining({
+      plan_quality: "fast",
+      enhancement_status: "running",
+      deadline_seconds: 6,
+      generation_elapsed_ms: 5_500,
+      fast_plan_revision: "revision-1",
+    }));
+  });
+
   it("creates a WAL database with the current schema version", () => {
     const path = databasePath();
     const store = new SqliteTaskStore(path);
@@ -127,6 +158,38 @@ describe("SqliteTaskStore", () => {
     expect(recovered?.error).toBe("服务已重启，未完成的旅行规划任务无法恢复，请重新生成。");
     expect(recovered?.request_payload).toEqual({ city: "成都", travel_days: 4 });
     expect(recovered?.checkpoint).toEqual({ segments: { "day:1": { status: "completed" } } });
+    second.close();
+  });
+
+  it("retains a completed fast result and marks interrupted enhancement failed on restart", () => {
+    const path = databasePath();
+    const first = new SqliteTaskStore(path);
+    const result = { success: true, data: { city: "成都", days: [{ day_index: 0 }] } };
+    first.save(createTaskState("task-fast-restart", {
+      user_id: "owner-1",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      message: "旅行计划生成完成",
+      result,
+      plan_quality: "fast",
+      enhancement_status: "running",
+      deadline_seconds: 6,
+      generation_elapsed_ms: 5_500,
+      fast_plan_revision: "revision-1",
+    }), { immediate: true });
+    first.close();
+
+    const second = new SqliteTaskStore(path);
+    expect(second.get("task-fast-restart")).toEqual(expect.objectContaining({
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      result,
+      plan_quality: "fast",
+      enhancement_status: "failed",
+      fast_plan_revision: "revision-1",
+    }));
     second.close();
   });
 
