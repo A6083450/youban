@@ -14,6 +14,7 @@ class NoopPlanner implements TripPlanner {
 
 class FakePoiSearch {
   readonly calls: Array<{ keywords: string; city: string; types: string }> = [];
+  waitForSearch: Promise<void> | null = null;
   results: TrustedPoi[] = [{
     poi_id: "B0NEWPOI",
     name: "广州塔",
@@ -24,7 +25,22 @@ class FakePoiSearch {
 
   async searchPoi(keywords: string, city: string, types = "110000") {
     this.calls.push({ keywords, city, types });
+    if (this.waitForSearch) await this.waitForSearch;
     return this.results;
+  }
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition not reached");
+    await Bun.sleep(5);
   }
 }
 
@@ -151,6 +167,69 @@ describe("trip attraction HTTP", () => {
     }));
     expect(body.plan.blueprint.stages[0].highlights).toEqual([]);
     expect(body.plan.blueprint.stages[1].highlights).toEqual(["陈家祠"]);
+  });
+
+  it("rejects a create when enhancement changes the plan during POI verification", async () => {
+    const value = runtime();
+    const gate = deferred();
+    value.poiSearch.waitForSearch = gate.promise;
+    const pending = request(value.app, "POST", "/api/trip/plan/plan-1/attractions", payload());
+    await waitFor(() => value.poiSearch.calls.length === 1);
+    const current = value.tasks.get("plan-1")!;
+    const enhancedResult = completedPlan();
+    enhancedResult.data.blueprint.title = "增强版广州两日游";
+    value.tasks.save({
+      ...current,
+      result: enhancedResult,
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }, { immediate: true });
+
+    gate.resolve();
+    const response = await pending;
+
+    expect(response.status).toBe(409);
+    expect(value.tasks.get("plan-1")).toEqual(expect.objectContaining({
+      result: enhancedResult,
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }));
+  });
+
+  it("rejects an update when enhancement changes the plan during POI verification", async () => {
+    const value = runtime();
+    value.poiSearch.results = [{
+      poi_id: "B0CHEN", name: "陈家祠", address: "中山七路恩龙里34号", type: "景点",
+      location: { longitude: 113.245, latitude: 23.129 },
+    }];
+    const gate = deferred();
+    value.poiSearch.waitForSearch = gate.promise;
+    const pending = request(
+      value.app,
+      "PUT",
+      "/api/trip/plan/plan-1/attractions/itm_attr0001",
+      payload({ poi_id: "B0CHEN", name: "陈家祠", day_index: 1 }),
+    );
+    await waitFor(() => value.poiSearch.calls.length === 1);
+    const current = value.tasks.get("plan-1")!;
+    const enhancedResult = completedPlan();
+    enhancedResult.data.blueprint.title = "增强版广州两日游";
+    value.tasks.save({
+      ...current,
+      result: enhancedResult,
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }, { immediate: true });
+
+    gate.resolve();
+    const response = await pending;
+
+    expect(response.status).toBe(409);
+    expect(value.tasks.get("plan-1")).toEqual(expect.objectContaining({
+      result: enhancedResult,
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }));
   });
 
   it("rejects same-day duplicates and unverified POIs", async () => {

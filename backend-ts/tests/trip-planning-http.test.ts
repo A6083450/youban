@@ -368,6 +368,46 @@ describe("trip planning HTTP lifecycle", () => {
     }));
   });
 
+  it("ignores checkpoint and progress callbacks from the cancelled run after retry", async () => {
+    const { runtime, planner } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+    const failed = runtime.tasks.get(accepted.task_id)!;
+    runtime.tasks.save({
+      ...failed,
+      status: "failed",
+      stage: "failed",
+      progress: 100,
+      message: "旧轮次失败",
+      error: "旧轮次失败",
+    }, { immediate: true });
+
+    const retry = await request(runtime.app, "POST", `/api/trip/plan/${accepted.task_id}/retry`, {
+      restart_all: true,
+    });
+    expect(retry.status).toBe(200);
+    await waitFor(() => planner.runs.length === 2);
+    const retried = runtime.tasks.get(accepted.task_id)!;
+
+    await planner.runs[0]!.context.onProgress({
+      stage: "reviewing",
+      progress: 98,
+      message: "旧轮次晚到进度",
+    });
+    await planner.runs[0]!.context.onCheckpoint({
+      ...emptyCheckpoint(),
+      summary: { status: "completed", output: { overall_suggestions: "old" }, error: "" },
+    });
+
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      status: "processing",
+      stage: retried.stage,
+      progress: retried.progress,
+      message: retried.message,
+      checkpoint: retried.checkpoint,
+    }));
+  });
+
   it("cancels background enhancement on global shutdown without a late write", async () => {
     const { runtime, planner, clock } = makeDeadlineRuntime();
     const accepted = await submit(runtime);

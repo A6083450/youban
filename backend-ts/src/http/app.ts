@@ -663,17 +663,19 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           checkpoint: latestCheckpoint,
           signal,
           onCheckpoint(nextCheckpoint) {
+            if (closed || signal.aborted || activePlanning.get(taskId) !== active) return;
             latestCheckpoint = structuredClone(nextCheckpoint);
             const current = tasks.get(taskId);
-            if (!current || closed || current.status !== "processing") return;
+            if (!current || current.status !== "processing") return;
             tasks.save({
               ...current,
               checkpoint: structuredClone(nextCheckpoint) as unknown as Record<string, unknown>,
             }, { immediate: true });
           },
           onProgress(update) {
+            if (closed || signal.aborted || activePlanning.get(taskId) !== active) return;
             const current = tasks.get(taskId);
-            if (!current || closed || current.status !== "processing") return;
+            if (!current || current.status !== "processing") return;
             tasks.save({
               ...current,
               stage: update.stage,
@@ -1512,13 +1514,21 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       try {
         const input = body as AttractionMutationInput;
         const city = cityForDay(task.result, input.day_index);
+        const expectedRevision = planRevision(planData(task.result));
         const verified = await verifyAttractionPoi(input, city);
-        const created = createAttraction(task.result, input, verified);
-        task.budget_items = (task.budget_items ?? []).filter((item) =>
+        const current = tasks.get(params.planId);
+        if (!current) throw new ItineraryMutationError(404, "计划不存在");
+        if (current.status !== "completed"
+          || !current.result
+          || planRevision(planData(current.result)) !== expectedRevision) {
+          throw new ItineraryMutationError(409, "行程版本已变化，请刷新后重试");
+        }
+        const created = createAttraction(current.result, input, verified);
+        current.budget_items = (current.budget_items ?? []).filter((item) =>
           !item || typeof item !== "object" || Array.isArray(item)
           || String((item as Record<string, unknown>).id ?? "") !== `itinerary:attraction:${created.id}`
         );
-        return itineraryMutationResponse(task);
+        return itineraryMutationResponse(current);
       } catch (error) {
         return mutationFailure(error, status);
       }
@@ -1534,13 +1544,21 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       try {
         const input = body as AttractionMutationInput;
         const city = cityForDay(task.result, input.day_index);
+        const expectedRevision = planRevision(planData(task.result));
         const verified = await verifyAttractionPoi(input, city);
-        updateAttraction(task.result, params.attractionId, input, verified);
-        task.budget_items = (task.budget_items ?? []).filter((item) =>
+        const current = tasks.get(params.planId);
+        if (!current) throw new ItineraryMutationError(404, "计划不存在");
+        if (current.status !== "completed"
+          || !current.result
+          || planRevision(planData(current.result)) !== expectedRevision) {
+          throw new ItineraryMutationError(409, "行程版本已变化，请刷新后重试");
+        }
+        updateAttraction(current.result, params.attractionId, input, verified);
+        current.budget_items = (current.budget_items ?? []).filter((item) =>
           !item || typeof item !== "object" || Array.isArray(item)
           || String((item as Record<string, unknown>).id ?? "") !== `itinerary:attraction:${params.attractionId}`
         );
-        return itineraryMutationResponse(task);
+        return itineraryMutationResponse(current);
       } catch (error) {
         return mutationFailure(error, status);
       }
