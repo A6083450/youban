@@ -30,6 +30,7 @@ import {
 } from "../agents/trip-chat-service.ts";
 import { getRepoRoot } from "../config/paths.ts";
 import {
+  effectiveThinkingVisible,
   getSettings,
   prepareRuntimeSettings,
   type AppSettings,
@@ -847,7 +848,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           google_maps_api_key: current.google_maps_api_key,
           google_maps_proxy: current.google_maps_proxy,
           llm_thinking_enabled: current.llm_thinking_enabled,
-          llm_thinking_visible: current.llm_thinking_visible,
+          llm_thinking_visible: effectiveThinkingVisible(current),
         },
       };
     })

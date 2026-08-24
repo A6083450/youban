@@ -482,6 +482,25 @@ describe("admin HTTP", () => {
     expect(rejected.status).toBe(403);
   });
 
+  it("projects thinking as hidden through public settings when thinking is disabled", async () => {
+    const update = await call("PUT", "/api/admin/settings", {
+      llm_thinking_enabled: false,
+      llm_thinking_visible: true,
+    }, "admin@123");
+    expect(update.status).toBe(200);
+
+    const response = await call("GET", "/api/settings");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        llm_thinking_enabled: false,
+        llm_thinking_visible: false,
+      }),
+    }));
+  });
+
   it("reads and persists filtered runtime settings", async () => {
     const getResponse = await call("GET", "/api/admin/settings", undefined, "admin@123");
     expect(getResponse.status).toBe(200);
