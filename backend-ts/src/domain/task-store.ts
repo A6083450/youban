@@ -214,6 +214,16 @@ export class SqliteTaskStore {
     return result.changes === 1;
   }
 
+  isUserDeleted(taskId: string): boolean {
+    this.flush(taskId);
+    const row = this.database.orm
+      .select({ userDeletedAt: tasksTable.userDeletedAt })
+      .from(tasksTable)
+      .where(eq(tasksTable.taskId, taskId))
+      .get();
+    return row?.userDeletedAt !== null && row?.userDeletedAt !== undefined;
+  }
+
   save(task: TripTaskState, options: SaveOptions = {}): void {
     if (this.closed) throw new Error("task store is closed");
     const snapshot = clone(task);

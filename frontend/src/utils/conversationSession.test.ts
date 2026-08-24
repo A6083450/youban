@@ -13,6 +13,7 @@ import {
   conversationPersistenceStoragePrefix,
   createConversationIdentity,
   firstUserMessage,
+  flushConversationPersistenceOnUnmount,
   isLegacyImportEligible,
   isCurrentConversationSelection,
   isConversationOperationCurrent,
@@ -389,6 +390,33 @@ describe('conversation operation ownership', () => {
 })
 
 describe('conversation persistence queue', () => {
+  it('does not recreate a local fallback when a completed plan suppresses unmount capture', async () => {
+    const writes: Array<string | null> = []
+    const queue = new ConversationPersistenceQueue(async (capture) => {
+      writes.push(capture.sessionId)
+      return capture.sessionId ? { revision: capture.revision + 1 } : undefined
+    }, 0)
+    const snapshot = toServerSnapshot([
+      { id: 1, role: 'user', type: 'text', text: '生成详细行程' },
+      { id: 2, role: 'assistant', type: 'done', planId: 'plan-1' },
+    ], { ...stableState, pendingConfirmId: null, pendingDraft: null, nextId: 3 })
+
+    queue.schedule(captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: 'session-planned',
+      revision: 8,
+      snapshot,
+    }))
+    await flushConversationPersistenceOnUnmount(queue, captureConversationPersistence({
+      ownerId: 'user-1',
+      sessionId: null,
+      revision: 0,
+      snapshot,
+    }), true)
+
+    expect(writes).toEqual(['session-planned'])
+  })
+
   it('captures an immutable snapshot and flushes the outgoing session immediately', async () => {
     const source = toServerSnapshot([
       { id: 1, role: 'user', type: 'text', text: '会话 A' },

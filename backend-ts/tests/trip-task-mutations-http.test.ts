@@ -49,10 +49,21 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function call(app: HttpRuntime["app"], method: string, path: string, body?: unknown, user = "owner-1") {
+function call(
+  app: HttpRuntime["app"],
+  method: string,
+  path: string,
+  body?: unknown,
+  user = "owner-1",
+  adminToken = "",
+) {
   return app.handle(new Request(`http://localhost${path}`, {
     method,
-    headers: { "content-type": "application/json", "x-user-id": user },
+    headers: {
+      "content-type": "application/json",
+      "x-user-id": user,
+      ...(adminToken ? { "x-admin-token": adminToken } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   }));
 }
@@ -137,6 +148,18 @@ describe("share, execution, and deletion contracts", () => {
       .toEqual([]);
     expect((await call(value.app, "GET", "/api/conversations").then((result) => result.json()) as Record<string, any>).items)
       .toEqual([]);
+    expect((await call(value.app, "GET", "/api/trip/status/plan-1")).status).toBe(404);
+    expect((await call(value.app, "GET", "/api/trip/plan/plan-1/conversation")).status).toBe(404);
+    const stream = await call(value.app, "POST", "/api/chat/edit/stream", {
+      message: "把故宫改到下午",
+      trip_plan: PLAN,
+      plan_id: "plan-1",
+    });
+    expect(stream.status).toBe(404);
+    expect(await stream.json()).toEqual({ detail: "任务不存在" });
+    expect((await call(value.app, "GET", "/api/trip/status/plan-1", undefined, "", "admin@123")).status)
+      .toBe(200);
+    expect((await call(value.app, "DELETE", "/api/trip/plan/plan-1")).status).toBe(200);
     sessions.close();
   });
 

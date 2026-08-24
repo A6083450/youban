@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTaskState } from "../src/domain/task-store.ts";
@@ -61,6 +62,57 @@ function collectWhile(url: string, update: () => void): Promise<{ messages: Reco
   });
 }
 
+function expectUpgradeRejected(url: string): Promise<{ opened: boolean }> {
+  return new Promise((resolve, reject) => {
+    let opened = false;
+    const socket = new WebSocket(url);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error(`websocket timeout for ${url}`));
+    }, 2_000);
+    socket.onopen = () => { opened = true; };
+    socket.onerror = () => {
+      clearTimeout(timeout);
+      resolve({ opened });
+    };
+    socket.onclose = () => {
+      clearTimeout(timeout);
+      resolve({ opened });
+    };
+  });
+}
+
+function handshakeStatus(url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const socket = connect(Number(target.port), target.hostname);
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`websocket handshake timeout for ${url}`));
+    }, 2_000);
+    socket.on("connect", () => {
+      socket.write([
+        `GET ${target.pathname}${target.search} HTTP/1.1`,
+        `Host: ${target.host}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version: 13",
+        "",
+        "",
+      ].join("\r\n"));
+    });
+    socket.once("data", (chunk) => {
+      clearTimeout(timeout);
+      socket.destroy();
+      const match = String(chunk).match(/^HTTP\/1\.1 (\d{3})/);
+      if (!match) return reject(new Error(`invalid websocket handshake response: ${String(chunk)}`));
+      resolve(Number(match[1]));
+    });
+    socket.once("error", reject);
+  });
+}
+
 describe("trip task websocket contract", () => {
   it("sends a failed frame before closing a missing task with 1008", async () => {
     const { baseUrl } = startRuntime();
@@ -112,6 +164,23 @@ describe("trip task websocket contract", () => {
     const result = await collect(`${baseUrl}/api/trip/ws/admin-visible?user_id=other&admin_token=admin%40123`);
     expect(result.code).toBe(1000);
     expect(result.messages[0]).toEqual(expect.objectContaining({ task_id: "admin-visible", status: "completed" }));
+  });
+
+  it("rejects a user-deleted task before upgrading the connection", async () => {
+    const { runtime, baseUrl } = startRuntime();
+    runtime.tasks.save(createTaskState("user-deleted", {
+      user_id: "owner-1",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      result: { success: true, data: { city: "北京" } },
+    }), { immediate: true });
+    expect(runtime.conversationRecords.softDeletePlan("user-deleted", "owner-1")).toBe(true);
+
+    const url = `${baseUrl}/api/trip/ws/user-deleted?user_id=owner-1`;
+    expect(await handshakeStatus(url)).toBe(404);
+    expect(await expectUpgradeRejected(url))
+      .toEqual({ opened: false });
   });
 
   it("includes the complete result in a later terminal event", async () => {

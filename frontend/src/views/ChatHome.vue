@@ -220,6 +220,7 @@ import {
   conversationSelectionAction,
   createConversationIdentity,
   firstUserMessage,
+  flushConversationPersistenceOnUnmount,
   isConversationOperationCurrent,
   isConversationRestoreCurrent,
   isLegacyImportEligible,
@@ -1120,8 +1121,11 @@ onUnmounted(() => {
   if (previousScrollRestoration !== null) {
     window.history.scrollRestoration = previousScrollRestoration
   }
-  persistenceQueue.schedule(captureCurrentPersistence())
-  void persistenceQueue.flush()
+  void flushConversationPersistenceOnUnmount(
+    persistenceQueue,
+    captureCurrentPersistence(),
+    suppressChatPersistence,
+  )
   restoreRequestToken += 1
 })
 

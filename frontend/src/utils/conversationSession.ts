@@ -424,6 +424,15 @@ export class ConversationPersistenceQueue {
   }
 }
 
+export const flushConversationPersistenceOnUnmount = (
+  queue: ConversationPersistenceQueue,
+  capture: ConversationPersistenceCapture,
+  suppressCapture: boolean,
+): Promise<boolean> => {
+  if (!suppressCapture) queue.schedule(capture)
+  return queue.flush()
+}
+
 export const toServerSnapshot = (
   items: readonly SnapshotItem[],
   state: ChatSessionSnapshotState,

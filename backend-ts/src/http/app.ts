@@ -553,10 +553,26 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     message,
   });
 
-  const requireOwner = (task: TripTaskState, userId: string, adminToken = ""): string | null => {
+  const requireTaskOwner = (
+    task: TripTaskState,
+    userId: string,
+    adminToken = "",
+  ): { status: 403 | 404; detail: string } | null => {
     if (adminToken && secureEqual(adminToken, readAdminPassword())) return null;
-    if (task.user_id && task.user_id !== userId.trim()) return "无权访问该计划";
+    if (task.user_id && task.user_id !== userId.trim()) {
+      return { status: 403, detail: "无权访问该计划" };
+    }
     return null;
+  };
+
+  const requireOwner = (
+    task: TripTaskState,
+    userId: string,
+    adminToken = "",
+  ): { status: 403 | 404; detail: string } | null => {
+    if (adminToken && secureEqual(adminToken, readAdminPassword())) return null;
+    if (tasks.isUserDeleted(task.task_id)) return { status: 404, detail: "任务不存在" };
+    return requireTaskOwner(task, userId);
   };
 
   const budgetDayExists = (task: TripTaskState, dayIndex: number | null): boolean => {
@@ -696,8 +712,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     if (body.plan_id) {
       task = tasks.get(body.plan_id);
       if (!task) throw Object.assign(new Error("任务不存在"), { httpStatus: 404 });
-      if (requireOwner(task, userId, adminToken)) {
-        throw Object.assign(new Error("无权修改该计划"), { httpStatus: 403 });
+      const ownerError = requireOwner(task, userId, adminToken);
+      if (ownerError) {
+        throw Object.assign(new Error(ownerError.status === 403 ? "无权修改该计划" : ownerError.detail), {
+          httpStatus: ownerError.status,
+        });
       }
       if (task.status !== "completed") {
         throw Object.assign(new Error("计划尚未完成，无法修改"), { httpStatus: 409 });
@@ -1221,7 +1240,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "任务不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "failed") return status(409, { detail: "仅失败任务可重试" });
       if (!task.request_payload) return status(409, { detail: "原始行程请求不可重试" });
       tasks.save({
@@ -1247,7 +1266,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.taskId);
       if (!task) return status(404, { detail: "任务不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status === "completed") {
         return {
           task_id: task.task_id,
@@ -1281,8 +1300,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .get("/api/trip/plan/:planId/conversation", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "任务不存在" });
-      if (requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "")) {
-        return status(403, { detail: "无权访问该计划对话" });
+      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      if (ownerError) {
+        return status(ownerError.status, {
+          detail: ownerError.status === 403 ? "无权访问该计划对话" : ownerError.detail,
+        });
       }
       return { plan_id: params.planId, messages: conversations.get(params.planId) };
     })
@@ -1290,7 +1312,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.taskId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未完成，暂时无法分享" });
       }
@@ -1311,7 +1333,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
       }
@@ -1333,7 +1355,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
       }
@@ -1355,7 +1377,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
       }
@@ -1375,7 +1397,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
       }
@@ -1385,7 +1407,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
       }
@@ -1442,7 +1464,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
       }
@@ -1491,7 +1513,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
       }
@@ -1511,7 +1533,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
       const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成" });
       }
@@ -1559,8 +1581,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .delete("/api/trip/plan/:planId", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
-      if (ownerError) return status(403, { detail: ownerError });
+      const ownerError = requireTaskOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status === "processing") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
       }
@@ -1614,14 +1636,26 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         revision: t.Optional(t.String()),
       }),
     })
-    .post("/api/chat/edit/stream", ({ body, headers, request }) => sseResponse(
-      async (onDelta, signal) => {
-        const result = await editTrip(body, headers["x-user-id"] ?? "", signal, headers["x-admin-token"] ?? "");
-        onDelta(result.reply);
-        return result;
-      },
-      [request.signal, planningAbort.signal],
-    ), {
+    .post("/api/chat/edit/stream", ({ body, headers, request, status }) => {
+      if (body.plan_id) {
+        const task = tasks.get(body.plan_id);
+        if (!task) return status(404, { detail: "任务不存在" });
+        const ownerError = requireOwner(
+          task,
+          headers["x-user-id"] ?? "",
+          headers["x-admin-token"] ?? "",
+        );
+        if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
+      }
+      return sseResponse(
+        async (onDelta, signal) => {
+          const result = await editTrip(body, headers["x-user-id"] ?? "", signal, headers["x-admin-token"] ?? "");
+          onDelta(result.reply);
+          return result;
+        },
+        [request.signal, planningAbort.signal],
+      );
+    }, {
       body: t.Object({
         message: t.String({ minLength: 1, maxLength: 2_000 }),
         trip_plan: t.Record(t.String(), t.Unknown()),
@@ -1641,6 +1675,16 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       return Bun.file(path);
     })
     .ws("/api/trip/ws/:taskId", {
+      beforeHandle({ params, query, status }) {
+        const task = tasks.get(String(params.taskId));
+        if (!task) return;
+        const ownerError = requireOwner(
+          task,
+          String(query.user_id ?? ""),
+          String(query.admin_token ?? ""),
+        );
+        if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
+      },
       open(ws) {
         if (closed) {
           ws.close(1012, "服务正在关闭");
@@ -1657,10 +1701,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         }
         const userId = String(ws.data.query.user_id ?? "").trim();
         const adminToken = String(ws.data.query.admin_token ?? "").trim();
-        if (requireOwner(task, userId, adminToken)) {
+        const ownerError = requireOwner(task, userId, adminToken);
+        if (ownerError) {
           ws.cork(() => {
-            ws.send(JSON.stringify(failedEvent(taskId, "无权访问该计划")));
-            ws.close(1008, "无权访问该计划");
+            ws.send(JSON.stringify(failedEvent(taskId, ownerError.detail)));
+            ws.close(1008, ownerError.detail);
           });
           return;
         }
