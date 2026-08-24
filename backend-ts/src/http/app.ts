@@ -846,6 +846,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           vite_amap_web_js_key: current.vite_amap_web_js_key,
           google_maps_api_key: current.google_maps_api_key,
           google_maps_proxy: current.google_maps_proxy,
+          llm_thinking_enabled: current.llm_thinking_enabled,
+          llm_thinking_visible: current.llm_thinking_visible,
         },
       };
     })

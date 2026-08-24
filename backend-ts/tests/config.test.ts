@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { ensureDataSubdir, getDataDir } from "../src/config/paths.ts";
 import {
   _resetSettingsForTest,
+  effectiveThinkingVisible,
   getSettings,
   onSettingsReset,
   prepareRuntimeSettings,
@@ -55,6 +56,8 @@ const ENV_KEYS = [
   "CHAT_EDIT_AGENT",
   "PI_PARENT_SESSION_LIMIT",
   "PI_PARENT_SESSION_IDLE_SECONDS",
+  "LLM_THINKING_ENABLED",
+  "LLM_THINKING_VISIBLE",
 ];
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -157,6 +160,19 @@ describe("settings: env 读取", () => {
     expect(settings.llm_timeout).toBe(60);
     expect(settings.pi_parent_session_limit).toBe(64);
     expect(settings.pi_parent_session_idle_seconds).toBe(1800);
+    expect(settings.llm_thinking_enabled).toBe(false);
+    expect(settings.llm_thinking_visible).toBe(false);
+  });
+
+  it("reads valid model thinking environment overrides", () => {
+    process.env.LLM_THINKING_ENABLED = "true";
+    process.env.LLM_THINKING_VISIBLE = "true";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    const settings = getSettings();
+
+    expect(settings.llm_thinking_enabled).toBe(true);
+    expect(settings.llm_thinking_visible).toBe(true);
   });
 
   it("读取父 Agent 会话池的有界环境变量", () => {
@@ -290,6 +306,28 @@ describe("settings: updateRuntimeSettings", () => {
     expect(persisted.trip_planner_timeout).toBeUndefined();
     // 原子写不遗留 tmp 文件
     expect(existsSync(join(caseDir, "runtime_settings.json.tmp"))).toBe(false);
+  });
+
+  it("accepts boolean thinking overrides, rejects invalid values, and requires enabled thinking for visibility", () => {
+    const updated = updateRuntimeSettings({
+      llm_thinking_enabled: true,
+      llm_thinking_visible: true,
+    });
+
+    expect(updated.llm_thinking_enabled).toBe(true);
+    expect(updated.llm_thinking_visible).toBe(true);
+    expect(effectiveThinkingVisible(updated)).toBe(true);
+    expect(effectiveThinkingVisible({
+      llm_thinking_enabled: false,
+      llm_thinking_visible: true,
+    })).toBe(false);
+
+    const invalid = updateRuntimeSettings({
+      llm_thinking_enabled: "true",
+      llm_thinking_visible: 1,
+    } as unknown as Partial<RuntimeSettings>);
+    expect(invalid.llm_thinking_enabled).toBe(true);
+    expect(invalid.llm_thinking_visible).toBe(true);
   });
 
   it("空字符串视为移除覆盖，回退到 env", () => {

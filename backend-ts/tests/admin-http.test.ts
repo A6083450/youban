@@ -487,19 +487,29 @@ describe("admin HTTP", () => {
     expect(getResponse.status).toBe(200);
     expect(await getResponse.json()).toEqual(expect.objectContaining({
       success: true,
-      data: expect.objectContaining({ openai_model: expect.any(String) }),
+      data: expect.objectContaining({
+        openai_model: expect.any(String),
+        llm_thinking_enabled: false,
+        llm_thinking_visible: false,
+      }),
     }));
     const draft = { city: "北京", travel_days: 3 };
     const pendingToken = runtime.assistant.ledger.register(draft, 0.95).token;
     const update = await call("PUT", "/api/admin/settings", {
       openai_model: "admin-model",
+      llm_thinking_enabled: true,
+      llm_thinking_visible: true,
       unknown_key: "ignored",
     }, "admin@123");
     expect(update.status).toBe(200);
     expect((await update.json() as Record<string, any>).data.openai_model).toBe("admin-model");
     expect(runtime.assistant.ledger.validate(pendingToken, draft)).toEqual({ valid: true, reason: "ok" });
     const persisted = JSON.parse(readFileSync(join(dataDir, "runtime_settings.json"), "utf8"));
-    expect(persisted).toEqual({ openai_model: "admin-model" });
+    expect(persisted).toEqual({
+      openai_model: "admin-model",
+      llm_thinking_enabled: true,
+      llm_thinking_visible: true,
+    });
   });
 
   it("keeps the active settings and services when a replacement generation cannot be built", async () => {

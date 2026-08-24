@@ -21,6 +21,8 @@ export interface RuntimeSettings {
   trip_segment_days: number; // 默认 5
   trip_segment_concurrency: number; // 默认 8
   trip_review_enabled: boolean; // 默认 true
+  llm_thinking_enabled: boolean; // 默认 false
+  llm_thinking_visible: boolean; // 默认 false
   trip_planner_timeout: number; // 默认 120（秒）
   trip_duplicate_repair_rounds: number; // 默认 2
   pi_parent_session_limit: number; // 默认 64
@@ -66,7 +68,11 @@ const RUNTIME_NUMBER_RANGES = {
   pi_parent_session_idle_seconds: { min: 60, max: 86400, fallback: 1800 },
 } as const;
 
-const RUNTIME_BOOLEAN_KEYS = ["trip_review_enabled"] as const;
+const RUNTIME_BOOLEAN_KEYS = [
+  "trip_review_enabled",
+  "llm_thinking_enabled",
+  "llm_thinking_visible",
+] as const;
 
 const RUNTIME_ENUM_VALUES = {
   llm_api_style: ["responses", "completions"],
@@ -265,6 +271,8 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
     trip_segment_days: readEnvInt(5, "TRIP_SEGMENT_DAYS"),
     trip_segment_concurrency: readEnvInt(8, "TRIP_SEGMENT_CONCURRENCY"),
     trip_review_enabled: readEnvBool("TRIP_REVIEW_ENABLED", true),
+    llm_thinking_enabled: readEnvBool("LLM_THINKING_ENABLED", false),
+    llm_thinking_visible: readEnvBool("LLM_THINKING_VISIBLE", false),
     trip_planner_timeout: readEnvInt(120, "TRIP_PLANNER_TIMEOUT"),
     trip_duplicate_repair_rounds: readEnvInt(2, "TRIP_DUPLICATE_REPAIR_ROUNDS"),
     pi_parent_session_limit: readEnvBoundedInt(
@@ -310,6 +318,12 @@ export function getSettings(): AppSettings {
   ensureLoaded();
   settingsCache = buildSettings(runtimeOverrides);
   return settingsCache;
+}
+
+export function effectiveThinkingVisible(
+  settings: Pick<RuntimeSettings, "llm_thinking_enabled" | "llm_thinking_visible">,
+): boolean {
+  return settings.llm_thinking_enabled && settings.llm_thinking_visible;
 }
 
 export interface PreparedRuntimeSettings {
