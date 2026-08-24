@@ -55,6 +55,10 @@ class ManualClock {
     return this.sleepers.length;
   }
 
+  elapseBy(milliseconds: number): void {
+    this.time += milliseconds;
+  }
+
   advanceBy(milliseconds: number): void {
     const target = this.time + milliseconds;
     const ready = this.sleepers
@@ -175,6 +179,22 @@ describe("plan generation coordinator", () => {
 
     expect(state.publications).toEqual([{ quality: "enhanced", result: enhancedResult(input) }]);
     expect(state.statuses).toEqual(["completed"]);
+    expect(clock.pendingCount).toBe(0);
+  });
+
+  it("publishes fast when an enhanced result is delivered after a delayed timer threshold", async () => {
+    const clock = new ManualClock();
+    const enhanced = deferred<Record<string, unknown>>();
+    const input = request(15);
+    const state = harness(input, enhanced.promise, clock);
+
+    clock.elapseBy(9_500);
+    enhanced.resolve(enhancedResult(input));
+    await state.run.firstPublished;
+    await state.run.enhancementSettled;
+
+    expect(state.publications.map(({ quality }) => quality)).toEqual(["fast", "enhanced"]);
+    expect(state.statuses).toEqual(["running", "completed"]);
     expect(clock.pendingCount).toBe(0);
   });
 

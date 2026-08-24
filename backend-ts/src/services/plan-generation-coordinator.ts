@@ -144,7 +144,9 @@ export function startPlanGeneration(options: StartPlanGenerationOptions): PlanGe
       if (!timerAbort.signal.aborted) timerAbort.abort(winner.error);
       throw winner.error;
     }
-    if (winner.kind === "enhanced") {
+    const enhancedBeforeTrigger = winner.kind === "enhanced"
+      && (trigger === null || Math.max(0, now() - startedAt) < trigger);
+    if (enhancedBeforeTrigger) {
       if (!timerAbort.signal.aborted) timerAbort.abort();
       if (runAbort.signal.aborted) return;
       const published = await options.publishFirst(
@@ -156,6 +158,7 @@ export function startPlanGeneration(options: StartPlanGenerationOptions): PlanGe
       return;
     }
 
+    if (!timerAbort.signal.aborted) timerAbort.abort();
     if (runAbort.signal.aborted) return;
     const fast = buildFastTripPlan(options.request, options.latestCheckpoint());
     ensurePlanItemIds(fast);
