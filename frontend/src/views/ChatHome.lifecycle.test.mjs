@@ -75,4 +75,23 @@ describe('chat lifecycle persistence boundaries', () => {
     expect(watcherBody).toContain('if (restoreOwnedBusy)')
     expect(watcherBody).toContain('busy.value = false')
   })
+
+  it('replaces an early failed confirmation stream and releases its busy lease', () => {
+    const confirmBody = chatHomeSource.match(
+      /const handlePendingReply = async[\s\S]*?\n\}/,
+    )?.[0] ?? ''
+    const catchBody = confirmBody.slice(
+      confirmBody.indexOf('catch (error'),
+      confirmBody.indexOf('finally'),
+    )
+    const finallyBody = confirmBody.slice(confirmBody.indexOf('finally'))
+
+    expect(catchBody).toContain('if (!ownsOperation(context)) return')
+    expect(catchBody).toContain('replaceItem(streamId, {')
+    expect(catchBody).toContain("type: 'text'")
+    expect(catchBody).toContain("text: error?.message || t('composer.parseFailed')")
+    expect(catchBody).not.toContain("type: 'streaming'")
+    expect(catchBody).not.toContain('thinking')
+    expect(finallyBody).toMatch(/busy\.value = false|releaseConversationBusyLease\(busyLease\)/)
+  })
 })

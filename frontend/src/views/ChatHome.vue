@@ -1327,6 +1327,13 @@ const handlePendingReply = async (
         pendingConfirmId.value = streamId
       }
     }
+  } catch (error: any) {
+    if (!ownsOperation(context)) return
+    replaceItem(streamId, {
+      role: 'assistant',
+      type: 'text',
+      text: error?.message || t('composer.parseFailed'),
+    })
   } finally {
     if (ownsOperation(context)) {
       pendingUserText.value = null
