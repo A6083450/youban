@@ -338,6 +338,43 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(events.at(-1)).toBe("done");
   });
 
+  it("streams a safe intake summary only from an enabled visibility snapshot", async () => {
+    for (const [thinkingVisible, expectedCount] of [[false, 0], [true, 1]] as const) {
+      const dataDir = mkdtempSync(join(tmpdir(), `youban-intake-thinking-${thinkingVisible}-`));
+      tempDirs.push(dataDir);
+      const llm = new FakeLlmClient([[
+        '{"reply":"你好","action":"chat","emotion":"neutral"}',
+      ]]);
+      const runtime = createHttpRuntime({
+        dataDir,
+        assistant: new TripAssistant({
+          llm,
+          ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 29) }),
+          thinkingVisible,
+        }),
+      });
+      runtimes.push(runtime);
+
+      const response = await post(runtime.app, "/api/trip/parse/stream", { text: "想去放松一下" });
+      const events = sseEvents(await response.text());
+      const thoughts = events.filter((event): event is Record<string, any> => (
+        event !== "done" && event.type === "thinking"
+      ));
+      const deltas = events.filter((event): event is Record<string, any> => (
+        event !== "done" && event.type === "delta"
+      ));
+
+      expect(thoughts).toHaveLength(expectedCount);
+      if (thinkingVisible) {
+        expect(thoughts[0]?.detail).toEqual({
+          type: "thinking",
+          title: "正在梳理你的旅行偏好与行程条件",
+        });
+      }
+      expect(deltas.map((event) => event.text).join("")).toBe("你好");
+    }
+  });
+
   it("aborts the parse model when the SSE reader disconnects", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-assistant-abort-"));
     tempDirs.push(dataDir);

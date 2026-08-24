@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getSettings } from "../config/settings.ts";
+import { effectiveThinkingVisible, getSettings } from "../config/settings.ts";
 import { AmapResearchSources } from "../services/amap-research-sources.ts";
 import { getPiLlmClient, withThinkingSamplingParams } from "./llm/providers.ts";
 import {
@@ -20,6 +20,7 @@ interface DefaultTripPlannerSettings {
   llm_api_style: "responses" | "completions";
   llm_timeout: number;
   llm_thinking_enabled: boolean;
+  llm_thinking_visible: boolean;
   trip_planner_timeout?: number;
   trip_segment_days: number;
   trip_segment_concurrency: number;
@@ -70,5 +71,6 @@ export function createDefaultTripPlanner(options: DefaultTripPlannerOptions): Pi
     segmentConcurrency: settings.trip_segment_concurrency,
     reviewEnabled: settings.trip_review_enabled,
     duplicateRepairRounds: settings.trip_duplicate_repair_rounds,
+    showThoughts: effectiveThinkingVisible(settings),
   });
 }

@@ -1,6 +1,7 @@
 export type SseRun = (
   onDelta: (text: string) => void,
   signal: AbortSignal,
+  onThinking: (summary: string) => void,
 ) => Promise<unknown>;
 
 export interface SseResponseOptions {
@@ -41,7 +42,11 @@ export function sseResponse(
       void (async () => {
         try {
           if (signal.aborted) return;
-          const result = await run((text) => send({ type: "delta", text }), signal);
+          const result = await run(
+            (text) => send({ type: "delta", text }),
+            signal,
+            (summary) => send({ type: "thinking", detail: { type: "thinking", title: summary } }),
+          );
           send({ type: "final", payload: result });
         } catch (error) {
           if (!signal.aborted) {

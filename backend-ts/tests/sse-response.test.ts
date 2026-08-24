@@ -19,6 +19,22 @@ describe("SSE response", () => {
     ].join(""));
   });
 
+  it("adds an optional normalized thinking event without changing delta or completion frames", async () => {
+    const response = sseResponse(async (onDelta, _signal, onThinking) => {
+      onThinking("正在梳理旅行偏好");
+      onDelta("正常回复");
+      return { success: true };
+    });
+
+    expect(await response.text()).toBe([
+      'data: {"type":"status","status":"connected"}\n\n',
+      'data: {"type":"thinking","detail":{"type":"thinking","title":"正在梳理旅行偏好"}}\n\n',
+      'data: {"type":"delta","text":"正常回复"}\n\n',
+      'data: {"type":"final","payload":{"success":true}}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+  });
+
   it("emits an error and DONE frame for a business failure", async () => {
     const response = sseResponse(async () => {
       throw new Error("upstream failed");

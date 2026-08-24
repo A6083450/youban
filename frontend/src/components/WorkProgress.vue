@@ -110,9 +110,34 @@ const stageChips = computed(() =>
   }))
 )
 
+const detailTypes = new Set<TripTaskDetail['type']>([
+  'thinking', 'searching', 'found', 'planning', 'tool_call', 'info',
+])
+const normalizedDetails = computed<TripTaskDetail[]>(() => {
+  const normalized: TripTaskDetail[] = []
+  for (const detail of props.details || []) {
+    if (!detail || typeof detail !== 'object') continue
+    if (!detailTypes.has(detail.type)) continue
+    const title = typeof detail.title === 'string'
+      ? detail.title.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+      : ''
+    if (!title) continue
+    const content = detail.type !== 'thinking' && typeof detail.content === 'string'
+      ? detail.content
+      : undefined
+    normalized.push({
+      type: detail.type,
+      title,
+      ...(content ? { content } : {}),
+      ...(Number.isFinite(detail.timestamp) ? { timestamp: detail.timestamp } : {}),
+    })
+  }
+  return normalized
+})
+
 // 仅当最新一条事件是 thinking 时才展示思考动画,避免旧的"正在初始化…"残留
 const currentThinking = computed(() => {
-  const list = props.details || []
+  const list = normalizedDetails.value
   const last = list[list.length - 1]
   return last?.type === 'thinking' ? last.title : null
 })
@@ -146,7 +171,7 @@ const stripMarkdown = (raw: string): string => {
 // tool_call 是原始工具调用/代码输出,用户看不懂,跳过;thinking 由思考动画单独展示
 const eventSteps = computed<StepItem[]>(() => {
   const list: StepItem[] = []
-  for (const d of props.details || []) {
+  for (const d of normalizedDetails.value) {
     if (d.type !== 'searching' && d.type !== 'found' && d.type !== 'info') continue
     const item: StepItem = {
       key: d.title,

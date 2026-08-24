@@ -37,6 +37,7 @@ import type {
   TripPlan,
   TripPlanResponse,
   TripTaskEvent,
+  TripTaskDetail,
   UpdateConversationRequest,
   UserInfo,
   UserMemoryItem,
@@ -845,6 +846,7 @@ export async function confirmTripReply(
 
 interface ChatStreamCallbacks<T> {
   onDelta?: (text: string) => void
+  onThinking?: (detail: TripTaskDetail) => void
   onFinal?: (payload: T) => void
   onError?: (message: string) => void
   signal?: AbortSignal
@@ -857,7 +859,7 @@ const todayString = (): string => {
 
 /**
  * 通用 SSE POST:用 fetch + ReadableStream 逐块读取后端的
- * `data: {"type":"delta"|"final"|"error",...}` 事件流,直到 `data: [DONE]`。
+ * `data: {"type":"thinking"|"delta"|"final"|"error",...}` 事件流,直到 `data: [DONE]`。
  * axios 不支持流,故用原生 fetch;手动带上 X-User-Id。
  */
 async function postSSE<T>(
@@ -896,6 +898,13 @@ async function postSSE<T>(
       try {
         const evt = JSON.parse(data)
         if (evt.type === 'delta') cb.onDelta?.(String(evt.text ?? ''))
+        else if (evt.type === 'thinking') {
+          const detail = evt.detail
+          const title = detail?.type === 'thinking' && typeof detail.title === 'string'
+            ? detail.title.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+            : ''
+          if (title) cb.onThinking?.({ type: 'thinking', title })
+        }
         else if (evt.type === 'final') cb.onFinal?.(evt.payload as T)
         else if (evt.type === 'error') cb.onError?.(String(evt.message ?? ''))
       } catch {

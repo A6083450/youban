@@ -14,7 +14,8 @@ import {
 import type { TrustedPoi, WeatherForecast } from "../services/amap-research-sources.ts";
 import { adjustGeneratedDaysToBudget } from "../domain/budget-guard.ts";
 import { recommendVisitTimes } from "../domain/itinerary-scheduler.ts";
-import type { PlannerRunContext, TripPlanner } from "./trip-planner.ts";
+import type { PlannerProgress, PlannerRunContext, TripPlanner } from "./trip-planner.ts";
+import { visibleThoughtSummary } from "./thought-summary-policy.ts";
 
 export interface TripResearchSources {
   searchAttractions(city: string, preferences: string[]): Promise<TrustedPoi[]>;
@@ -43,6 +44,7 @@ interface PiTripPlannerOptions {
   reviewEnabled?: boolean;
   duplicateRepairRounds?: number;
   finalizationTimeoutMs?: number;
+  showThoughts?: boolean;
 }
 
 function researchSchema(candidates: TrustedPoi[]) {
@@ -314,6 +316,7 @@ export class PiTripPlanner implements TripPlanner {
   private readonly reviewEnabled: boolean;
   private readonly duplicateRepairRounds: number;
   private readonly finalizationTimeoutMs: number;
+  private readonly showThoughts: boolean;
 
   constructor(private readonly options: PiTripPlannerOptions) {
     this.segmentDays = options.segmentDays ?? 5;
@@ -321,6 +324,7 @@ export class PiTripPlanner implements TripPlanner {
     this.reviewEnabled = options.reviewEnabled ?? true;
     this.duplicateRepairRounds = options.duplicateRepairRounds ?? 2;
     this.finalizationTimeoutMs = Math.max(1, options.finalizationTimeoutMs ?? 8_000);
+    this.showThoughts = options.showThoughts === true;
   }
 
   async plan(request: TripPlanningRequest, context: PlannerRunContext): Promise<Record<string, unknown>> {
@@ -330,8 +334,17 @@ export class PiTripPlanner implements TripPlanner {
     const baseSegments = buildSegments(request, this.segmentDays);
     const segmentLimiter = createLimiter(this.segmentConcurrency);
     const plannedSegments = new Map<string, Segment>();
+    const details: NonNullable<PlannerProgress["details"]> = [];
+    const reportProgress = async (update: PlannerProgress, thought: string): Promise<void> => {
+      const summary = visibleThoughtSummary(thought, this.showThoughts);
+      if (summary) details.push({ type: "thinking", title: summary, timestamp: Date.now() });
+      await context.onProgress(summary ? { ...update, details: structuredClone(details) } : update);
+    };
     ensureActive(context.signal);
-    await context.onProgress({ stage: "initializing", progress: 8, message: "正在初始化旅行规划" });
+    await reportProgress(
+      { stage: "initializing", progress: 8, message: "正在初始化旅行规划" },
+      "正在梳理行程范围与生成步骤",
+    );
 
     const save = () => context.onCheckpoint(cloneCheckpoint(checkpoint));
     await mapConcurrent(cities, 6, async (city) => {
@@ -340,7 +353,10 @@ export class PiTripPlanner implements TripPlanner {
       await Promise.all(researchJobs.map(async (kind) => {
         ensureActive(context.signal);
         if (kind === "attractions") {
-          await context.onProgress({ stage: "attraction_search", progress: 15, message: `正在研究${city}景点` });
+          await reportProgress(
+            { stage: "attraction_search", progress: 15, message: `正在研究${city}景点` },
+            `正在为${city}筛选符合偏好的可信景点`,
+          );
           const candidates = await this.options.research.searchAttractions(city, request.preferences);
           if (candidates.length === 0) {
             checkpoint.search.attractions[city] = [];
@@ -355,10 +371,16 @@ export class PiTripPlanner implements TripPlanner {
             checkpoint.search.attractions[city] = validateResearchSelection(selected, candidates);
           }
         } else if (kind === "weather") {
-          await context.onProgress({ stage: "weather_search", progress: 24, message: `正在查询${city}天气` });
+          await reportProgress(
+            { stage: "weather_search", progress: 24, message: `正在查询${city}天气` },
+            `正在核对${city}出行期间的天气条件`,
+          );
           checkpoint.search.weather[city] = await this.options.research.getWeather(city);
         } else {
-          await context.onProgress({ stage: "hotel_search", progress: 32, message: `正在查询${city}酒店` });
+          await reportProgress(
+            { stage: "hotel_search", progress: 32, message: `正在查询${city}酒店` },
+            `正在匹配${city}住宿偏好与行程动线`,
+          );
           checkpoint.search.hotels[city] = await this.options.research.searchHotels(city, request.accommodation);
         }
         await save();
@@ -387,6 +409,7 @@ export class PiTripPlanner implements TripPlanner {
         context,
         ownerRunId,
         save,
+        reportProgress,
         {},
         segmentLimiter,
       );
@@ -406,6 +429,7 @@ export class PiTripPlanner implements TripPlanner {
         context,
         `${ownerRunId}:repair:${round}`,
         save,
+        reportProgress,
         issues,
         segmentLimiter,
       );
@@ -414,7 +438,10 @@ export class PiTripPlanner implements TripPlanner {
     const unresolved = duplicateAttractionIssues(days, segments);
     if (Object.keys(unresolved).length > 0) throw new Error("跨分段景点重复修复失败");
 
-    await context.onProgress({ stage: "reviewing", progress: 88, message: "正在汇总并审查行程" });
+    await reportProgress(
+      { stage: "reviewing", progress: 88, message: "正在汇总并审查行程" },
+      "正在校验行程完整性与预算节奏",
+    );
     const jobs: Promise<void>[] = [];
     const compactDays = compactAgentDays(days);
     if (checkpoint.summary.status !== "completed") {
@@ -494,11 +521,15 @@ export class PiTripPlanner implements TripPlanner {
     context: PlannerRunContext,
     ownerRunId: string,
     save: () => void | Promise<void>,
+    reportProgress: (update: PlannerProgress, thought: string) => Promise<void>,
     repairIssues: Record<string, string[]> = {},
     limiter: AsyncLimiter = createLimiter(this.segmentConcurrency),
   ): Promise<void> {
     const pending = segments.filter((segment) => checkpoint.segments[segment.segment_id]?.status !== "completed");
-    await context.onProgress({ stage: "planning", progress: 45, message: "正在并行生成分段行程" });
+    await reportProgress(
+      { stage: "planning", progress: 45, message: "正在并行生成分段行程" },
+      "正在平衡各天景点节奏与交通衔接",
+    );
     await Promise.all(pending.map((segment) => limiter(async () => {
       ensureActive(context.signal);
       const state = checkpoint.segments[segment.segment_id]!;

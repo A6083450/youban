@@ -145,6 +145,51 @@ function context(checkpoint = emptyCheckpoint()) {
 }
 
 describe("PiTripPlanner", () => {
+  it("emits only deterministic stage summaries when thought visibility is enabled", async () => {
+    const planner = new PiTripPlanner({
+      research: new FakeResearch(),
+      agents: new FakeAgents(),
+      showThoughts: true,
+    });
+    const run = context();
+
+    await planner.plan(REQUEST, run.value);
+
+    const details = run.progress.flatMap((update) => (
+      (update as { details?: Array<{ type: string; title: string }> }).details ?? []
+    ));
+    expect(details).toContainEqual(expect.objectContaining({
+      type: "thinking",
+      title: "正在为大理筛选符合偏好的可信景点",
+    }));
+    expect(details.every((detail) => detail.type === "thinking" && detail.title.length <= 160)).toBeTrue();
+    expect(JSON.stringify(details)).not.toContain("selected_poi_ids");
+    expect(JSON.stringify(details)).not.toContain("overall_suggestions");
+    expect((run.progress.at(-1) as { details: Array<{ title: string }> }).details.map((detail) => detail.title))
+      .toEqual(expect.arrayContaining([
+        "正在为大理筛选符合偏好的可信景点",
+        "正在平衡各天景点节奏与交通衔接",
+        "正在校验行程完整性与预算节奏",
+      ]));
+  });
+
+  it("omits every thought detail when thought visibility is disabled", async () => {
+    const planner = new PiTripPlanner({
+      research: new FakeResearch(),
+      agents: new FakeAgents(),
+      showThoughts: false,
+    });
+    const run = context();
+
+    await planner.plan(REQUEST, run.value);
+
+    expect(run.progress.every((update) => (
+      !(update as { details?: unknown[] }).details?.some((detail) => (
+        (detail as { type?: string }).type === "thinking"
+      ))
+    ))).toBeTrue();
+  });
+
   it("prefetches trusted facts, runs bounded segment children, and checkpoints every wave", async () => {
     const research = new FakeResearch();
     const agents = new FakeAgents();

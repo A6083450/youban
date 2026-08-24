@@ -3,6 +3,7 @@ import type { LlmClient } from "./llm/providers.ts";
 import { streamExtractStringField } from "./llm/stream-json.ts";
 import { ConfirmationLedger } from "../domain/confirmation.ts";
 import type { ParentAgentScope, YoubanParentAgent } from "./persistent-parent-agent.ts";
+import { visibleThoughtSummary } from "./thought-summary-policy.ts";
 
 export interface ChatHistoryItem {
   role?: string;
@@ -27,6 +28,7 @@ export interface ConfirmTripInput {
 
 interface RunOptions {
   onDelta?: (text: string) => void | Promise<void>;
+  onThoughtSummary?: (summary: string) => void | Promise<void>;
   signal?: AbortSignal;
   scope?: ParentAgentScope;
 }
@@ -188,10 +190,16 @@ export class TripAssistant {
     ledger: ConfirmationLedger;
     parentAgent?: YoubanParentAgent;
     thinkingEnabled?: boolean;
+    thinkingVisible?: boolean;
   }) {}
 
   get ledger(): ConfirmationLedger {
     return this.dependencies.ledger;
+  }
+
+  private async emitThoughtSummary(summary: string, options: RunOptions): Promise<void> {
+    const visible = visibleThoughtSummary(summary, this.dependencies.thinkingVisible === true);
+    if (visible) await options.onThoughtSummary?.(visible);
   }
 
   private async jsonCall(
@@ -262,6 +270,7 @@ export class TripAssistant {
   }
 
   async parse(input: ParseTripInput, options: RunOptions = {}): Promise<Record<string, unknown>> {
+    await this.emitThoughtSummary("正在梳理你的旅行偏好与行程条件", options);
     const today = normalizeToday(input.today);
     const tomorrow = addDays(today, 1);
     const fallback = languageFallback(input.language, "parse");
@@ -376,6 +385,7 @@ inferred_fields, recommendations[{destination,reason,suggested_days}]。
   }
 
   async confirm(input: ConfirmTripInput, options: RunOptions = {}): Promise<Record<string, unknown>> {
+    await this.emitThoughtSummary("正在核对行程调整与执行条件", options);
     const today = normalizeToday(input.today);
     const draft = input.draft ?? {};
     const language = String(input.language ?? "").trim().replaceAll("_", "-");

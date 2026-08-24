@@ -236,6 +236,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       llm: getPiLlmClient(),
       ledger: confirmationLedger,
       thinkingEnabled: settings.llm_thinking_enabled,
+      thinkingVisible: effectiveThinkingVisible(settings),
     });
     const plannerOptions: DefaultTripPlannerOptions = {
       cwd: repoRoot,
@@ -460,6 +461,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
             llm: candidateLlm,
             ledger: confirmationLedger,
             thinkingEnabled: candidateSettings.llm_thinking_enabled,
+            thinkingVisible: effectiveThinkingVisible(candidateSettings),
           });
           const plannerOptions: DefaultTripPlannerOptions = {
             cwd: repoRoot,
@@ -1112,8 +1114,13 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/parse/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta, signal) => withServices(({ assistant: activeAssistant }) =>
-        activeAssistant.parse(body, { onDelta, signal, scope: parentScope(headers) })
+      (onDelta, signal, onThinking) => withServices(({ assistant: activeAssistant }) =>
+        activeAssistant.parse(body, {
+          onDelta,
+          onThoughtSummary: onThinking,
+          signal,
+          scope: parentScope(headers),
+        })
       ),
       [request.signal, planningAbort.signal],
     ), {
@@ -1144,8 +1151,13 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/confirm-reply/stream", ({ body, headers, request }) => sseResponse(
-      (onDelta, signal) => withServices(({ assistant: activeAssistant }) =>
-        activeAssistant.confirm(body, { onDelta, signal, scope: parentScope(headers) })
+      (onDelta, signal, onThinking) => withServices(({ assistant: activeAssistant }) =>
+        activeAssistant.confirm(body, {
+          onDelta,
+          onThoughtSummary: onThinking,
+          signal,
+          scope: parentScope(headers),
+        })
       ),
       [request.signal, planningAbort.signal],
     ), {

@@ -77,7 +77,7 @@
                   :enable-mermaid="false"
                   :style="markdownStyle"
                 />
-                <span v-else class="stream-wait">{{ t('composer.parsing') }}</span>
+                <span v-else class="stream-wait">{{ item.thinking?.title || t('composer.parsing') }}</span>
               </div>
               <WorkProgress
                 v-else-if="item.type === 'progress'"
@@ -259,7 +259,7 @@ type ChatItemData =
   | { role: 'user'; type: 'text'; text: string }
   | { role: 'assistant'; type: 'text'; text: string }
   | { role: 'assistant'; type: 'typing' }
-  | { role: 'assistant'; type: 'streaming'; text: string }
+  | { role: 'assistant'; type: 'streaming'; text: string; thinking?: TripTaskDetail }
   | { role: 'assistant'; type: 'draft'; text: string; draft: ParsedTripDraft; ready: boolean }
   | { role: 'assistant'; type: 'progress'; status: WorkProgressStatus }
   | {
@@ -619,6 +619,11 @@ const setStreamingText = (id: number, text: string) => {
     ;(items.value[idx] as Extract<ChatItem, { type: 'streaming' }>).text = text
     scrollToBottom()
   }
+}
+
+const setStreamingThinking = (id: number, detail: TripTaskDetail) => {
+  const item = items.value.find((candidate) => candidate.id === id)
+  if (item?.type === 'streaming') item.thinking = detail
 }
 
 // 后端每次事件携带的 details 是全量累积列表，直接替换避免重复
@@ -1242,6 +1247,9 @@ const handlePendingReply = async (
           acc += d
           setStreamingText(streamId, acc)
         },
+        onThinking: (detail) => {
+          if (ownsOperation(context)) setStreamingThinking(streamId, detail)
+        },
         onFinal: (payload) => resolve(payload),
         onError: (msg) => reject(new Error(msg)),
       }).catch(reject)
@@ -1346,6 +1354,9 @@ const runParseStream = async (text: string, userItemId: number) => {
         if (!ownsOperation(context)) return
         acc += d
         setStreamingText(streamId, acc)
+      },
+      onThinking: (detail) => {
+        if (ownsOperation(context)) setStreamingThinking(streamId, detail)
       },
       onFinal: (res) => { finalRes = res },
       onError: () => { streamError = true },
