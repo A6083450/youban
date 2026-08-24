@@ -34,7 +34,7 @@ describe("ConversationTitleService", () => {
       options: expect.objectContaining({
         temperature: 0.1,
         maxTokens: 32,
-        disableThinking: true,
+        thinkingEnabled: false,
         sessionId: expect.stringMatching(/^conversation-title:[a-f0-9]{16}$/),
       }),
     }));

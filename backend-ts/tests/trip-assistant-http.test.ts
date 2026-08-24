@@ -669,6 +669,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
       llm,
       ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 7) }),
       parentAgent: parent,
+      thinkingEnabled: true,
     });
     const runtime = createHttpRuntime({ dataDir, assistant, parentAgent: parent });
     runtimes.push(runtime);
@@ -688,6 +689,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
       "user:user-parent",
     ]);
     expect(llm.calls.every((call) => call.options.systemPrompt.length < 500)).toBeTrue();
+    expect(llm.calls.every((call) => call.options.thinkingEnabled === true)).toBeTrue();
     expect(parent.scopes).toEqual([]);
   });
 });

@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -499,6 +507,68 @@ describe("admin HTTP", () => {
         llm_thinking_visible: false,
       }),
     }));
+  });
+
+  it("applies the updated thinking setting to replacement intake requests", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const provider = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push(await request.json() as Record<string, any>);
+        const output = JSON.stringify({
+          action: "chat",
+          emotion: "neutral",
+          reply: "收到。",
+        });
+        const chunks = [
+          {
+            id: "thinking-settings",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "mock-model",
+            choices: [{ index: 0, delta: { role: "assistant", content: output }, finish_reason: null }],
+          },
+          {
+            id: "thinking-settings",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "mock-model",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+          },
+        ];
+        return new Response(
+          `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+
+    try {
+      for (const [thinkingEnabled, expected] of [
+        [true, { type: "enabled" }],
+        [false, { type: "disabled" }],
+      ] as const) {
+        const update = await call("PUT", "/api/admin/settings", {
+          openai_api_key: "test-key",
+          openai_base_url: `${provider.url}v1`,
+          openai_model: "mock-model",
+          llm_api_style: "completions",
+          llm_thinking_enabled: thinkingEnabled,
+        }, "admin@123");
+        expect(update.status).toBe(200);
+
+        const response = await call("POST", "/api/trip/parse", {
+          text: "随便聊聊",
+          language: "zh-CN",
+        });
+        expect(response.status).toBe(200);
+        expect(requests.at(-1)?.thinking).toEqual(expected);
+      }
+      expect(readdirSync(join(dataDir, "pi-runtime", "generations"))).toHaveLength(3);
+    } finally {
+      provider.stop(true);
+    }
   });
 
   it("reads and persists filtered runtime settings", async () => {

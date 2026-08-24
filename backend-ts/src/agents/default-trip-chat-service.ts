@@ -2,7 +2,11 @@ import { join } from "node:path";
 import type { AppSettings } from "../config/settings.ts";
 import { getSettings } from "../config/settings.ts";
 import { HermesMemoryBridge } from "../services/hermes-memory.ts";
-import { getPiLlmClient, type LlmClient } from "./llm/providers.ts";
+import {
+  getPiLlmClient,
+  type LlmClient,
+  withThinkingSamplingParams,
+} from "./llm/providers.ts";
 import {
   PiSubagentRunner,
   type PiSubagentRunnerOptions,
@@ -31,18 +35,37 @@ export interface DefaultTripChatServiceOptions {
     | "openai_model"
     | "llm_api_style"
     | "llm_timeout"
+    | "llm_thinking_enabled"
     | "chat_edit_agent"
   >;
+}
+
+function withThinkingSetting(llm: LlmClient, thinkingEnabled: boolean): LlmClient {
+  return {
+    model: withThinkingSamplingParams(llm.model, thinkingEnabled),
+    stream: (prompt, options) => llm.stream(prompt, { ...options, thinkingEnabled }),
+    complete: (prompt, options) => llm.complete(prompt, { ...options, thinkingEnabled }),
+    ...(llm.agentComplete ? {
+      agentComplete: (prompt, options) => llm.agentComplete!(prompt, {
+        ...options,
+        thinkingEnabled,
+      }),
+    } : {}),
+  };
 }
 
 export function createDefaultTripChatService(options: DefaultTripChatServiceOptions): TripChatService {
   const settings = options.settings ?? getSettings();
   const runtimeDir = options.runtimeDir ?? join(options.dataDir, "pi-runtime");
-  const llm = options.llm ?? getPiLlmClient();
+  const llm = withThinkingSetting(
+    options.llm ?? getPiLlmClient(),
+    settings.llm_thinking_enabled,
+  );
   writeRuntimeModelConfig(runtimeDir, {
     baseUrl: settings.openai_base_url,
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
+    thinkingEnabled: settings.llm_thinking_enabled,
   });
   const runnerOptions: PiSubagentRunnerOptions = {
     cwd: options.cwd,
@@ -51,6 +74,7 @@ export function createDefaultTripChatService(options: DefaultTripChatServiceOpti
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: settings.llm_timeout * 1_000,
+    thinkingEnabled: settings.llm_thinking_enabled,
     skillCatalog: options.skillCatalog,
     skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
   };

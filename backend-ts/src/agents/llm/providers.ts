@@ -25,7 +25,7 @@ export interface PiLlmConfig {
 export interface LlmCallOptions {
   temperature?: number;
   maxTokens?: number;
-  disableThinking?: boolean;
+  thinkingEnabled?: boolean;
   signal?: AbortSignal;
 }
 
@@ -46,6 +46,23 @@ export interface PiAgentLlmClient extends LlmClient {
   agentComplete(prompt: string, options: PiAgentCallOptions): Promise<string>;
 }
 
+export function thinkingSamplingParams(enabled: boolean | undefined): Record<string, unknown> {
+  return { thinking: { type: enabled === true ? "enabled" : "disabled" } };
+}
+
+export function withThinkingSamplingParams<T extends Model<Api>>(
+  model: T,
+  enabled: boolean | undefined,
+): T {
+  return {
+    ...model,
+    samplingParams: {
+      ...model.samplingParams,
+      ...thinkingSamplingParams(enabled),
+    },
+  };
+}
+
 class PiLlmClient implements PiAgentLlmClient {
   constructor(
     private readonly models: Models,
@@ -62,6 +79,10 @@ class PiLlmClient implements PiAgentLlmClient {
         ...streamOptions,
         temperature: options.temperature ?? 0.1,
         maxTokens: options.maxTokens,
+        samplingParams: {
+          ...streamOptions.samplingParams,
+          ...thinkingSamplingParams(options.thinkingEnabled),
+        },
         timeoutMs: this.timeoutMs,
         maxRetries: 1,
         headers: { ...streamOptions.headers, "User-Agent": BROWSER_USER_AGENT },
@@ -71,7 +92,7 @@ class PiLlmClient implements PiAgentLlmClient {
       initialState: {
         systemPrompt: options.systemPrompt,
         model: this.model,
-        thinkingLevel: "off",
+        thinkingLevel: options.thinkingEnabled === true ? "medium" : "off",
         tools: [],
       },
       streamFn,
@@ -113,6 +134,7 @@ class PiLlmClient implements PiAgentLlmClient {
       {
         temperature: options.temperature ?? 0.1,
         maxTokens: options.maxTokens,
+        samplingParams: thinkingSamplingParams(options.thinkingEnabled),
         signal: options.signal,
         timeoutMs: this.timeoutMs,
         maxRetries: 1,

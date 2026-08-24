@@ -4,7 +4,7 @@ import type { AppSettings } from "../config/settings.ts";
 import { getSettings } from "../config/settings.ts";
 import type { SqliteTaskStore } from "../domain/task-store.ts";
 import type { UserMemoryService } from "../services/hermes-memory.ts";
-import { getPiLlmClient } from "./llm/providers.ts";
+import { getPiLlmClient, withThinkingSamplingParams } from "./llm/providers.ts";
 import { createParentBusinessTools } from "./parent-business-tools.ts";
 import {
   PersistentPiParentAgent,
@@ -30,6 +30,7 @@ export interface DefaultParentAgentOptions {
     | "openai_model"
     | "llm_api_style"
     | "llm_timeout"
+    | "llm_thinking_enabled"
     | "pi_parent_session_limit"
     | "pi_parent_session_idle_seconds"
   >;
@@ -42,11 +43,16 @@ export function createDefaultParentAgent(options: DefaultParentAgentOptions): Pe
     baseUrl: settings.openai_base_url,
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
+    thinkingEnabled: settings.llm_thinking_enabled,
   });
+  const model = withThinkingSamplingParams(
+    options.model ?? getPiLlmClient().model,
+    settings.llm_thinking_enabled,
+  );
   const parentOptions: PersistentParentAgentOptions = {
     cwd: options.cwd,
     runtimeDir,
-    model: options.model ?? getPiLlmClient().model,
+    model,
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: settings.llm_timeout * 1_000,

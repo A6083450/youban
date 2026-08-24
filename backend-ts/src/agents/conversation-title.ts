@@ -77,7 +77,7 @@ export class ConversationTitleService {
         systemPrompt: TITLE_SYSTEM_PROMPT,
         temperature: 0.1,
         maxTokens: 32,
-        disableThinking: true,
+        thinkingEnabled: false,
         signal: deadline.signal,
         sessionId: titleSessionId(normalizedFirstMessage),
       });

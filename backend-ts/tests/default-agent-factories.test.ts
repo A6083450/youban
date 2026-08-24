@@ -33,7 +33,7 @@ describe("default agent factory wiring", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "youban-default-parent-catalog-"));
     const skillCatalog = testCatalog(23);
     const fakeParent = { close: async () => {} } as PersistentPiParentAgent;
-    let receivedCatalog: SkillCatalogProvider | undefined;
+    let receivedOptions: PersistentParentAgentOptions | undefined;
     let parent: PersistentPiParentAgent | undefined;
     try {
       parent = createDefaultParentAgent({
@@ -44,7 +44,7 @@ describe("default agent factory wiring", () => {
         model: getModel("openai", "gpt-4o-mini")!,
         skillCatalog,
         parentFactory: (options: PersistentParentAgentOptions) => {
-          receivedCatalog = options.skillCatalog;
+          receivedOptions = options;
           return fakeParent;
         },
         settings: {
@@ -53,12 +53,14 @@ describe("default agent factory wiring", () => {
           openai_model: "deepseek-v4-flash",
           llm_api_style: "responses",
           llm_timeout: 60,
+          llm_thinking_enabled: true,
           pi_parent_session_limit: 8,
           pi_parent_session_idle_seconds: 600,
         },
       });
       expect(parent).toBe(fakeParent);
-      expect(receivedCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.skillCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.model.samplingParams?.thinking).toEqual({ type: "enabled" });
     } finally {
       await parent?.close();
       rmSync(tempRoot, { recursive: true, force: true });
@@ -68,7 +70,7 @@ describe("default agent factory wiring", () => {
   it("passes the live skill catalog through the default chat runner factory", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "youban-default-chat-catalog-"));
     const skillCatalog = testCatalog(29);
-    let receivedCatalog: SkillCatalogProvider | undefined;
+    let receivedOptions: Parameters<NonNullable<Parameters<typeof createDefaultTripChatService>[0]["runnerFactory"]>>[0] | undefined;
     const service = createDefaultTripChatService({
       cwd: tempRoot,
       dataDir: join(tempRoot, "data"),
@@ -83,7 +85,7 @@ describe("default agent factory wiring", () => {
         async remember() { return true; },
       },
       runnerFactory: (options) => {
-        receivedCatalog = options.skillCatalog;
+        receivedOptions = options;
         return {
           async run() { return {}; },
           close() {},
@@ -95,11 +97,55 @@ describe("default agent factory wiring", () => {
         openai_model: "deepseek-v4-flash",
         llm_api_style: "responses",
         llm_timeout: 60,
+        llm_thinking_enabled: true,
         chat_edit_agent: "pi",
       },
     });
     try {
-      expect(receivedCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.skillCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.thinkingEnabled).toBeTrue();
+      expect(receivedOptions?.model.samplingParams?.thinking).toEqual({ type: "enabled" });
+    } finally {
+      await service.close();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the thinking snapshot to direct chat model calls", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "youban-default-chat-thinking-"));
+    let receivedThinking: boolean | undefined;
+    const service = createDefaultTripChatService({
+      cwd: tempRoot,
+      dataDir: join(tempRoot, "data"),
+      llm: {
+        model: getModel("openai", "gpt-4o-mini")!,
+        async *stream() {},
+        async complete(_prompt, options) {
+          receivedThinking = options?.thinkingEnabled;
+          return "收到。";
+        },
+      },
+      memory: {
+        async recall() { return ""; },
+        async remember() { return true; },
+      },
+      runnerFactory: () => ({
+        async run() { return {}; },
+        close() {},
+      }),
+      settings: {
+        openai_api_key: "llm-secret",
+        openai_base_url: "https://example.invalid/v1/",
+        openai_model: "deepseek-v4-flash",
+        llm_api_style: "responses",
+        llm_timeout: 60,
+        llm_thinking_enabled: true,
+        chat_edit_agent: "simple",
+      },
+    });
+    try {
+      await service.ask({ message: "还能调整吗？", trip_plan: {} });
+      expect(receivedThinking).toBeTrue();
     } finally {
       await service.close();
       rmSync(tempRoot, { recursive: true, force: true });

@@ -187,6 +187,7 @@ export class TripAssistant {
     llm: LlmClient;
     ledger: ConfirmationLedger;
     parentAgent?: YoubanParentAgent;
+    thinkingEnabled?: boolean;
   }) {}
 
   get ledger(): ConfirmationLedger {
@@ -205,7 +206,7 @@ export class TripAssistant {
         systemPrompt: INTAKE_SYSTEM_PROMPT,
         sessionId: options.scope?.key,
         temperature: 0.1,
-        disableThinking: true,
+        thinkingEnabled: this.dependencies.thinkingEnabled,
         signal: options.signal,
         onDelta: options.onDelta ? async (chunk) => {
           buffer += chunk;
@@ -239,7 +240,7 @@ export class TripAssistant {
     if (!options.onDelta) {
       return parseJsonObject(await this.dependencies.llm.complete(prompt, {
         temperature: 0.1,
-        disableThinking: true,
+        thinkingEnabled: this.dependencies.thinkingEnabled,
         signal: options.signal,
       }));
     }
@@ -247,7 +248,7 @@ export class TripAssistant {
     let emitted = 0;
     for await (const chunk of this.dependencies.llm.stream(prompt, {
       temperature: 0.1,
-      disableThinking: true,
+      thinkingEnabled: this.dependencies.thinkingEnabled,
       signal: options.signal,
     })) {
       buffer += chunk;

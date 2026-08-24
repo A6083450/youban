@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { BROWSER_USER_AGENT } from "./llm/providers.ts";
+import { BROWSER_USER_AGENT, withThinkingSamplingParams } from "./llm/providers.ts";
 import type { StructuredAgentRequest, StructuredAgentRunner } from "./pi-trip-planner.ts";
 import {
   createYoubanAgentSession,
@@ -55,6 +55,7 @@ export function writeRuntimeModelConfig(
     baseUrl: string;
     model: string;
     apiStyle: "responses" | "completions";
+    thinkingEnabled?: boolean;
   },
 ): string {
   const agentDir = join(runtimeDir, "agent");
@@ -75,6 +76,9 @@ export function writeRuntimeModelConfig(
         models: [{
           id: config.model,
           reasoning: config.model === "deepseek-v4-flash",
+          samplingParams: {
+            thinking: { type: config.thinkingEnabled === true ? "enabled" : "disabled" },
+          },
         }],
       },
     },
@@ -90,6 +94,7 @@ export interface PiSubagentRunnerOptions {
   subagentModel: string;
   apiKey?: string;
   timeoutMs?: number;
+  thinkingEnabled?: boolean;
   skillCatalog?: SkillCatalogProvider;
   skillSnapshot?: SkillCatalogSnapshot;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
@@ -153,7 +158,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
     return {
       cwd: this.options.cwd,
       runtimeDir: this.options.runtimeDir,
-      model: this.options.model,
+      model: withThinkingSamplingParams(this.options.model, this.options.thinkingEnabled),
       subagentModel: this.options.subagentModel,
       skillSnapshot,
       tools: ["subagent"],
@@ -338,7 +343,7 @@ export class PiSubagentRunner implements StructuredAgentRunner {
           ].join("\n\n"),
           context: "fresh",
           cwd: this.options.cwd,
-          thinking: "off",
+          thinking: this.options.thinkingEnabled === true ? "medium" : "off",
           timeoutMs: this.options.timeoutMs ?? 120_000,
           turnBudget: { maxTurns: 1 },
           toolBudget: {

@@ -156,6 +156,7 @@ function piGenerationRuntimeDir(dataDir: string, settings: AppSettings): string 
     baseUrl: settings.openai_base_url.replace(/\/+$/, ""),
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
+    thinkingEnabled: settings.llm_thinking_enabled,
   });
   const generation = new Bun.CryptoHasher("sha256").update(signature).digest("hex").slice(0, 16);
   return join(dataDir, "pi-runtime", "generations", generation);
@@ -234,6 +235,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     assistant = options.assistant ?? new TripAssistant({
       llm: getPiLlmClient(),
       ledger: confirmationLedger,
+      thinkingEnabled: settings.llm_thinking_enabled,
     });
     const plannerOptions: DefaultTripPlannerOptions = {
       cwd: repoRoot,
@@ -457,6 +459,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           nextAssistant = options.assistant ?? new TripAssistant({
             llm: candidateLlm,
             ledger: confirmationLedger,
+            thinkingEnabled: candidateSettings.llm_thinking_enabled,
           });
           const plannerOptions: DefaultTripPlannerOptions = {
             cwd: repoRoot,

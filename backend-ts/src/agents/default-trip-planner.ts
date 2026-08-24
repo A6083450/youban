@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSettings } from "../config/settings.ts";
 import { AmapResearchSources } from "../services/amap-research-sources.ts";
-import { getPiLlmClient } from "./llm/providers.ts";
+import { getPiLlmClient, withThinkingSamplingParams } from "./llm/providers.ts";
 import {
   PiSubagentRunner,
   type PiSubagentRunnerOptions,
@@ -19,6 +19,7 @@ interface DefaultTripPlannerSettings {
   openai_model: string;
   llm_api_style: "responses" | "completions";
   llm_timeout: number;
+  llm_thinking_enabled: boolean;
   trip_planner_timeout?: number;
   trip_segment_days: number;
   trip_segment_concurrency: number;
@@ -44,14 +45,20 @@ export function createDefaultTripPlanner(options: DefaultTripPlannerOptions): Pi
     baseUrl: settings.openai_base_url,
     model: settings.openai_model,
     apiStyle: settings.llm_api_style,
+    thinkingEnabled: settings.llm_thinking_enabled,
   });
+  const model = withThinkingSamplingParams(
+    options.model ?? getPiLlmClient().model,
+    settings.llm_thinking_enabled,
+  );
   const runnerOptions: PiSubagentRunnerOptions = {
     cwd: options.cwd,
     runtimeDir,
-    model: options.model ?? getPiLlmClient().model,
+    model,
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: (settings.trip_planner_timeout ?? settings.llm_timeout) * 1_000,
+    thinkingEnabled: settings.llm_thinking_enabled,
     skillCatalog: options.skillCatalog,
     skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
   };

@@ -88,15 +88,23 @@ describe("Pi LLM client", () => {
       });
       const deltas: string[] = [];
 
-      const output = await client.agentComplete("organize this trip", {
-        systemPrompt: "You are a lightweight trip intake agent.",
-        sessionId: "user:test-user",
-        onDelta: (delta) => { deltas.push(delta); },
-      });
+      for (const [thinkingEnabled, expected] of [
+        [false, { type: "disabled" }],
+        [true, { type: "enabled" }],
+      ] as const) {
+        const output = await client.agentComplete("organize this trip", {
+          systemPrompt: "You are a lightweight trip intake agent.",
+          sessionId: "user:test-user",
+          thinkingEnabled,
+          onDelta: (delta) => { deltas.push(delta); },
+        });
 
-      expect(output).toBe("OK");
-      expect(deltas).toEqual(["O", "K"]);
-      expect(requests).toHaveLength(1);
+        expect(output).toBe("OK");
+        expect(requests.at(-1)?.body.thinking).toEqual(expected);
+      }
+
+      expect(deltas).toEqual(["O", "K", "O", "K"]);
+      expect(requests).toHaveLength(2);
       expect(requests[0]?.headers.get("user-agent")).toContain("Mozilla/5.0");
       expect(requests[0]?.body.messages).toEqual([
         expect.objectContaining({ role: "system", content: "You are a lightweight trip intake agent." }),
@@ -161,9 +169,12 @@ describe("Pi LLM client", () => {
         timeoutMs: 2_000,
       });
       const chunks: string[] = [];
-      for await (const chunk of client.stream("reply with OK", { temperature: 0.1 })) chunks.push(chunk);
+      for await (const chunk of client.stream("reply with OK", {
+        temperature: 0.1,
+        thinkingEnabled: false,
+      })) chunks.push(chunk);
       expect(chunks).toEqual(["O", "K"]);
-      expect(await client.complete("reply with OK")).toBe("OK");
+      expect(await client.complete("reply with OK", { thinkingEnabled: true })).toBe("OK");
       expect(requests).toHaveLength(2);
       expect(requests[0]?.url).toEndWith("/v1/chat/completions");
       expect(requests[0]?.headers.get("user-agent")).toContain("Mozilla/5.0");
@@ -171,6 +182,8 @@ describe("Pi LLM client", () => {
         role: "user",
         content: "reply with OK",
       }));
+      expect(requests[0]?.body.thinking).toEqual({ type: "disabled" });
+      expect(requests[1]?.body.thinking).toEqual({ type: "enabled" });
     } finally {
       server.stop(true);
     }

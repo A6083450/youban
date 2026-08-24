@@ -24,7 +24,7 @@ describe("default trip planner wiring", () => {
       }),
       subscribe: () => () => {},
     } satisfies SkillCatalogProvider;
-    let receivedCatalog: SkillCatalogProvider | undefined;
+    let receivedOptions: Parameters<NonNullable<Parameters<typeof createDefaultTripPlanner>[0]["runnerFactory"]>>[0] | undefined;
     try {
       const planner = createDefaultTripPlanner({
         cwd: tempRoot,
@@ -32,7 +32,7 @@ describe("default trip planner wiring", () => {
         model: getModel("openai", "gpt-4o-mini")!,
         skillCatalog,
         runnerFactory: (options) => {
-          receivedCatalog = options.skillCatalog;
+          receivedOptions = options;
           return { async run() { return {}; } };
         },
         settings: {
@@ -42,13 +42,16 @@ describe("default trip planner wiring", () => {
           openai_model: "deepseek-v4-flash",
           llm_api_style: "responses",
           llm_timeout: 60,
+          llm_thinking_enabled: true,
           trip_segment_days: 5,
           trip_segment_concurrency: 8,
           trip_review_enabled: true,
           trip_duplicate_repair_rounds: 2,
         },
       });
-      expect(receivedCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.skillCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.thinkingEnabled).toBeTrue();
+      expect(receivedOptions?.model.samplingParams?.thinking).toEqual({ type: "enabled" });
       await planner.close();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -69,6 +72,7 @@ describe("default trip planner wiring", () => {
           openai_model: "deepseek-v4-flash",
           llm_api_style: "responses",
           llm_timeout: 60,
+          llm_thinking_enabled: false,
           trip_segment_days: 5,
           trip_segment_concurrency: 8,
           trip_review_enabled: true,
@@ -80,6 +84,8 @@ describe("default trip planner wiring", () => {
       const raw = readFileSync(join(tempRoot, "data", "pi-runtime", "agent", "models.json"), "utf8");
       expect(raw).toContain("$YOUBAN_PI_RUNTIME_API_KEY");
       expect(raw).not.toContain("llm-secret");
+      expect(JSON.parse(raw).providers["youban-runtime"].models[0].samplingParams.thinking)
+        .toEqual({ type: "disabled" });
       await planner.close();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
