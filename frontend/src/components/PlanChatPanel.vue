@@ -25,49 +25,50 @@
         <BubbleList
           v-else
           ref="bubbleListRef"
-          class="agent-messages"
+          class="agent-messages px-4 py-4"
           :list="panelBubbleItems"
           item-key="id"
           max-height="min(420px, 48vh)"
+          :virtual="false"
           :auto-scroll="true"
           :show-back-button="true"
         >
-          <template #item="{ item }">
-            <Bubble
-              :class="`role-${item.message.role}`"
-              :placement="item.message.role === 'user' ? 'end' : 'start'"
-              :variant="item.message.role === 'user' ? 'filled' : 'outlined'"
-              :loading="item.message.kind === 'typing'"
-              max-width="88%"
+          <template #avatar="{ item }">
+            <span
+              class="grid size-8 shrink-0 place-items-center rounded-full shadow-sm"
+              :class="item.placement === 'end' ? 'bg-stone-100 text-stone-600' : 'bg-[#d97757] text-white'"
+              aria-hidden="true"
             >
-              <template #content>
-                <span v-if="item.message.role === 'user'">{{ item.message.content }}</span>
-                <template v-else-if="item.message.kind !== 'typing'">
-                  <MarkdownRenderer
-                    class="agent-markdown"
-                    :markdown="item.message.content"
-                    :allow-html="false"
-                    :enable-shiki="false"
-                    :enable-mermaid="false"
-                    :style="markdownStyle"
-                  />
-                  <div v-if="item.message.kind === 'changes' && item.message.changes.length" class="agent-changes-card">
-                    <div class="agent-changes-title">{{ t('result.agent.changesTitle') }}</div>
-                    <ul class="agent-changes-list">
-                      <li v-for="(change, changeIndex) in item.message.changes" :key="changeIndex">{{ change }}</li>
-                    </ul>
-                    <button
-                      type="button"
-                      class="agent-undo-btn"
-                      :disabled="item.message.undone"
-                      @click="undoChange(item.message)"
-                    >
-                      {{ item.message.undone ? t('result.agent.undone') : t('result.agent.undo') }}
-                    </button>
-                  </div>
-                </template>
-              </template>
-            </Bubble>
+              <UserFilled v-if="item.placement === 'end'" class="size-4" />
+              <Compass v-else class="size-4" />
+            </span>
+          </template>
+          <template #content="{ item }">
+            <span v-if="item.placement === 'end'">{{ item.content }}</span>
+            <template v-else-if="!item.loading">
+              <MarkdownRenderer
+                class="agent-markdown"
+                :markdown="item.content"
+                :allow-html="false"
+                :enable-shiki="false"
+                :enable-mermaid="false"
+                :style="markdownStyle"
+              />
+              <div v-if="getChanges(item).length" class="agent-changes-card">
+                <div class="agent-changes-title">{{ t('result.agent.changesTitle') }}</div>
+                <ul class="agent-changes-list">
+                  <li v-for="(change, changeIndex) in getChanges(item)" :key="changeIndex">{{ change }}</li>
+                </ul>
+                <button
+                  type="button"
+                  class="agent-undo-btn"
+                  :disabled="isChangeUndone(item)"
+                  @click="undoChangeForBubbleItem(item)"
+                >
+                  {{ isChangeUndone(item) ? t('result.agent.undone') : t('result.agent.undo') }}
+                </button>
+              </div>
+            </template>
           </template>
         </BubbleList>
       </section>
@@ -75,7 +76,7 @@
 
     <div
       ref="senderRoot"
-      class="agent-inputbar"
+      class="agent-inputbar overflow-hidden bg-white"
       :class="{ 'is-focused': focused, 'is-disabled': !tripPlan }"
       @focusin="onFocus"
       @focusout="handleFocusOut"
@@ -111,8 +112,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bubble, BubbleList, Prompts, Welcome, XSender } from 'vue-element-plus-x'
-import { ArrowDownBold, Promotion } from '@element-plus/icons-vue'
+import { BubbleList, Prompts, Welcome, XSender } from 'vue-element-plus-x'
+import { ArrowDownBold, Compass, Promotion, UserFilled } from '@element-plus/icons-vue'
 import { ElButton, ElIcon } from 'element-plus'
 import { MarkdownRenderer } from 'x-markdown-vue'
 import { chatEditPlan, getPlanConversation } from '@/services/api'
@@ -140,10 +141,37 @@ const markdownStyle = {
   padding: '0',
 }
 
+type PanelBubbleItem = { id?: string | number }
+
+const getMessageContent = (message: PanelMessage): string =>
+  message.kind === 'typing' ? '' : message.content
+
 const panelBubbleItems = computed(() => messages.value.map((message, index) => ({
-  id: `${index}-${message.role}-${message.kind}`,
-  message,
+  id: index,
+  content: getMessageContent(message),
+  placement: message.role === 'user' ? ('end' as const) : ('start' as const),
+  variant: message.role === 'user' ? ('filled' as const) : ('outlined' as const),
+  loading: message.kind === 'typing',
+  noStyle: message.role !== 'user',
 })))
+
+const getPanelMessage = (item: PanelBubbleItem): PanelMessage | undefined =>
+  typeof item.id === 'number' ? messages.value[item.id] : undefined
+
+const getChanges = (item: PanelBubbleItem): string[] => {
+  const message = getPanelMessage(item)
+  return message?.kind === 'changes' ? message.changes : []
+}
+
+const isChangeUndone = (item: PanelBubbleItem): boolean => {
+  const message = getPanelMessage(item)
+  return message?.kind === 'changes' ? Boolean(message.undone) : false
+}
+
+const undoChangeForBubbleItem = (item: PanelBubbleItem) => {
+  const message = getPanelMessage(item)
+  if (message?.kind === 'changes') undoChange(message)
+}
 
 const quickPrompts = computed(() => ['quick1', 'quick2', 'quick3'].map((key) => ({
   key,
@@ -376,7 +404,6 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 }
 
 .agent-messages {
-  padding: 16px 14px;
   min-height: 100px;
 }
 
@@ -398,7 +425,7 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
   overflow-wrap: anywhere;
 }
 
-.agent-messages :deep(.role-user) {
+.agent-messages :deep(.elx-bubble--end) {
   --elx-bubble-bg: var(--accent-primary);
   --elx-bubble-text-color: #fff;
 }
@@ -545,6 +572,7 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 
 .agent-inputbar {
   width: 100%;
+  border: 1px solid var(--border-subtle);
   border-radius: 16px;
   box-shadow: 0 10px 32px rgba(61, 50, 41, 0.16);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -552,7 +580,7 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 
 .agent-inputbar.is-focused {
   border-color: #D97757;
-  box-shadow: 0 12px 36px rgba(217, 119, 87, 0.25);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.16), 0 12px 36px rgba(217, 119, 87, 0.25);
 }
 
 .agent-inputbar.is-disabled {
@@ -561,13 +589,24 @@ const undoChange = (msg: Extract<PanelMessage, { kind: 'changes' }>) => {
 
 .agent-sender {
   width: 100%;
+  border-radius: 16px;
+  box-shadow: none;
   --el-color-primary: var(--accent-primary);
 }
 
-.agent-sender :deep(.el-sender-wrap) {
+.agent-sender:focus-within {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.agent-sender:focus-within::after {
+  border-width: 0;
+}
+
+.agent-sender :deep(.elx-x-sender__content) {
   border-color: var(--border-subtle);
   border-radius: 16px;
-  background: var(--surface-elevated);
+  background: #fff;
 }
 
 .agent-textarea {
