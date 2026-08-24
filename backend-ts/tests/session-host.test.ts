@@ -50,6 +50,36 @@ function builtinSnapshot(): SkillCatalogSnapshot {
 }
 
 describe("Pi session host", () => {
+  it("sets the parent session thinking level from its immutable snapshot", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "youban-pi-session-thinking-"));
+    const runtimeDir = join(tempRoot, "runtime");
+    const mockModel = createMockPiModel(runtimeDir);
+    try {
+      for (const [thinkingEnabled, expectedThinking] of [
+        [false, "off"],
+        [true, "medium"],
+      ] as const) {
+        const host = await createYoubanAgentSession({
+          cwd: tempRoot,
+          runtimeDir,
+          model: { ...mockModel.model, reasoning: true },
+          subagentModel: "youban-mock/mock-model",
+          skillSnapshot: builtinSnapshot(),
+          thinkingEnabled,
+          tools: ["subagent"],
+        });
+        try {
+          expect(host.session.thinkingLevel).toBe(expectedThinking);
+        } finally {
+          host.dispose();
+        }
+      }
+    } finally {
+      mockModel.stop();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("pins every parent and child prompt before asynchronous session initialization", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "youban-pi-session-"));
     const runtimeDir = join(tempRoot, "runtime");

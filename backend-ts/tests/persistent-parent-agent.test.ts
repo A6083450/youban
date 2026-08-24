@@ -137,6 +137,61 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<v
 }
 
 describe("persistent Pi parent agent", () => {
+  it("uses one immutable thinking mode for parent sessions and delegated children", async () => {
+    for (const [thinkingEnabled, expectedThinking] of [
+      [false, "off"],
+      [true, "medium"],
+    ] as const) {
+      let sessionThinking: boolean | undefined;
+      let delegatedThinking: string | undefined;
+      const parent = new PersistentPiParentAgent({
+        cwd: "/tmp/youban-parent-thinking",
+        runtimeDir: "/tmp/youban-parent-thinking/runtime",
+        model: {} as never,
+        subagentModel: "test/model",
+        thinkingEnabled,
+        skillSnapshot: snapshot(1),
+        sweepIntervalMs: 0,
+        sessionFactory: async (options: CreateYoubanAgentSessionOptions) => {
+          sessionThinking = options.thinkingEnabled;
+          const host = controlledParentHost({
+            generation: options.skillSnapshot.generation,
+            sessionDir: options.sessionDir!,
+            transcript: [],
+            onDispose() {},
+          });
+          host.delegate = async (request) => {
+            delegatedThinking = request.thinking;
+            return {
+              requestId: request.requestId,
+              ownerRunId: request.ownerRunId,
+              nodeId: request.nodeId,
+              status: "completed",
+              result: { kind: "structured", value: { ok: true } },
+            };
+          };
+          return host;
+        },
+      });
+      try {
+        await parent.delegate(
+          { key: `user:thinking-${thinkingEnabled}`, userId: "thinking" },
+          {
+            agent: "plan-editor",
+            nodeId: `thinking-${thinkingEnabled}`,
+            input: {},
+            schema: { type: "object" },
+            signal: new AbortController().signal,
+          },
+        );
+        expect(sessionThinking).toBe(thinkingEnabled);
+        expect(delegatedThinking).toBe(expectedThinking);
+      } finally {
+        await parent.close();
+      }
+    }
+  });
+
   it("rotates an idle scope and preserves its persisted transcript directory", async () => {
     const catalog = new TestSkillCatalog(snapshot(1));
     const createdGenerations: number[] = [];

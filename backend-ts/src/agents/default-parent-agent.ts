@@ -56,6 +56,7 @@ export function createDefaultParentAgent(options: DefaultParentAgentOptions): Pe
     subagentModel: `youban-runtime/${settings.openai_model}`,
     apiKey: settings.openai_api_key,
     timeoutMs: settings.llm_timeout * 1_000,
+    thinkingEnabled: settings.llm_thinking_enabled,
     sessionLimit: settings.pi_parent_session_limit,
     sessionIdleMs: settings.pi_parent_session_idle_seconds * 1_000,
     skillCatalog: options.skillCatalog,

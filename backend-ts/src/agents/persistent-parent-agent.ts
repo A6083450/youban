@@ -51,6 +51,7 @@ export interface PersistentParentAgentOptions {
   subagentModel: string;
   apiKey?: string;
   timeoutMs?: number;
+  thinkingEnabled?: boolean;
   sessionLimit?: number;
   sessionIdleMs?: number;
   sweepIntervalMs?: number;
@@ -154,6 +155,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
       runtimeDir: this.options.runtimeDir,
       model: this.options.model,
       subagentModel: this.options.subagentModel,
+      thinkingEnabled: this.options.thinkingEnabled,
       skillSnapshot,
       tools: ["subagent", ...entry.customTools.map((tool) => tool.name)],
       customTools: entry.customTools,
@@ -340,7 +342,7 @@ export class PersistentPiParentAgent implements YoubanParentAgent {
           task: `Use only this server-provided JSON input and return the required structured value.\n\n${JSON.stringify(request.input)}`,
           context: "fresh",
           cwd: this.options.cwd,
-          thinking: "off",
+          thinking: this.options.thinkingEnabled === true ? "medium" : "off",
           timeoutMs: this.options.timeoutMs ?? 120_000,
           turnBudget: { maxTurns: 1 },
           toolBudget: { hard: 0, block: ["read", "bash", "edit", "write", "grep", "find", "ls"] },

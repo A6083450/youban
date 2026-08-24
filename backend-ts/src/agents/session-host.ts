@@ -35,6 +35,7 @@ export interface CreateYoubanAgentSessionOptions {
   runtimeDir: string;
   model: Model<Api>;
   subagentModel?: string;
+  thinkingEnabled?: boolean;
   skillSnapshot: SkillCatalogSnapshot;
   tools?: readonly string[];
   customTools?: ToolDefinition[];
@@ -160,6 +161,7 @@ export async function createYoubanAgentSession(
       cwd: options.cwd,
       agentDir,
       model: options.model,
+      thinkingLevel: options.thinkingEnabled === true ? "medium" : "off",
       tools: [...(options.tools ?? [])],
       customTools: options.customTools,
       resourceLoader,

@@ -60,6 +60,7 @@ describe("default agent factory wiring", () => {
       });
       expect(parent).toBe(fakeParent);
       expect(receivedOptions?.skillCatalog).toBe(skillCatalog);
+      expect(receivedOptions?.thinkingEnabled).toBeTrue();
       expect(receivedOptions?.model.samplingParams?.thinking).toEqual({ type: "enabled" });
     } finally {
       await parent?.close();
