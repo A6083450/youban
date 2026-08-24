@@ -243,6 +243,11 @@ export interface TripPlanResponse {
   message: string
   plan_id?: string
   data?: TripPlan
+  plan_quality?: 'fast' | 'enhanced'
+  enhancement_status?: PlanEnhancementStatus
+  deadline_seconds?: number
+  generation_elapsed_ms?: number
+  fast_plan_revision?: number
 }
 
 export interface SharedTripPlanResponse {
@@ -427,6 +432,8 @@ export interface AdminError extends Error {
 
 export type TripTaskStatus = 'processing' | 'completed' | 'failed'
 
+export type PlanEnhancementStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
 export type TripTaskStage =
   | 'submitted'
   | 'initializing'
@@ -464,6 +471,12 @@ export interface TripTaskEvent {
   result?: TripPlanResponse
   checkpoint_summary?: TripCheckpointSummary
   request_payload?: Partial<TripFormData>
+  execution?: ExecutionMap
+  plan_quality?: 'fast' | 'enhanced'
+  enhancement_status?: PlanEnhancementStatus
+  deadline_seconds?: number
+  generation_elapsed_ms?: number
+  fast_plan_revision?: number
 }
 
 export interface BackendRuntimeSettings {

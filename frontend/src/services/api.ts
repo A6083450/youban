@@ -621,7 +621,7 @@ export async function retryTripPlan(
 /**
  * 轮询任务状态
  */
-export async function pollTaskStatus(taskId: string): Promise<any> {
+export async function pollTaskStatus(taskId: string): Promise<TripTaskEvent> {
   try {
     const response = await apiClient.get(`/api/trip/status/${taskId}`)
     return response.data

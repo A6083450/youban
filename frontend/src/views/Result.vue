@@ -100,6 +100,11 @@
           </template>
         </a-alert>
 
+        <PlanEnhancementNotice
+          v-if="enhancementStatus"
+          :status="enhancementStatus"
+        />
+
       <!-- 主内容区 -->
         <section
           v-show="activeSection === 'overview'"
@@ -789,6 +794,7 @@ import TripMap from '@/components/TripMap.vue'
 import TripToday from '@/components/TripToday.vue'
 import TripGenerationFailure from '@/components/TripGenerationFailure.vue'
 import YoubanLoader from '@/components/YoubanLoader.vue'
+import PlanEnhancementNotice from '@/components/PlanEnhancementNotice.vue'
 import type {
   Attraction,
   Budget,
@@ -802,6 +808,7 @@ import type {
   ItineraryAttractionInput,
   ItineraryMutationResponse,
   PoiSearchItem,
+  PlanEnhancementStatus,
   ShareLoadErrorKind,
   TripPlan,
   TripPlanResponse,
@@ -887,6 +894,72 @@ const ownsPlanOperation = (operation: PlanOperation): boolean =>
   && operation.lookupId === activeLookupId
   && operation.readonly === props.readonly
   && (operation.readonly || operation.ownerId === (currentUser.value?.user_id || ''))
+
+const planQuality = ref<'fast' | 'enhanced' | undefined>()
+const enhancementStatus = ref<PlanEnhancementStatus | undefined>()
+let enhancementTimer: ReturnType<typeof setInterval> | undefined
+let enhancementPollInFlight = false
+let enhancementPollToken = 0
+const TERMINAL_ENHANCEMENT_STATUSES = new Set<PlanEnhancementStatus>(['completed', 'failed', 'skipped'])
+
+const isTerminalEnhancementStatus = (status?: PlanEnhancementStatus): boolean =>
+  !!status && TERMINAL_ENHANCEMENT_STATUSES.has(status)
+
+const ownsEnhancementOperation = (operation: PlanOperation): boolean =>
+  ownsPlanOperation(operation)
+  && operation.lookupId === planId.value
+
+const stopEnhancementPolling = () => {
+  enhancementPollToken += 1
+  if (enhancementTimer) clearInterval(enhancementTimer)
+  enhancementTimer = undefined
+  enhancementPollInFlight = false
+}
+
+const applyEnhancementMetadata = (
+  source: TripTaskEvent | TripPlanResponse | null | undefined,
+  operation: PlanOperation,
+) => {
+  if (!source || !ownsEnhancementOperation(operation)) return false
+  const result = 'result' in source ? source.result : undefined
+  const quality = source.plan_quality ?? result?.plan_quality
+  const status = source.enhancement_status ?? result?.enhancement_status
+  if (quality) planQuality.value = quality
+  if (status) enhancementStatus.value = status
+  return true
+}
+
+const refreshEnhancementStatus = async (operation: PlanOperation) => {
+  if (enhancementPollInFlight || !ownsEnhancementOperation(operation) || props.readonly) return
+  const pollToken = enhancementPollToken
+  enhancementPollInFlight = true
+  try {
+    const task = await pollTaskStatus(operation.lookupId)
+    if (pollToken !== enhancementPollToken || !ownsEnhancementOperation(operation)) return
+    applyEnhancementMetadata(task, operation)
+    if (!ownsEnhancementOperation(operation)) return
+    if (planQuality.value === 'enhanced' && task.result?.data) {
+      await restoreTripPlanFromResponse(task.result, operation)
+    }
+    if (pollToken !== enhancementPollToken || !ownsEnhancementOperation(operation)) return
+    if (isTerminalEnhancementStatus(enhancementStatus.value)) stopEnhancementPolling()
+  } catch {
+    // A fast plan remains usable when background status refresh is unavailable.
+  } finally {
+    if (pollToken === enhancementPollToken) enhancementPollInFlight = false
+  }
+}
+
+const startEnhancementPolling = (operation: PlanOperation) => {
+  stopEnhancementPolling()
+  if (!props.readonly && planQuality.value === 'fast'
+    && enhancementStatus.value && !isTerminalEnhancementStatus(enhancementStatus.value)
+    && ownsEnhancementOperation(operation)) {
+    enhancementTimer = setInterval(() => {
+      void refreshEnhancementStatus(operation)
+    }, 1_000)
+  }
+}
 
 const failedTaskCity = computed(() => {
   const request = failedTaskEvent.value?.request_payload
@@ -1072,6 +1145,7 @@ watch(() => Object.keys(attractionPhotos.value).length, async () => {
 })
 
 onBeforeUnmount(() => {
+  stopEnhancementPolling()
   isAlive = false
   planOperationToken += 1
   overviewGsapCtx?.revert()
@@ -1385,6 +1459,7 @@ const restoreTripPlanFromResponse = async (
   operation?: PlanOperation,
 ) => {
   if (!response?.data || (operation && !ownsPlanOperation(operation))) return false
+  if (operation) applyEnhancementMetadata(response, operation)
   tripPlan.value = response.data
   budgetLedgerItems.value = []
   budgetPerPersonTotals.value = null
@@ -1448,6 +1523,9 @@ const watchPlanUntilSettled = async (
     if (!ownsPlanOperation(operation)) return
     const restored = await restoreTripPlanFromResponse(response, operation)
     if (!restored || !ownsPlanOperation(operation)) return
+    if (!props.readonly) {
+      void refreshEnhancementStatus(operation).finally(() => startEnhancementPolling(operation))
+    }
     failedTaskEvent.value = null
     applyInitialSection()
     notifyPlansUpdated()
@@ -1489,10 +1567,13 @@ const retryFailedPlan = async (restartAll: boolean) => {
 }
 
 const loadPlanById = async (targetPlanId: string) => {
+  stopEnhancementPolling()
   planId.value = targetPlanId
   const operation = beginPlanOperation(targetPlanId)
   tripPlan.value = null
   failedTaskEvent.value = null
+  planQuality.value = undefined
+  enhancementStatus.value = undefined
   loadingPlan.value = false
   retryingFailedPlan.value = false
   budgetLedgerItems.value = []
@@ -1519,6 +1600,7 @@ const loadPlanById = async (targetPlanId: string) => {
       const task = await getSharedTripPlan(targetPlanId)
       if (!ownsPlanOperation(operation)) return
       if (task?.status === 'completed' && task.result) {
+        applyEnhancementMetadata(task.result, operation)
         await restoreTripPlanFromResponse(task.result, operation)
       }
     } catch (error: unknown) {
@@ -1539,6 +1621,7 @@ const loadPlanById = async (targetPlanId: string) => {
     if (!restored || !ownsPlanOperation(operation)) return
     applyInitialSection()
     void refreshExecutionFromBackend(targetPlanId || storedPlanId, operation)
+    void refreshEnhancementStatus(operation).finally(() => startEnhancementPolling(operation))
     return
   }
 
@@ -1548,11 +1631,13 @@ const loadPlanById = async (targetPlanId: string) => {
     const task = await pollTaskStatus(targetPlanId)
     if (!ownsPlanOperation(operation)) return
     if (task?.status === 'completed' && task.result) {
+      applyEnhancementMetadata(task, operation)
       const restored = await restoreTripPlanFromResponse(task.result, operation)
       if (!restored || !ownsPlanOperation(operation)) return
       executionMap.value = task.execution || {}
       loadingPlan.value = false
       applyInitialSection()
+      startEnhancementPolling(operation)
       return
     }
     if (task?.status === 'failed') {
@@ -1585,6 +1670,7 @@ watch(
 
 watch(() => currentUser.value?.user_id, async () => {
   if (props.readonly) return
+  stopEnhancementPolling()
   planOperationToken += 1
   tripPlan.value = null
   failedTaskEvent.value = null
@@ -1596,6 +1682,10 @@ watch(() => currentUser.value?.user_id, async () => {
   sessionStorage.removeItem('planId')
   const targetPlanId = String(props.planId || '')
   if (targetPlanId) await loadPlanById(targetPlanId)
+})
+
+watch(() => props.readonly, (readonly) => {
+  if (readonly) stopEnhancementPolling()
 })
 
 watch(activeSection, async (section) => {

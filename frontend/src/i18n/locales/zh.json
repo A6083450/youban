@@ -572,6 +572,13 @@
       "readonlyBanner": "这是一份分享的游玩计划",
       "readonlyCta": "我也要规划"
     },
+    "enhancement": {
+      "inProgress": "为了减少等待，已先为你生成快速版计划。你可以立即查看，游伴正在补充更详细的信息。",
+      "completed": "计划细节已补充完成。",
+      "failed": "当前计划可以正常使用，部分实时信息暂未补充，你可以稍后重试。",
+      "skipped": "已保留你的修改，后台补充内容没有覆盖当前计划。",
+      "dismiss": "关闭提示"
+    },
     "backHome": "返回首页",
     "editTrip": "编辑行程",
     "saveChanges": "保存修改",

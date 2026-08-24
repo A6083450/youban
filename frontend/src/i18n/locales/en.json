@@ -572,6 +572,13 @@
       "readonlyBanner": "This is a shared trip plan",
       "readonlyCta": "Plan my own"
     },
+    "enhancement": {
+      "inProgress": "To reduce your wait, we have prepared a quick version of your plan first. You can use it now while Youban adds more detail.",
+      "completed": "More plan details are ready.",
+      "failed": "Your current plan is ready to use. Some live information is not available yet; please try again later.",
+      "skipped": "Your changes were kept, so the background additions did not replace your current plan.",
+      "dismiss": "Dismiss notice"
+    },
     "backHome": "Back to Home",
     "editTrip": "Edit Itinerary",
     "saveChanges": "Save Changes",
