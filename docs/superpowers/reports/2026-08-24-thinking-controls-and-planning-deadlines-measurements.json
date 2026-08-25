@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-25T03:07:40.764891Z",
+  "service_origin": "http://127.0.0.1:8194",
+  "recording_path": "/Users/liangjiaquan/.config/browser-harness/agent-workspace/recordings/task8-planning-deadlines-fix2",
+  "screenshot_path": "/Users/liangjiaquan/.config/browser-harness/agent-workspace/recordings/task8-planning-deadlines-fix2/measurements.png",
+  "cases": [
+    {
+      "days": 7,
+      "limit_ms": 6000,
+      "task_id": "ada0dee3",
+      "browser": {
+        "post_start_epoch_ms": 1787626971197,
+        "post_response_epoch_ms": 1787626971207,
+        "first_readable_epoch_ms": 1787626976893,
+        "elapsed_ms": 5696
+      },
+      "first_status": {
+        "observed_epoch_ms": 1787626976718,
+        "status": "completed",
+        "generation_elapsed_ms": 5505,
+        "plan_quality": "fast",
+        "enhancement_status": "running",
+        "day_count": 7
+      },
+      "terminal_status": {
+        "observed_epoch_ms": 1787626991142,
+        "status": "completed",
+        "generation_elapsed_ms": 14497,
+        "plan_quality": "fast",
+        "enhancement_status": "skipped",
+        "day_count": 7
+      },
+      "notice_text": "已保留你的修改，后台补充内容没有覆盖当前计划。"
+    },
+    {
+      "days": 15,
+      "limit_ms": 10000,
+      "task_id": "8ba9ca85",
+      "browser": {
+        "post_start_epoch_ms": 1787627005704,
+        "post_response_epoch_ms": 1787627005707,
+        "first_readable_epoch_ms": 1787627015366,
+        "elapsed_ms": 9662
+      },
+      "first_status": {
+        "observed_epoch_ms": 1787627015219,
+        "status": "completed",
+        "generation_elapsed_ms": 9504,
+        "plan_quality": "fast",
+        "enhancement_status": "running",
+        "day_count": 15
+      },
+      "terminal_status": {
+        "observed_epoch_ms": 1787627169150,
+        "status": "completed",
+        "generation_elapsed_ms": 16799,
+        "plan_quality": "fast",
+        "enhancement_status": "skipped",
+        "day_count": 15
+      },
+      "notice_text": "已保留你的修改，后台补充内容没有覆盖当前计划。"
+    },
+    {
+      "days": 30,
+      "limit_ms": 15000,
+      "task_id": "eacda751",
+      "browser": {
+        "post_start_epoch_ms": 1787627195973,
+        "post_response_epoch_ms": 1787627195977,
+        "first_readable_epoch_ms": 1787627210676,
+        "elapsed_ms": 14703
+      },
+      "first_status": {
+        "observed_epoch_ms": 1787627210527,
+        "status": "completed",
+        "generation_elapsed_ms": 14506,
+        "plan_quality": "fast",
+        "enhancement_status": "running",
+        "day_count": 30
+      },
+      "terminal_status": {
+        "observed_epoch_ms": 1787627225153,
+        "status": "completed",
+        "generation_elapsed_ms": 16124,
+        "plan_quality": "enhanced",
+        "enhancement_status": "completed",
+        "day_count": 30
+      },
+      "notice_text": "已补充完成。"
+    }
+  ]
+}

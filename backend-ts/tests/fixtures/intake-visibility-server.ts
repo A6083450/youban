@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmCallOptions, LlmClient } from "../../src/agents/llm/providers.ts";
+import { ConversationTitleService } from "../../src/agents/conversation-title.ts";
 import { TripAssistant } from "../../src/agents/trip-assistant.ts";
 import { ConfirmationLedger } from "../../src/domain/confirmation.ts";
 import { createHttpRuntime } from "../../src/http/app.ts";
@@ -35,6 +36,9 @@ class IntakeFixtureLlm implements LlmClient {
 const dataDir = mkdtempSync(join(tmpdir(), "youban-intake-visibility-browser-"));
 const runtime = createHttpRuntime({
   dataDir,
+  conversationTitleService: new ConversationTitleService({
+    async agentComplete() { return "继续旅行对话记录"; },
+  }),
   assistant: new TripAssistant({
     llm: new IntakeFixtureLlm(),
     ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 41) }),

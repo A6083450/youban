@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const user = { user_id: 'planning-acceptance-user', nickname: 'Planning QA' } as const
@@ -194,14 +195,35 @@ test('renders no thought summary for a visibility-off intake stream', async ({ p
   try {
     await installUser(page)
     let intakeStream = ''
+    const frontendConversationRequests: string[] = []
     await page.route('**/api/**', async (route) => {
-      const path = new URL(route.request().url()).pathname
+      const requestUrl = new URL(route.request().url())
+      const path = requestUrl.pathname
       if (path === '/api/auth/me') {
         await route.fulfill({ json: { success: true, user } })
         return
       }
-      if (path === '/api/trip/history' || path === '/api/conversations') {
+      if (path === '/api/trip/history') {
         await route.fulfill({ json: { items: [] } })
+        return
+      }
+      if (path === '/api/conversations' || path.startsWith('/api/conversations/')) {
+        const method = route.request().method()
+        const requestHeaders = route.request().headers()
+        frontendConversationRequests.push(`${method} ${path}`)
+        const response = await fetch(`${fixture.apiUrl}${path}${requestUrl.search}`, {
+          method,
+          headers: {
+            ...(requestHeaders['content-type'] ? { 'content-type': requestHeaders['content-type'] } : {}),
+            ...(requestHeaders['x-user-id'] ? { 'x-user-id': requestHeaders['x-user-id'] } : {}),
+          },
+          body: method === 'GET' || method === 'HEAD' ? undefined : route.request().postData(),
+        })
+        await route.fulfill({
+          status: response.status,
+          contentType: response.headers.get('content-type') ?? 'application/json',
+          body: await response.text(),
+        })
         return
       }
       if (path === '/api/trip/parse/stream') {
@@ -230,10 +252,46 @@ test('renders no thought summary for a visibility-off intake stream', async ({ p
     expect(intakeStream).not.toContain('"type":"thinking"')
     expect(intakeStream).not.toContain(attemptedIntakeThought)
     await expect(page.getByText(attemptedIntakeThought, { exact: true })).toHaveCount(0)
-    const persisted = await fetch(`${fixture.apiUrl}/api/conversations`, {
-      headers: { 'x-user-id': user.user_id },
+    let sessionId = ''
+    await expect.poll(async () => {
+      const response = await fetch(`${fixture.apiUrl}/api/conversations`, {
+        headers: { 'x-user-id': user.user_id },
+      })
+      const items = (await response.json() as { items?: Array<{ session_id?: string }> }).items ?? []
+      sessionId = String(items[0]?.session_id ?? '')
+      return items.length
+    }).toBe(1)
+    let persistedDetail: Record<string, any> = {}
+    await expect.poll(async () => {
+      const response = await fetch(`${fixture.apiUrl}/api/conversations/${encodeURIComponent(sessionId)}`, {
+        headers: { 'x-user-id': user.user_id },
+      })
+      persistedDetail = await response.json() as Record<string, any>
+      return {
+        revision: persistedDetail.revision,
+        items: persistedDetail.snapshot?.items?.map((item: Record<string, unknown>) => ({
+          role: item.role,
+          type: item.type,
+          text: item.text,
+        })),
+      }
+    }).toEqual({
+      revision: expect.any(Number),
+      items: expect.arrayContaining([
+        { role: 'user', type: 'text', text: '继续聊旅行' },
+        { role: 'assistant', type: 'text', text: '可见回复正常返回。' },
+      ]),
     })
-    expect(await persisted.text()).not.toContain(attemptedIntakeThought)
+    expect(persistedDetail.revision).toBeGreaterThan(0)
+    const persistedJson = JSON.stringify(persistedDetail)
+    expect(persistedJson).not.toContain('"type":"thinking"')
+    expect(persistedJson).not.toContain(attemptedIntakeThought)
+    await expect.poll(() => frontendConversationRequests).toEqual(expect.arrayContaining([
+      'POST /api/conversations',
+      'GET /api/conversations',
+      `GET /api/conversations/${sessionId}`,
+      `PUT /api/conversations/${sessionId}`,
+    ]))
     await expect(page.locator('.stream-wait')).toHaveCount(0)
   } finally {
     await fixture.stop()
@@ -299,4 +357,68 @@ test('keeps the edited plan when a background enhancement is skipped on conflict
   await page.getByRole('menuitem', { name: '详细日程' }).click()
   await expect(page.getByText('用户保留的修改', { exact: true })).toBeVisible()
   await expect(page.getByText('后台旧内容', { exact: true })).toHaveCount(0)
+})
+
+test('keeps auditable raw live measurement evidence', () => {
+  const path = resolve(
+    process.cwd(),
+    '../docs/superpowers/reports/2026-08-24-thinking-controls-and-planning-deadlines-measurements.json',
+  )
+  const evidence = JSON.parse(readFileSync(path, 'utf8')) as {
+    recording_path: string
+    screenshot_path: string
+    cases: Array<{
+      days: number
+      limit_ms: number
+      task_id: string
+      browser: {
+        post_start_epoch_ms: number
+        post_response_epoch_ms: number
+        first_readable_epoch_ms: number
+        elapsed_ms: number
+      }
+      first_status: {
+        status: string
+        generation_elapsed_ms: number
+        plan_quality: string
+        enhancement_status: string
+        day_count: number
+      }
+      terminal_status: {
+        status: string
+        generation_elapsed_ms: number
+        plan_quality: string
+        enhancement_status: string
+        day_count: number
+      }
+    }>
+  }
+
+  expect(evidence.recording_path).toContain('task8-planning-deadlines-fix2')
+  expect(evidence.screenshot_path).toContain('task8-planning-deadlines-fix2')
+  expect(evidence.cases.map(({ days }) => days)).toEqual([7, 15, 30])
+  for (const entry of evidence.cases) {
+    expect(entry.task_id).not.toBe('')
+    expect(entry.browser.post_response_epoch_ms).toBeGreaterThanOrEqual(entry.browser.post_start_epoch_ms)
+    expect(entry.browser.first_readable_epoch_ms).toBeGreaterThanOrEqual(entry.browser.post_response_epoch_ms)
+    expect(entry.browser.elapsed_ms).toBe(
+      entry.browser.first_readable_epoch_ms - entry.browser.post_start_epoch_ms,
+    )
+    expect(entry.browser.elapsed_ms).toBeLessThanOrEqual(entry.limit_ms)
+    expect(entry.first_status).toEqual(expect.objectContaining({
+      status: 'completed',
+      generation_elapsed_ms: expect.any(Number),
+      plan_quality: expect.stringMatching(/^(?:fast|enhanced)$/),
+      enhancement_status: expect.any(String),
+      day_count: entry.days,
+    }))
+    expect(entry.first_status.generation_elapsed_ms).toBeLessThanOrEqual(entry.limit_ms)
+    expect(entry.terminal_status).toEqual(expect.objectContaining({
+      status: 'completed',
+      generation_elapsed_ms: expect.any(Number),
+      plan_quality: expect.stringMatching(/^(?:fast|enhanced)$/),
+      enhancement_status: expect.stringMatching(/^(?:completed|failed|skipped)$/),
+      day_count: entry.days,
+    }))
+  }
 })
