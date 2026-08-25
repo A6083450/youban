@@ -247,7 +247,7 @@ export interface TripPlanResponse {
   enhancement_status?: PlanEnhancementStatus
   deadline_seconds?: number
   generation_elapsed_ms?: number
-  fast_plan_revision?: number
+  fast_plan_revision?: string
 }
 
 export interface SharedTripPlanResponse {
@@ -476,7 +476,7 @@ export interface TripTaskEvent {
   enhancement_status?: PlanEnhancementStatus
   deadline_seconds?: number
   generation_elapsed_ms?: number
-  fast_plan_revision?: number
+  fast_plan_revision?: string
 }
 
 export interface BackendRuntimeSettings {

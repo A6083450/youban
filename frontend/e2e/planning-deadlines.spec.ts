@@ -7,6 +7,11 @@ import { resolve } from 'node:path'
 
 const user = { user_id: 'planning-acceptance-user', nickname: 'Planning QA' } as const
 const attemptedIntakeThought = '正在梳理你的旅行偏好与行程条件'
+const EXPECTED_DEADLINE_CASES = [
+  { days: 7, limit_ms: 6_000 },
+  { days: 15, limit_ms: 10_000 },
+  { days: 30, limit_ms: 15_000 },
+] as const
 
 const startIntakeVisibilityFixture = async (): Promise<{
   apiUrl: string
@@ -365,6 +370,7 @@ test('keeps auditable raw live measurement evidence', () => {
     '../docs/superpowers/reports/2026-08-24-thinking-controls-and-planning-deadlines-measurements.json',
   )
   const evidence = JSON.parse(readFileSync(path, 'utf8')) as {
+    schema_version: number
     recording_path: string
     screenshot_path: string
     cases: Array<{
@@ -396,15 +402,20 @@ test('keeps auditable raw live measurement evidence', () => {
 
   expect(evidence.recording_path).toContain('task8-planning-deadlines-fix2')
   expect(evidence.screenshot_path).toContain('task8-planning-deadlines-fix2')
-  expect(evidence.cases.map(({ days }) => days)).toEqual([7, 15, 30])
-  for (const entry of evidence.cases) {
+  expect(evidence.schema_version).toBe(1)
+  expect(evidence.cases.map(({ days, limit_ms }) => ({ days, limit_ms }))).toEqual(EXPECTED_DEADLINE_CASES)
+  for (const [index, entry] of evidence.cases.entries()) {
+    const expected = EXPECTED_DEADLINE_CASES[index]
+    expect(expected).toBeDefined()
+    expect(entry.days).toBe(expected?.days)
+    expect(entry.limit_ms).toBe(expected?.limit_ms)
     expect(entry.task_id).not.toBe('')
     expect(entry.browser.post_response_epoch_ms).toBeGreaterThanOrEqual(entry.browser.post_start_epoch_ms)
     expect(entry.browser.first_readable_epoch_ms).toBeGreaterThanOrEqual(entry.browser.post_response_epoch_ms)
     expect(entry.browser.elapsed_ms).toBe(
       entry.browser.first_readable_epoch_ms - entry.browser.post_start_epoch_ms,
     )
-    expect(entry.browser.elapsed_ms).toBeLessThanOrEqual(entry.limit_ms)
+    expect(entry.browser.elapsed_ms).toBeLessThanOrEqual(expected?.limit_ms ?? 0)
     expect(entry.first_status).toEqual(expect.objectContaining({
       status: 'completed',
       generation_elapsed_ms: expect.any(Number),
@@ -412,7 +423,7 @@ test('keeps auditable raw live measurement evidence', () => {
       enhancement_status: expect.any(String),
       day_count: entry.days,
     }))
-    expect(entry.first_status.generation_elapsed_ms).toBeLessThanOrEqual(entry.limit_ms)
+    expect(entry.first_status.generation_elapsed_ms).toBeLessThanOrEqual(expected?.limit_ms ?? 0)
     expect(entry.terminal_status).toEqual(expect.objectContaining({
       status: 'completed',
       generation_elapsed_ms: expect.any(Number),
