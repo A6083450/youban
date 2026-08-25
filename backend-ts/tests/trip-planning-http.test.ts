@@ -232,6 +232,41 @@ async function submit(runtime: HttpRuntime): Promise<Record<string, any>> {
 }
 
 describe("trip planning HTTP lifecycle", () => {
+  it("includes planner startup delay in accepted-to-persisted elapsed time", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-accepted-clock-http-"));
+    tempDirs.push(dataDir);
+    const planner = new DeadlinePlanner();
+    const clock = new ManualClock();
+    clock.advanceBy(1_000);
+    let firstClockRead = true;
+    const runtime = createHttpRuntime({
+      dataDir,
+      planner,
+      planningClock: {
+        now: () => {
+          if (!firstClockRead) return clock.now();
+          firstClockRead = false;
+          return 0;
+        },
+        sleep: clock.sleep,
+      },
+    });
+    runtimes.push(runtime);
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+
+    clock.advanceBy(4_499);
+    await Promise.resolve();
+    expect(runtime.tasks.get(accepted.task_id)?.status).toBe("processing");
+    clock.advanceBy(1);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.status === "completed");
+
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
+      plan_quality: "fast",
+      generation_elapsed_ms: 5_500,
+    }));
+  });
+
   it("publishes fast at the trigger, freezes terminal state, then applies unchanged enhancement", async () => {
     const { runtime, planner, clock } = makeDeadlineRuntime();
     const accepted = await submit(runtime);

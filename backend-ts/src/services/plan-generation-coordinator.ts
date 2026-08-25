@@ -27,6 +27,7 @@ export interface StartPlanGenerationOptions {
   request: TripPlanningRequest;
   signal: AbortSignal;
   enhanced: Promise<Record<string, unknown>>;
+  startedAt?: number;
   latestCheckpoint(): unknown;
   now?: () => number;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -85,7 +86,7 @@ function errorMessage(error: unknown): string {
 export function startPlanGeneration(options: StartPlanGenerationOptions): PlanGenerationRun {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
-  const startedAt = now();
+  const startedAt = options.startedAt ?? now();
   const deadline = planningDeadlineMs(options.request.travel_days);
   const trigger = fastPlanTriggerMs(options.request.travel_days);
   const runAbort = new AbortController();
@@ -112,7 +113,7 @@ export function startPlanGeneration(options: StartPlanGenerationOptions): PlanGe
   const cancellationOutcome = cancelled.then(() => ({ kind: "cancelled" as const }));
   const timerOutcome = trigger === null
     ? null
-    : sleep(trigger, timerAbort.signal).then(
+    : sleep(Math.max(0, trigger - Math.max(0, now() - startedAt)), timerAbort.signal).then(
       () => ({ kind: "timer" as const }),
       (error) => timerAbort.signal.aborted
         ? ({ kind: "cancelled" as const })

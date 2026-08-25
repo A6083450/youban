@@ -115,20 +115,28 @@ function enhancedResult(input: TripPlanningRequest, marker = "enhanced") {
   };
 }
 
-function harness(input: TripPlanningRequest, enhanced: Promise<Record<string, unknown>>, clock: ManualClock) {
+function harness(
+  input: TripPlanningRequest,
+  enhanced: Promise<Record<string, unknown>>,
+  clock: ManualClock,
+  startedAt?: number,
+) {
   let current: PlanGenerationCurrent | null = null;
   const publications: Array<{ quality: PlanQuality; result: Record<string, unknown> }> = [];
+  const metadataSnapshots: PlanGenerationMetadata[] = [];
   const statuses: EnhancementStatus[] = [];
   const controller = new AbortController();
   const run = startPlanGeneration({
     request: input,
     signal: controller.signal,
     enhanced,
+    startedAt,
     latestCheckpoint: () => ({}),
     now: clock.now,
     sleep: clock.sleep,
     publishFirst(quality, result, metadata: PlanGenerationMetadata) {
       publications.push({ quality, result: structuredClone(result) });
+      metadataSnapshots.push(structuredClone(metadata));
       current = {
         status: "completed",
         quality,
@@ -160,6 +168,7 @@ function harness(input: TripPlanningRequest, enhanced: Promise<Record<string, un
     run,
     controller,
     publications,
+    metadataSnapshots,
     statuses,
     current: () => current && structuredClone(current),
     replaceCurrent: (value: PlanGenerationCurrent | null) => { current = value; },
@@ -167,6 +176,26 @@ function harness(input: TripPlanningRequest, enhanced: Promise<Record<string, un
 }
 
 describe("plan generation coordinator", () => {
+  it("counts accepted time consumed before the coordinator schedules its fast trigger", async () => {
+    const clock = new ManualClock();
+    const enhanced = deferred<Record<string, unknown>>();
+    const input = request(7);
+    const acceptedAt = clock.now();
+    clock.elapseBy(1_000);
+    const state = harness(input, enhanced.promise, clock, acceptedAt);
+
+    clock.advanceBy(4_499);
+    await Promise.resolve();
+    expect(state.publications).toEqual([]);
+    clock.advanceBy(1);
+    await state.run.firstPublished;
+
+    expect(state.publications[0]?.quality).toBe("fast");
+    expect(state.metadataSnapshots[0]?.elapsedMs).toBe(5_500);
+    state.run.cancel();
+    await state.run.enhancementSettled;
+  });
+
   it("publishes an enhanced result that completes before the fast trigger", async () => {
     const clock = new ManualClock();
     const enhanced = deferred<Record<string, unknown>>();

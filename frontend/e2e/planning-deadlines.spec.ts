@@ -1,7 +1,48 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createInterface } from 'node:readline'
+import { resolve } from 'node:path'
 
 const user = { user_id: 'planning-acceptance-user', nickname: 'Planning QA' } as const
+const attemptedIntakeThought = '正在梳理你的旅行偏好与行程条件'
+
+const startIntakeVisibilityFixture = async (): Promise<{
+  apiUrl: string
+  stop(): Promise<void>
+}> => {
+  const child = spawn('bun', [
+    'run',
+    resolve(process.cwd(), '../backend-ts/tests/fixtures/intake-visibility-server.ts'),
+  ], { stdio: ['ignore', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams
+  const stderr: string[] = []
+  child.stderr.on('data', (chunk) => stderr.push(String(chunk)))
+  const lines = createInterface({ input: child.stdout })
+  const launch = await new Promise<{ api_url: string }>((resolveLaunch, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`visibility fixture startup timed out: ${stderr.join('')}`)), 10_000)
+    child.once('exit', (code) => {
+      clearTimeout(timeout)
+      reject(new Error(`visibility fixture exited with ${code}: ${stderr.join('')}`))
+    })
+    lines.once('line', (line) => {
+      clearTimeout(timeout)
+      try {
+        resolveLaunch(JSON.parse(line) as { api_url: string })
+      } catch (error) {
+        reject(error)
+      }
+    })
+  })
+  return {
+    apiUrl: launch.api_url,
+    async stop() {
+      if (child.exitCode !== null) return
+      const exited = new Promise<void>((resolveExit) => child.once('exit', () => resolveExit()))
+      child.kill('SIGTERM')
+      await exited
+    },
+  }
+}
 
 const makePlan = (description = '按快速计划游览大理') => ({
   city: '大理',
@@ -149,49 +190,54 @@ test('persists both administrator thinking switches after reload', async ({ page
 })
 
 test('renders no thought summary for a visibility-off intake stream', async ({ page }) => {
-  await installUser(page)
-  await page.route('**/api/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
-    if (path === '/api/auth/me') {
-      await route.fulfill({ json: { success: true, user } })
-      return
-    }
-    if (path === '/api/trip/history' || path === '/api/conversations') {
-      await route.fulfill({ json: { items: [] } })
-      return
-    }
-    if (path === '/api/trip/parse/stream') {
-      const finalPayload = {
-        success: true,
-        action: 'chat',
-        reply: '可见回复正常返回。',
-        need_clarify: false,
-        clarify_question: '',
-        summary: '',
-        trip: null,
+  const fixture = await startIntakeVisibilityFixture()
+  try {
+    await installUser(page)
+    let intakeStream = ''
+    await page.route('**/api/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/auth/me') {
+        await route.fulfill({ json: { success: true, user } })
+        return
       }
-      await route.fulfill({
-        contentType: 'text/event-stream',
-        body: [
-          'data: {"type":"delta","text":"可见回复"}',
-          `data: ${JSON.stringify({ type: 'final', payload: finalPayload })}`,
-          'data: [DONE]',
-          '',
-        ].join('\n\n'),
-      })
-      return
-    }
-    await route.fulfill({ json: {} })
-  })
+      if (path === '/api/trip/history' || path === '/api/conversations') {
+        await route.fulfill({ json: { items: [] } })
+        return
+      }
+      if (path === '/api/trip/parse/stream') {
+        const response = await fetch(`${fixture.apiUrl}${path}`, {
+          method: route.request().method(),
+          headers: { 'content-type': 'application/json' },
+          body: route.request().postData(),
+        })
+        intakeStream = await response.text()
+        await route.fulfill({
+          status: response.status,
+          contentType: response.headers.get('content-type') ?? 'text/event-stream',
+          body: intakeStream,
+        })
+        return
+      }
+      await route.fulfill({ json: {} })
+    })
 
-  await page.goto('/')
-  const composer = page.getByPlaceholder('例如：下周末去西安玩3天，喜欢美食和历史文化…')
-  await composer.fill('继续聊旅行')
-  await page.getByRole('button', { name: '发送', exact: true }).click()
+    await page.goto('/')
+    const composer = page.getByPlaceholder('例如：下周末去西安玩3天，喜欢美食和历史文化…')
+    await composer.fill('继续聊旅行')
+    await page.getByRole('button', { name: '发送', exact: true }).click()
 
-  await expect(page.getByText('可见回复正常返回。', { exact: true })).toBeVisible()
-  await expect(page.getByText('秘密思考摘要', { exact: true })).toHaveCount(0)
-  await expect(page.locator('.stream-wait')).toHaveCount(0)
+    await expect(page.getByText('可见回复正常返回。', { exact: true })).toBeVisible()
+    expect(intakeStream).not.toContain('"type":"thinking"')
+    expect(intakeStream).not.toContain(attemptedIntakeThought)
+    await expect(page.getByText(attemptedIntakeThought, { exact: true })).toHaveCount(0)
+    const persisted = await fetch(`${fixture.apiUrl}/api/conversations`, {
+      headers: { 'x-user-id': user.user_id },
+    })
+    expect(await persisted.text()).not.toContain(attemptedIntakeThought)
+    await expect(page.locator('.stream-wait')).toHaveCount(0)
+  } finally {
+    await fixture.stop()
+  }
 })
 
 test('navigates an accepted fast task to its readable plan and shows the working notice', async ({ page }) => {

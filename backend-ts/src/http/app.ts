@@ -319,7 +319,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   const activePlanning = new Map<string, {
     controller: AbortController;
     coordinator?: PlanGenerationRun;
+    acceptedAt: number;
   }>();
+  const planningNow = options.planningClock?.now ?? Date.now;
   const activeServiceCalls = new Set<Promise<unknown>>();
   const titleJobs = new Map<string, Promise<void>>();
   let serviceGate = Promise.resolve();
@@ -648,10 +650,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
 
   const runPlanning = async (
     taskId: string,
-    active: { controller: AbortController; coordinator?: PlanGenerationRun },
+    active: { controller: AbortController; coordinator?: PlanGenerationRun; acceptedAt: number },
   ): Promise<void> => {
-    const now = options.planningClock?.now ?? Date.now;
-    const startedAt = now();
+    const now = planningNow;
+    const startedAt = active.acceptedAt;
     try {
       const initial = tasks.get(taskId);
       if (!initial?.request_payload) throw new Error("原始行程请求不可重试");
@@ -691,6 +693,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         request,
         signal,
         enhanced,
+        startedAt,
         latestCheckpoint: () => latestCheckpoint,
         now,
         sleep: options.planningClock?.sleep,
@@ -805,11 +808,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     }
   };
 
-  const startPlanning = (taskId: string): void => {
+  const startPlanning = (taskId: string, acceptedAt: number): void => {
     cancelPlanning(taskId);
-    const active = { controller: new AbortController() } as {
+    const active = { controller: new AbortController(), acceptedAt } as {
       controller: AbortController;
       coordinator?: PlanGenerationRun;
+      acceptedAt: number;
     };
     activePlanning.set(taskId, active);
     const run = Promise.resolve().then(() => runPlanning(taskId, active));
@@ -1337,6 +1341,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         return status(400, { detail: "缺少有效的 Agent 确认凭证" });
       }
       const taskId = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+      const acceptedAt = planningNow();
       tasks.save(createTaskState(taskId, {
         user_id: userId,
         progress: 5,
@@ -1364,7 +1369,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         userId,
         Array.isArray(rawConversation) && rawConversation.length > 0 ? rawConversation : fallbackMessages,
       );
-      startPlanning(taskId);
+      startPlanning(taskId, acceptedAt);
       return planningResponse(taskId, `任务已提交，可通过 WebSocket /api/trip/ws/${taskId} 实时订阅状态`);
     }, {
       body: t.Object({
@@ -1401,6 +1406,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "failed") return status(409, { detail: "仅失败任务可重试" });
       if (!task.request_payload) return status(409, { detail: "原始行程请求不可重试" });
+      const acceptedAt = planningNow();
       tasks.save({
         ...task,
         status: "processing",
@@ -1421,7 +1427,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           : task.checkpoint,
       }, { immediate: true });
       conversationRecords.markGenerating(task.task_id);
-      startPlanning(task.task_id);
+      startPlanning(task.task_id, acceptedAt);
       return planningResponse(task.task_id, `任务已重新提交，可通过 WebSocket /api/trip/ws/${task.task_id} 实时订阅状态`);
     }, {
       body: t.Object({ restart_all: t.Optional(t.Boolean()) }),
