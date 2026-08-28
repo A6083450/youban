@@ -81,4 +81,22 @@ describe("budget guard", () => {
     expect(before).toBe(400);
     expect(days.flatMap((entry) => entry.meals).reduce((sum, meal) => sum + Number(meal.estimated_cost), 0)).toBe(400);
   });
+
+  it("reports budget adjustments in French", () => {
+    const frenchRequest = request(700);
+    frenchRequest.language = "fr-FR";
+
+    expect(adjustGeneratedDaysToBudget(frenchRequest, [day(0), day(1)]).budget_adjustment_note).toBe(
+      "Les estimations des repas ont été réduites de ¥300 pour respecter le budget, avec ¥200 réservés aux éléments sans tarif.",
+    );
+  });
+
+  it("falls an unsupported persisted locale back to Chinese", () => {
+    const legacyRequest = request(700);
+    legacyRequest.language = "xx-XX";
+
+    expect(adjustGeneratedDaysToBudget(legacyRequest, [day(0), day(1)]).budget_adjustment_note).toBe(
+      "已根据总预算将餐饮预估下调 ¥300，并为待报价项目预留 ¥200。",
+    );
+  });
 });

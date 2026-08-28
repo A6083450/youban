@@ -7,12 +7,10 @@ export const DetailErrorSchema = Type.Object({
 export const UserInfoSchema = Type.Object({
   user_id: Type.String(),
   nickname: Type.String(),
+  avatar_url: Type.Union([Type.String(), Type.Null()]),
+  profile_complete: Type.Boolean(),
   created_at: Type.Optional(Type.String()),
   last_login_at: Type.Optional(Type.String()),
-}, { additionalProperties: false });
-
-export const LoginBodySchema = Type.Object({
-  nickname: Type.String({ maxLength: 50 }),
 }, { additionalProperties: false });
 
 export const AuthResponseSchema = Type.Object({

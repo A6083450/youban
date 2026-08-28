@@ -265,7 +265,7 @@ def search_xhs_attractions(city: str, keywords: str, language: str = "zh") -> st
     Args:
         city: 城市名称
         keywords: 搜索关键词
-        language: 目标输出语言 (zh/en/ja 等)
+        language: 目标输出语言 (zh/en/fr 等)
     """
     print(f"🔍 [XHS_SERVICE] 正在呼叫小红书 API 搜索: {city} {keywords}")
     client = get_xhs_client()
@@ -321,7 +321,7 @@ def search_xhs_attractions(city: str, keywords: str, language: str = "zh") -> st
 
     # 根据目标语言构建翻译附加指令
     _lang = (language or "zh").strip().lower().split("-")[0]
-    _lang_names = {"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
+    _lang_names = {"en": "English", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
     if _lang != "zh" and _lang in _lang_names:
         translation_instruction = f"""
 **极其重要的翻译要求:**

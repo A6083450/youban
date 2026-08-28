@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
-const user = { user_id: 'ongoing-mobile-user', nickname: '移动端用户' } as const
+const user = {
+  user_id: 'ongoing-mobile-user',
+  nickname: '移动端用户',
+  avatar_url: '/api/avatars/ongoing-mobile.jpg',
+  profile_complete: true,
+} as const
 
 const mockOngoingTrips = async (page: Page): Promise<void> => {
   await page.addInitScript((storedUser) => {
@@ -36,6 +41,14 @@ const mockOngoingTrips = async (page: Page): Promise<void> => {
               end_date: '2026-08-08',
               updated_at: '2026-08-05T08:00:00+08:00',
             },
+            {
+              plan_id: 'family-route',
+              status: 'completed',
+              city: '三亚',
+              start_date: '2026-08-05',
+              end_date: '2026-08-10',
+              updated_at: '2026-08-05T07:00:00+08:00',
+            },
           ],
         },
       })
@@ -61,11 +74,11 @@ for (const viewport of mobileViewports) {
     await expect(splash).toHaveCount(0, { timeout: 15_000 })
 
     const cards = page.locator('.ongoing-card')
-    await expect(cards).toHaveCount(2)
+    await expect(cards).toHaveCount(3)
     await expect(cards.first()).toContainText('进入今日行程')
 
     const layout = await page.evaluate(() => {
-      const topbar = document.querySelector<HTMLElement>('.mobile-topbar')
+      const topbar = document.querySelector<HTMLElement>('.mobile-app-header')
       const inputArea = document.querySelector<HTMLElement>('.chat-input-area')
       const cardElements = Array.from(document.querySelectorAll<HTMLElement>('.ongoing-card'))
       const inputRect = inputArea?.getBoundingClientRect()
@@ -111,3 +124,29 @@ for (const viewport of mobileViewports) {
     })
   })
 }
+
+test('uses one compact row for ongoing trips on desktop without a duplicate welcome panel', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.clock.setFixedTime(new Date('2026-08-05T12:00:00+08:00'))
+  await mockOngoingTrips(page)
+  await page.goto('/')
+
+  const cards = page.locator('.ongoing-card')
+  await expect(cards).toHaveCount(3)
+  await expect(page.locator('.welcome')).toHaveCount(0)
+
+  const layout = await cards.evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect()
+    return { top: Math.round(rect.top), height: Math.round(rect.height) }
+  }))
+
+  expect(new Set(layout.map(({ top }) => top)).size).toBe(1)
+  expect(Math.max(...layout.map(({ height }) => height))).toBeLessThanOrEqual(112)
+
+  const suggestions = page.locator('.suggestions .elx-prompts__item')
+  await expect(suggestions).toHaveCount(5)
+  const suggestionHeights = await suggestions.evaluateAll((elements) =>
+    elements.map((element) => Math.round(element.getBoundingClientRect().height)),
+  )
+  expect(Math.max(...suggestionHeights)).toBeLessThanOrEqual(64)
+})

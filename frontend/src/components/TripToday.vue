@@ -255,7 +255,10 @@ const completedStory = computed(() => {
   if (names.length === 0) return ''
   const visibleNames = names.slice(0, 2)
   const localeCode = String(locale.value || 'zh-CN')
-  const places = visibleNames.join(localeCode.toLowerCase().startsWith('en') ? ' and ' : '、')
+  const normalizedLocale = localeCode.toLowerCase()
+  const places = visibleNames.join(
+    normalizedLocale.startsWith('en') ? ' and ' : normalizedLocale.startsWith('fr') ? ' et ' : '、',
+  )
   return names.length > visibleNames.length
     ? t('result.today.reflection.storyMore', { places, count: names.length })
     : t('result.today.reflection.story', { places })
@@ -309,7 +312,7 @@ const showActionFeedback = (item: TodayTimelineItem, status: ItemExecutionStatus
   }, 3200)
 }
 const actionFeedbackSeparator = computed(() =>
-  String(locale.value || '').toLowerCase().startsWith('en') ? ' ' : '',
+  /^(en|fr)/.test(String(locale.value || '').toLowerCase()) ? ' ' : '',
 )
 watch(() => props.confirmedStatusFeedback, (feedback) => {
   if (!feedback) return

@@ -22,6 +22,20 @@ export interface DisplayBlueprint extends TripBlueprint {
   source: 'ai' | 'legacy'
 }
 
+export type ResultSectionKey = 'today' | 'overview' | 'days' | 'map' | 'budget' | 'weather'
+export type ResultActionKey = 'share' | 'export' | 'calendar'
+
+export function projectResultAvailability(
+  plan: Partial<TripPlan>,
+  readonly?: boolean,
+): { sections: ResultSectionKey[]; actions: ResultActionKey[] }
+export function resolveInitialResultSection(
+  plan: Partial<TripPlan>,
+  requested: unknown,
+  readonly?: boolean,
+  hasToday?: boolean,
+): ResultSectionKey
+
 interface TimelineBase {
   key: string
   time: string | null
@@ -55,6 +69,10 @@ export type TimelineEntry =
 
 export function normalizeReferenceTime(value: unknown): string | null
 export function normalizeTripCityNames(value: unknown, fallback?: unknown): string[]
+export function resolveJourneyPinPhotos(
+  days: DayPlan[],
+  attractionPhotos: Record<string, string>,
+): string[]
 export function parseTripDate(value: unknown): Date | null
 export function resolveItineraryDisplayMode(dayCount: number): ItineraryDisplayMode
 export function groupItineraryDays(days: DayPlan[], mode: ItineraryDisplayMode): ItineraryDayGroup[]

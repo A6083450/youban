@@ -265,6 +265,21 @@ export function mergeSegmentDays(
   return days;
 }
 
+export function rebalanceSparseAttractionDays(days: DayPlan[]): DayPlan[] {
+  const balanced = structuredClone(days);
+  for (const emptyDay of balanced.filter((day) => day.attractions.length === 0)) {
+    const donor = balanced
+      .filter((day) => day.city === emptyDay.city && day.attractions.length > 1)
+      .sort((left, right) => (
+        Math.abs(left.day_index - emptyDay.day_index) - Math.abs(right.day_index - emptyDay.day_index)
+        || left.day_index - right.day_index
+      ))[0];
+    const attraction = donor?.attractions.pop();
+    if (attraction) emptyDay.attractions.push(attraction);
+  }
+  return balanced;
+}
+
 function normalizedName(value: string): string {
   return (value.normalize("NFKC").toLocaleLowerCase("und").match(/[\p{L}\p{N}]/gu) ?? []).join("");
 }

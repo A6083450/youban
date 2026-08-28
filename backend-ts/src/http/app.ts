@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
@@ -33,10 +33,18 @@ import {
   effectiveThinkingVisible,
   getSettings,
   prepareRuntimeSettings,
+  runtimeSettingsSnapshot,
   type AppSettings,
   type RuntimeSettings,
 } from "../config/settings.ts";
 import { ConfirmationLedger } from "../domain/confirmation.ts";
+import { AuthenticationError, AuthenticationService } from "../domain/authentication.ts";
+import {
+  MiniProgramBridgeError,
+  MiniProgramBridgeService,
+  normalizeMiniProgramRedirectPath,
+  type NativeActionType,
+} from "../domain/miniprogram-bridge.ts";
 import { ConversationRepository } from "../domain/conversations.ts";
 import { ConversationRecordService } from "../domain/conversation-records.ts";
 import { ConversationSessionRepository, SessionRevisionConflictError } from "../domain/conversation-sessions.ts";
@@ -65,7 +73,6 @@ import {
   ConversationSessionDetailSchema,
   CreateConversationBodySchema,
   DetailErrorSchema,
-  LoginBodySchema,
   ReplaceConversationSnapshotBodySchema,
   TripHistoryResponseSchema,
 } from "../domain/schemas.ts";
@@ -77,9 +84,12 @@ import {
   type TripTaskState,
 } from "../domain/task-store.ts";
 import { normalizeTripPlanningRequest } from "../domain/trip-request.ts";
-import { SqliteUserRepository, UserInputError } from "../domain/users.ts";
+import { SqliteUserRepository } from "../domain/users.ts";
+import { UserPreferencesRepository } from "../domain/user-preferences.ts";
+import { projectNativeCalendarEvents } from "../domain/trip-calendar-projection.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
+import { RemoteImageCache } from "../services/remote-image-cache.ts";
 import {
   startPlanGeneration,
   type PlanGenerationCurrent,
@@ -112,6 +122,30 @@ const AttractionMutationBodySchema = t.Object({
   reservation_tips: t.Optional(t.String({ maxLength: 500 })),
 });
 
+const UserSkinSchema = t.Union([t.Literal("default"), t.Literal("google")]);
+const UserLocaleSchema = t.Union([t.Literal("zh-CN"), t.Literal("en-US"), t.Literal("fr-FR")]);
+const UserPreferencesSchema = t.Object({
+  skin: UserSkinSchema,
+  locale: UserLocaleSchema,
+  initialized: t.Boolean(),
+  updated_at: t.Union([t.String(), t.Null()]),
+});
+const UserPreferencesPatchSchema = t.Object({
+  skin: t.Optional(UserSkinSchema),
+  locale: t.Optional(UserLocaleSchema),
+}, { minProperties: 1, additionalProperties: false });
+
+const NativeActionBodySchema = t.Object({
+  type: t.Union([
+    t.Literal("share"),
+    t.Literal("save_guide"),
+    t.Literal("add_calendar"),
+  ]),
+  plan_id: t.String({ minLength: 1, maxLength: 128 }),
+  title: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
+  image_data_url: t.Optional(t.String({ minLength: 32, maxLength: 24 * 1024 * 1024 })),
+}, { additionalProperties: false });
+
 export interface HttpRuntimeOptions {
   dataDir: string;
   frontendDist?: string;
@@ -125,6 +159,11 @@ export interface HttpRuntimeOptions {
   skillService?: AdminSkillService;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   conversationTitleService?: ConversationTitleService;
+  imageFetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  authentication?: {
+    pepper: string;
+    exchangeWechatCode: (code: string) => Promise<string>;
+  };
   planningClock?: {
     now?: () => number;
     sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -176,6 +215,51 @@ function isContained(parent: string, child: string): boolean {
   return resolve(child).startsWith(root);
 }
 
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+function avatarMedia(bytes: Uint8Array): { extension: "jpg" | "png" | "webp"; contentType: string } | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { extension: "jpg", contentType: "image/jpeg" };
+  }
+  if (bytes.length >= 8
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return { extension: "png", contentType: "image/png" };
+  }
+  if (bytes.length >= 12
+    && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
+    && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") {
+    return { extension: "webp", contentType: "image/webp" };
+  }
+  return null;
+}
+
+function avatarContentType(fileName: string): string | null {
+  if (fileName.endsWith(".jpg")) return "image/jpeg";
+  if (fileName.endsWith(".png")) return "image/png";
+  if (fileName.endsWith(".webp")) return "image/webp";
+  return null;
+}
+
+const PUBLIC_INTERNAL_FIELDS = new Set([
+  "conversation_id",
+  "plan_id",
+  "session_id",
+  "share_token",
+  "task_id",
+  "user_id",
+]);
+
+function publicTripResult(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(publicTripResult);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !PUBLIC_INTERNAL_FIELDS.has(key))
+      .map(([key, nested]) => [key, publicTripResult(nested)]),
+  );
+}
+
 const NO_CACHE_FRONTEND_FILES = new Set([
   "index.html",
   "sw.js",
@@ -202,8 +286,18 @@ function frontendResponse(frontendDist: string | undefined, pathname: string): R
 export function createHttpRuntime(options: HttpRuntimeOptions) {
   const databasePath = join(options.dataDir, "youban.db");
   const imagesDir = join(options.dataDir, "images");
+  const avatarsDir = join(options.dataDir, "avatars");
+  const imageCache = new RemoteImageCache({ imagesDir, fetch: options.imageFetch });
   const tasks = new SqliteTaskStore(databasePath);
   const users = new SqliteUserRepository(databasePath);
+  const userPreferences = new UserPreferencesRepository(users.database);
+  const authentication = options.authentication
+    ? new AuthenticationService(databasePath, { pepper: options.authentication.pepper })
+    : undefined;
+  const nativeActionsDir = join(options.dataDir, "native-actions");
+  const miniProgramBridge = new MiniProgramBridgeService({
+    removeTemporaryFile: (path) => rmSync(path, { force: true }),
+  });
   const conversations = new ConversationRepository(databasePath);
   const conversationSessions = new ConversationSessionRepository(databasePath);
   const conversationRecords = new ConversationRecordService(
@@ -378,8 +472,31 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     return Boolean(token) && secureEqual(token, readAdminPassword());
   };
 
+  const sessionToken = (headers: Record<string, string | undefined>): string => {
+    const authorization = headers.authorization?.trim() ?? "";
+    if (/^Bearer\s+/i.test(authorization)) return authorization.replace(/^Bearer\s+/i, "").trim();
+    const cookieHeader = headers.cookie ?? "";
+    for (const part of cookieHeader.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 0) continue;
+      if (part.slice(0, separator).trim() === "youban_session") {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      }
+    }
+    return "";
+  };
+
+  const authenticatedUserId = (headers: Record<string, string | undefined>): string => {
+    if (!authentication) return (headers["x-user-id"] ?? "").trim();
+    return authentication.authenticateReady(sessionToken(headers))?.user_id ?? "";
+  };
+
+  const miniProgramActionTask = (planId: string): TripTaskState | undefined => {
+    return tasks.get(planId) ?? tasks.all().find((task) => task.plan_id === planId);
+  };
+
   const parentScope = (headers: Record<string, string | undefined>, planId?: string): ParentAgentScope => {
-    const userId = (headers["x-user-id"] ?? "").trim();
+    const userId = authenticatedUserId(headers);
     return {
       key: planId && userId
         ? `plan:${userId}:${planId}`
@@ -614,6 +731,11 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     const response = budgetLedgerResponse(task.plan_id, task);
     tasks.save(task, { immediate: true });
     return response;
+  };
+
+  const previewBudgetResponse = (task: TripTaskState): Record<string, unknown> => {
+    const snapshot = structuredClone(task);
+    return budgetLedgerResponse(snapshot.plan_id, snapshot);
   };
 
   const itineraryMutationResponse = (task: TripTaskState): Record<string, unknown> => ({
@@ -916,6 +1038,33 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     };
   };
 
+  const publicApiRequest = (request: Request): boolean => {
+    const pathname = new URL(request.url).pathname;
+    if (request.method === "OPTIONS" || !pathname.startsWith("/api/")) return true;
+    if (pathname.startsWith("/api/admin/")) return true;
+    if (request.method === "GET" && [
+      "/api/settings",
+      "/api/trip/health",
+      "/api/poi/photo",
+    ].includes(pathname)) return true;
+    if (request.method === "GET" && pathname.startsWith("/api/images/")) return true;
+    if (request.method === "GET" && pathname.startsWith("/api/avatars/")) return true;
+    if (request.method === "GET" && pathname.startsWith("/api/trip/share/")) return true;
+    if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/exchange") return true;
+    if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/public") return true;
+    if (request.method === "GET" && /^\/api\/auth\/web\/challenges\/[^/]+\/status$/.test(pathname)) return true;
+    if (request.method !== "POST") return false;
+    if ([
+      "/api/admin/login",
+      "/api/account/profile/avatar",
+      "/api/account/profile/skip-avatar",
+      "/api/auth/logout",
+      "/api/auth/wechat/login",
+      "/api/auth/web/challenges",
+    ].includes(pathname)) return true;
+    return /^\/api\/auth\/web\/challenges\/[^/]+\/(?:approve|exchange)$/.test(pathname);
+  };
+
   const app = new Elysia({ name: "youban-http" })
     .use(cors({
       origin: options.corsOrigins ?? settings.cors_origins,
@@ -950,6 +1099,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       else set.status = 500;
       const detail = error instanceof Error ? error.message : String(error);
       return { detail: detail || "服务异常" };
+    })
+    .onBeforeHandle(({ request, headers, status }) => {
+      if (!authentication || publicApiRequest(request) || validAdminToken(headers)) return;
+      if (!authenticatedUserId(headers)) return status(401, { detail: "登录已失效" });
     })
     .get("/health", () => ({
       status: "healthy",
@@ -1002,23 +1155,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .get("/api/poi/photo", async ({ query }) => {
-      const digest = createHash("md5").update(`${query.city ?? ""}:${query.name}`, "utf8").digest("hex").slice(0, 16);
-      for (const extension of ["jpg", "jpeg", "png", "webp"]) {
-        const fileName = `${digest}.${extension}`;
-        const path = join(imagesDir, fileName);
-        try {
-          if (existsSync(path) && statSync(path).size > 0) {
-            return {
-              success: true,
-              message: "获取图片成功",
-              data: { name: query.name, photo_url: `/api/images/${fileName}` },
-            };
-          }
-        } catch {
-          // A broken cache entry is treated as a miss so the remote source can still recover.
-        }
-      }
-      const photoUrl = await poiSearch.getPoiPhoto?.(query.name, query.city) ?? "";
+      const photoUrl = await imageCache.resolve(
+        `${query.city ?? ""}:${query.name}`,
+        async () => await poiSearch.getPoiPhoto?.(query.name, query.city) ?? "",
+      );
       return {
         success: true,
         message: "获取图片成功",
@@ -1107,49 +1247,327 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .get("/api/admin/settings", ({ headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
-      return { success: true, message: "ok", data: getSettings() };
+      return { success: true, message: "ok", data: runtimeSettingsSnapshot(getSettings()) };
     })
     .put("/api/admin/settings", async ({ body, headers, status }) => {
       if (!validAdminToken(headers)) return status(401, { detail: "后台密码校验失败，请重新登录" });
       const updated = await applyRuntimeSettings(body as Partial<RuntimeSettings>);
-      return { success: true, message: "配置已保存并立即生效", data: updated };
+      return { success: true, message: "配置已保存并立即生效", data: runtimeSettingsSnapshot(updated) };
     }, {
       body: t.Record(t.String(), t.Unknown()),
     })
-    .post("/api/auth/login", ({ body, status }) => {
+    .post("/api/auth/wechat/login", async ({ body, status }) => {
+      if (!authentication || !options.authentication) {
+        return status(503, { detail: "微信登录尚未配置" });
+      }
       try {
-        return { success: true, user: users.login(body.nickname) };
+        const subject = await options.authentication.exchangeWechatCode(body.code);
+        const result = authentication.loginWechat(subject);
+        return { success: true as const, ...result };
       } catch (error) {
-        if (error instanceof UserInputError) return status(422, { detail: error.message });
+        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
+        return status(401, { detail: "微信登录凭证无效" });
+      }
+    }, {
+      body: t.Object({ code: t.String({ minLength: 1, maxLength: 256 }) }),
+    })
+    .post("/api/auth/miniprogram/web-session", ({ body, headers, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      const user = authentication.authenticateReady(sessionToken(headers));
+      if (!user) return status(401, { detail: "登录已失效" });
+      try {
+        const ticket = miniProgramBridge.createWebSession(user.user_id, body.path);
+        return {
+          exchange_url: `/api/auth/miniprogram/web-session/exchange?ticket=${encodeURIComponent(ticket.ticket)}`,
+          expires_at: ticket.expires_at,
+        };
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError) return status(422, { detail: error.message });
         throw error;
       }
     }, {
-      body: LoginBodySchema,
-      response: {
-        200: AuthResponseSchema,
-        422: DetailErrorSchema,
-      },
+      body: t.Object({ path: t.String({ minLength: 1, maxLength: 512 }) }, { additionalProperties: false }),
+    })
+    .get("/api/auth/miniprogram/web-session/exchange", ({ query, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        const handoff = miniProgramBridge.consumeWebSession(query.ticket);
+        const web = authentication.issueWebSessionForUser(handoff.user_id);
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: handoff.redirect_path,
+            "Set-Cookie": `youban_session=${encodeURIComponent(web.token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
+            "Cache-Control": "no-store",
+            "Clear-Site-Data": '"cache", "storage"',
+          },
+        });
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError || error instanceof AuthenticationError) {
+          return status(422, { detail: error.message });
+        }
+        throw error;
+      }
+    }, {
+      query: t.Object({ ticket: t.String({ minLength: 32, maxLength: 128 }) }),
+    })
+    .get("/api/auth/miniprogram/web-session/public", ({ query, status }) => {
+      try {
+        const path = normalizeMiniProgramRedirectPath(query.path);
+        if (path !== "/privacy?host=miniprogram" && !path.startsWith("/share/")) {
+          throw new MiniProgramBridgeError("公开 WebView 跳转地址不在白名单内");
+        }
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: path,
+            "Cache-Control": "no-store",
+            "Clear-Site-Data": '"cache", "storage"',
+          },
+        });
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError) return status(422, { detail: error.message });
+        throw error;
+      }
+    }, {
+      query: t.Object({ path: t.String({ minLength: 1, maxLength: 512 }) }),
+    })
+    .post("/api/auth/logout", ({ headers, status, set }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      const token = sessionToken(headers);
+      if (!authentication.authenticate(token)) return status(401, { detail: "登录已失效" });
+      authentication.logout(token);
+      set.headers["Set-Cookie"] = "youban_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0";
+      return { success: true as const };
+    })
+    .post("/api/account/profile/avatar", async ({ body, headers, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      const token = sessionToken(headers);
+      const current = authentication.authenticate(token);
+      if (!current) return status(401, { detail: "登录已失效" });
+      if (Object.keys(body).length !== 1 || !(body.avatar instanceof File)) {
+        return status(422, { detail: "请选择有效的微信头像" });
+      }
+      const file = body.avatar;
+      if (file.size <= 0 || file.size > MAX_AVATAR_BYTES) {
+        return status(422, { detail: "头像大小必须在 5MB 以内" });
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const media = avatarMedia(bytes);
+      if (!media) return status(422, { detail: "头像仅支持 JPEG、PNG 或 WebP 图片" });
+
+      mkdirSync(avatarsDir, { recursive: true });
+      const fileName = `${crypto.randomUUID().replaceAll("-", "")}.${media.extension}`;
+      const finalPath = join(avatarsDir, fileName);
+      const temporaryPath = `${finalPath}.tmp`;
+      writeFileSync(temporaryPath, bytes, { flag: "wx", mode: 0o600 });
+      renameSync(temporaryPath, finalPath);
+      try {
+        const user = authentication.completeProfile(token, fileName);
+        const previous = current.avatar_url ? basename(current.avatar_url) : "";
+        if (previous && previous !== fileName && /^[a-f0-9]{32}\.(?:jpg|png|webp)$/.test(previous)) {
+          rmSync(join(avatarsDir, previous), { force: true });
+        }
+        return { success: true as const, user };
+      } catch (error) {
+        rmSync(finalPath, { force: true });
+        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
+        throw error;
+      }
+    }, {
+      body: t.Record(t.String(), t.Unknown()),
+    })
+    .get("/api/auth/sessions", ({ headers, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        return { items: authentication.listSessions(sessionToken(headers)) };
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
+        throw error;
+      }
+    })
+    .delete("/api/auth/sessions/:sessionId", ({ params, headers, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        if (!authentication.revokeSession(sessionToken(headers), params.sessionId)) {
+          return status(404, { detail: "设备会话不存在" });
+        }
+        return { success: true as const };
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
+        throw error;
+      }
+    })
+    .post("/api/auth/web/challenges", ({ status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      return authentication.createWebChallenge();
+    })
+    .post("/api/auth/web/challenges/:id/approve", ({ params, body, headers, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        authentication.approveWebChallenge(sessionToken(headers), params.id, body.credential);
+        return { success: true as const };
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(422, { detail: error.message });
+        throw error;
+      }
+    }, {
+      body: t.Object({ credential: t.String({ minLength: 1, maxLength: 128 }) }),
+    })
+    .get("/api/auth/web/challenges/:id/status", ({ params, query, status }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        return authentication.getWebChallengeStatus(params.id, query.verifier);
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
+        throw error;
+      }
+    }, {
+      query: t.Object({ verifier: t.String({ minLength: 1, maxLength: 128 }) }),
+    })
+    .post("/api/auth/web/challenges/:id/exchange", ({ params, body, status, set }) => {
+      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
+      try {
+        const result = authentication.exchangeWebChallenge(params.id, body.verifier);
+        set.headers["Set-Cookie"] = `youban_session=${encodeURIComponent(result.token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
+        return { success: true as const, user: result.user };
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(422, { detail: error.message });
+        throw error;
+      }
+    }, {
+      body: t.Object({ verifier: t.String({ minLength: 1, maxLength: 128 }) }),
     })
     .get("/api/auth/me", ({ headers, status }) => {
-      const user = users.get(headers["x-user-id"] ?? "");
-      if (!user) return status(404, { detail: "用户不存在,请重新登录" });
+      const user = users.get(authenticatedUserId(headers));
+      if (!user) return status(authentication ? 401 : 404, { detail: authentication ? "登录已失效" : "用户不存在,请重新登录" });
       return { success: true as const, user };
     }, {
-      response: { 200: AuthResponseSchema, 404: DetailErrorSchema },
+      response: { 200: AuthResponseSchema, 401: DetailErrorSchema, 404: DetailErrorSchema },
+    })
+    .post("/api/miniprogram/actions", ({ body, headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId) return status(401, { detail: "登录已失效" });
+      const task = miniProgramActionTask(body.plan_id);
+      if (!task) return status(404, { detail: "计划不存在" });
+      const ownerError = requireOwner(task, userId);
+      if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
+      if (task.status !== "completed" || !task.result) {
+        return status(409, { detail: "计划尚未完成" });
+      }
+      const plan = planData(task.result);
+      if (!plan) return status(409, { detail: "行程数据不可用" });
+      const type = body.type as NativeActionType;
+      let payload: Record<string, unknown>;
+      let temporaryFilePath: string | undefined;
+      if (type === "share") {
+        const shareCode = task.share_token || crypto.randomUUID().replaceAll("-", "");
+        if (!task.share_token) tasks.save({ ...task, share_token: shareCode }, { immediate: true });
+        payload = {
+          share_code: shareCode,
+          title: `${String(plan.city ?? "").trim() || "游伴"}行程`,
+          path: `/pages/web/index?share=${shareCode}`,
+        };
+      } else if (type === "add_calendar") {
+        const events = projectNativeCalendarEvents(plan);
+        if (events.length === 0) return status(422, { detail: "当前行程没有可写入日历的事件" });
+        payload = {
+          title: `${String(plan.city ?? "").trim() || "游伴"}行程`,
+          events,
+        };
+      } else {
+        const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(body.image_data_url ?? "");
+        if (!match) return status(422, { detail: "攻略长图必须是 PNG 图片" });
+        const bytes = Buffer.from(match[1]!, "base64");
+        if (bytes.length === 0 || bytes.length > 15 * 1024 * 1024
+          || bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) {
+          return status(422, { detail: "攻略长图无效或超过 15MB" });
+        }
+        mkdirSync(nativeActionsDir, { recursive: true });
+        temporaryFilePath = join(nativeActionsDir, `${crypto.randomUUID().replaceAll("-", "")}.png`);
+        writeFileSync(temporaryFilePath, bytes, { flag: "wx", mode: 0o600 });
+        payload = { title: body.title?.trim() || `${String(plan.city ?? "").trim() || "游伴"}攻略` };
+      }
+      return miniProgramBridge.createAction(userId, type, payload, temporaryFilePath);
+    }, { body: NativeActionBodySchema })
+    .get("/api/miniprogram/actions/:actionId/file", ({ params, headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId) return status(401, { detail: "登录已失效" });
+      try {
+        const path = miniProgramBridge.getTemporaryFile(params.actionId, userId);
+        if (!path || !existsSync(path)) return status(404, { detail: "攻略长图不存在" });
+        return new Response(Bun.file(path), {
+          headers: { "content-type": "image/png", "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError) {
+          return status(error.message.includes("无权") ? 403 : 404, { detail: error.message });
+        }
+        throw error;
+      }
+    })
+    .get("/api/miniprogram/actions/:actionId", ({ params, headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId) return status(401, { detail: "登录已失效" });
+      try {
+        const action = miniProgramBridge.getAction(params.actionId, userId);
+        return action.type === "save_guide"
+          ? {
+            ...action,
+            payload: {
+              ...action.payload,
+              download_url: `/api/miniprogram/actions/${encodeURIComponent(params.actionId)}/file`,
+            },
+          }
+          : action;
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError) {
+          return status(error.message.includes("无权") ? 403 : 404, { detail: error.message });
+        }
+        throw error;
+      }
+    })
+    .post("/api/miniprogram/actions/:actionId/complete", ({ params, headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId) return status(401, { detail: "登录已失效" });
+      try {
+        miniProgramBridge.completeAction(params.actionId, userId);
+        return { success: true as const };
+      } catch (error) {
+        if (error instanceof MiniProgramBridgeError) {
+          return status(error.message.includes("无权") ? 403 : 404, { detail: error.message });
+        }
+        throw error;
+      }
+    }, { body: t.Object({}, { additionalProperties: false }) })
+    .get("/api/auth/preferences", ({ headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId || !users.get(userId)) return status(401, { detail: "登录已失效" });
+      return userPreferences.get(userId);
+    }, {
+      response: { 200: UserPreferencesSchema, 401: DetailErrorSchema },
+    })
+    .patch("/api/auth/preferences", ({ body, headers, status }) => {
+      const userId = authenticatedUserId(headers);
+      if (!userId || !users.get(userId)) return status(401, { detail: "登录已失效" });
+      return userPreferences.patch(userId, body);
+    }, {
+      body: UserPreferencesPatchSchema,
+      response: { 200: UserPreferencesSchema, 401: DetailErrorSchema },
     })
     .get("/api/auth/memories", async ({ headers, status }) => {
-      const userId = headers["x-user-id"]?.trim() ?? "";
+      const userId = authenticatedUserId(headers);
       if (!userId || !users.get(userId)) return status(404, { detail: "用户不存在,请重新登录" });
       return { success: true as const, items: await memory.list(userId) };
     })
     .delete("/api/auth/memories/:memoryId", async ({ params, headers, status }) => {
-      const userId = headers["x-user-id"]?.trim() ?? "";
+      const userId = authenticatedUserId(headers);
       if (!userId || !users.get(userId)) return status(404, { detail: "用户不存在,请重新登录" });
       if (!await memory.remove(userId, params.memoryId)) return status(404, { detail: "记忆不存在" });
       return { success: true as const };
     })
     .post("/api/conversations", ({ body, headers, status }) => {
-      const userId = (headers["x-user-id"] ?? "").trim();
+      const userId = authenticatedUserId(headers);
       if (!userId) return status(404, { detail: "会话不存在" });
       const record = conversationRecords.create({
         sessionId: body.session_id,
@@ -1175,7 +1593,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .get("/api/conversations", ({ headers, query }) => {
       const rawLimit = Number(query.limit ?? 50);
       const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 50, 50));
-      const userId = (headers["x-user-id"] ?? "").trim();
+      const userId = authenticatedUserId(headers);
       return { items: userId ? conversationRecords.listOwner(userId, limit) : [] };
     }, {
       query: t.Object({ limit: t.Optional(t.String()) }),
@@ -1184,7 +1602,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .get("/api/conversations/:sessionId", ({ params, headers, status }) => {
       const record = conversationRecords.detail(
         params.sessionId,
-        (headers["x-user-id"] ?? "").trim(),
+        authenticatedUserId(headers),
       );
       return record ?? status(404, { detail: "会话不存在" });
     }, {
@@ -1194,7 +1612,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       try {
         const record = conversationRecords.replaceSnapshot(
           params.sessionId,
-          (headers["x-user-id"] ?? "").trim(),
+          authenticatedUserId(headers),
           body.revision,
           body.snapshot,
         );
@@ -1214,7 +1632,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       },
     })
     .delete("/api/conversations/:sessionId", ({ params, headers, status }) => {
-      const userId = (headers["x-user-id"] ?? "").trim();
+      const userId = authenticatedUserId(headers);
       const session = conversationSessions.getOwned(params.sessionId, userId);
       const linkedTask = session?.planId
         ? tasks.all().find((task) => task.plan_id === session.planId && task.user_id === userId)
@@ -1237,7 +1655,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const rawLimit = Number(query.limit ?? 10);
       const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 10, 50));
       return {
-        items: tasks.listHistory({ userId: (headers["x-user-id"] ?? "").trim(), limit }),
+        items: tasks.listHistory({ userId: authenticatedUserId(headers), limit }),
       };
     }, {
       query: t.Object({ limit: t.Optional(t.String()) }),
@@ -1318,7 +1736,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }),
     })
     .post("/api/trip/plan", ({ body, headers, status }) => {
-      const userId = (headers["x-user-id"] ?? "").trim();
+      const userId = authenticatedUserId(headers);
       const sessionId = body.session_id?.trim();
       if (body.session_id !== undefined
         && (!sessionId || !conversationRecords.canStartGeneration(sessionId, userId))) {
@@ -1402,7 +1820,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .post("/api/trip/plan/:planId/retry", ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "任务不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "failed") return status(409, { detail: "仅失败任务可重试" });
       if (!task.request_payload) return status(409, { detail: "原始行程请求不可重试" });
@@ -1435,7 +1853,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .get("/api/trip/status/:taskId", ({ params, headers, status }) => {
       const task = tasks.get(params.taskId);
       if (!task) return status(404, { detail: "任务不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status === "completed") {
         const response: Record<string, unknown> = {
@@ -1475,12 +1893,13 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         stage: task.stage,
         progress: task.progress,
         progress_text: task.message,
+        ...(task.details.length > 0 ? { details: structuredClone(task.details) } : {}),
       };
     })
     .get("/api/trip/plan/:planId/conversation", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "任务不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) {
         return status(ownerError.status, {
           detail: ownerError.status === 403 ? "无权访问该计划对话" : ownerError.detail,
@@ -1491,7 +1910,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .post("/api/trip/share/:taskId", ({ params, headers, status }) => {
       const task = tasks.get(params.taskId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未完成，暂时无法分享" });
@@ -1507,12 +1926,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (!task || task.status !== "completed" || !task.result) {
         return status(404, { detail: "分享计划不存在或尚未完成" });
       }
-      return { plan_id: task.plan_id, status: "completed", result: task.result };
+      return { status: "completed", result: publicTripResult(task.result) };
     })
     .post("/api/trip/plan/:planId/attractions", async ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
@@ -1542,7 +1961,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .put("/api/trip/plan/:planId/attractions/:attractionId", async ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
@@ -1572,7 +1991,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .delete("/api/trip/plan/:planId/attractions/:attractionId", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改景点" });
@@ -1592,17 +2011,17 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .get("/api/trip/plan/:planId/budget-items", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
       }
-      return buildBudgetResponse(task);
+      return previewBudgetResponse(task);
     })
     .post("/api/trip/plan/:planId/budget-items", ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
@@ -1633,6 +2052,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         nights: null,
         origin: "user",
         price_source: groupAmount === null ? "unavailable" : "user",
+        price_provider: "",
         linked_item_id: "",
         entity_source: "",
         source_url: "",
@@ -1659,7 +2079,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .patch("/api/trip/plan/:planId/budget-items/:budgetItemId", ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
@@ -1685,6 +2105,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (Object.hasOwn(body, "amount")) {
         target.amount = toGroupTotal(body.amount ?? null, target.amount_basis, travelers);
         target.price_source = target.amount === null ? "unavailable" : "user";
+        target.price_provider = "";
         target.unit_amount = null;
         target.calculation_summary = "";
       }
@@ -1708,7 +2129,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .delete("/api/trip/plan/:planId/budget-items/:budgetItemId", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成，无法修改预算" });
@@ -1728,7 +2149,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .patch("/api/trip/plan/:planId/items/:itemId/status", ({ params, body, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status !== "completed" || !task.result) {
         return status(409, { detail: "计划尚未生成完成" });
@@ -1777,12 +2198,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .delete("/api/trip/plan/:planId", ({ params, headers, status }) => {
       const task = tasks.get(params.planId);
       if (!task) return status(404, { detail: "计划不存在" });
-      const ownerError = requireTaskOwner(task, headers["x-user-id"] ?? "", headers["x-admin-token"] ?? "");
+      const ownerError = requireTaskOwner(task, authenticatedUserId(headers), headers["x-admin-token"] ?? "");
       if (ownerError) return status(ownerError.status, { detail: ownerError.detail });
       if (task.status === "processing") {
         return status(409, { detail: "计划正在生成中，完成或失败后才能删除" });
       }
-      const userId = validAdminToken(headers) ? task.user_id : (headers["x-user-id"] ?? "").trim();
+      const userId = validAdminToken(headers) ? task.user_id : authenticatedUserId(headers);
       cancelPlanning(task.task_id);
       if (!conversationRecords.softDeletePlan(task.plan_id, userId)) {
         return status(404, { detail: "计划不存在" });
@@ -1792,7 +2213,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     .post("/api/chat/ask", ({ body, headers, request }) => withServices(({ chatService: activeChatService }) =>
       activeChatService.ask({
         ...body,
-        user_id: (headers["x-user-id"] ?? "").trim(),
+        user_id: authenticatedUserId(headers),
       }, request.signal)
     ), {
       body: t.Object({
@@ -1807,7 +2228,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     })
     .post("/api/chat/edit", async ({ body, headers, request, status }) => {
       try {
-        return await editTrip(body, headers["x-user-id"] ?? "", request.signal, headers["x-admin-token"] ?? "");
+        return await editTrip(body, authenticatedUserId(headers), request.signal, headers["x-admin-token"] ?? "");
       } catch (error) {
         if (error instanceof RevisionConflictError) return status(409, { detail: error.message });
         if (error instanceof UnsafePlanPatchError) return status(400, { detail: error.message });
@@ -1839,14 +2260,14 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         if (!task) return status(404, { detail: "任务不存在" });
         const ownerError = requireOwner(
           task,
-          headers["x-user-id"] ?? "",
+          authenticatedUserId(headers),
           headers["x-admin-token"] ?? "",
         );
         if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
       }
       return sseResponse(
         async (onDelta, signal) => {
-          const result = await editTrip(body, headers["x-user-id"] ?? "", signal, headers["x-admin-token"] ?? "");
+          const result = await editTrip(body, authenticatedUserId(headers), signal, headers["x-admin-token"] ?? "");
           onDelta(result.reply);
           return result;
         },
@@ -1869,16 +2290,42 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (!fileName || basename(fileName) !== fileName) return status(404, { detail: "图片不存在" });
       const path = join(imagesDir, fileName);
       if (!isContained(imagesDir, path) || !existsSync(path)) return status(404, { detail: "图片不存在" });
-      return Bun.file(path);
+      return new Response(Bun.file(path), {
+        headers: { "cache-control": "public, max-age=31536000, immutable" },
+      });
+    })
+    .get("/api/avatars/:fileName", ({ params, status }) => {
+      const fileName = params.fileName;
+      const contentType = avatarContentType(fileName);
+      if (!contentType || !/^[a-f0-9]{32}\.(?:jpg|png|webp)$/.test(fileName)) {
+        return status(404, { detail: "头像不存在" });
+      }
+      const path = join(avatarsDir, fileName);
+      if (!isContained(avatarsDir, path) || !existsSync(path)) return status(404, { detail: "头像不存在" });
+      return new Response(Bun.file(path), {
+        headers: {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-type": contentType,
+        },
+      });
     })
     .ws("/api/trip/ws/:taskId", {
-      beforeHandle({ params, query, status }) {
+      beforeHandle({ params, query, headers, status }) {
         const task = tasks.get(String(params.taskId));
         if (!task) return;
+        const userId = authentication
+          ? authenticatedUserId(headers)
+          : String(query.user_id ?? "").trim();
+        const adminToken = authentication
+          ? String(headers["x-admin-token"] ?? "").trim()
+          : String(query.admin_token ?? "").trim();
+        if (authentication && !userId && !validAdminToken(headers)) {
+          return status(401, { detail: "登录已失效" });
+        }
         const ownerError = requireOwner(
           task,
-          String(query.user_id ?? ""),
-          String(query.admin_token ?? ""),
+          userId,
+          adminToken,
         );
         if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
       },
@@ -1896,8 +2343,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
           });
           return;
         }
-        const userId = String(ws.data.query.user_id ?? "").trim();
-        const adminToken = String(ws.data.query.admin_token ?? "").trim();
+        const userId = authentication
+          ? authenticatedUserId(ws.data.headers)
+          : String(ws.data.query.user_id ?? "").trim();
+        const adminToken = authentication
+          ? String(ws.data.headers["x-admin-token"] ?? "").trim()
+          : String(ws.data.query.admin_token ?? "").trim();
         const ownerError = requireOwner(task, userId, adminToken);
         if (ownerError) {
           ws.cork(() => {
@@ -1975,6 +2426,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     dataDir: options.dataDir,
     tasks,
     users,
+    authentication,
     conversations,
     conversationRecords,
     skills,
@@ -2000,7 +2452,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         if (activeServiceCalls.size > 0) await Promise.allSettled([...activeServiceCalls]);
         if (titleJobs.size > 0) await Promise.allSettled([...titleJobs.values()]);
         tasks.close();
+        miniProgramBridge.close();
         users.close();
+        authentication?.close();
         conversations.close();
         conversationRecords.close();
         await Promise.allSettled([

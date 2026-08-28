@@ -3,7 +3,12 @@ import type { Page } from '@playwright/test'
 import type { TripPlan } from '../src/types'
 
 const planId = 'blueprint-plan'
-const user = { user_id: 'blueprint-user', nickname: 'Blueprint QA' } as const
+const user = {
+  user_id: 'blueprint-user',
+  nickname: 'Blueprint QA',
+  avatar_url: '/api/avatars/blueprint.jpg',
+  profile_complete: true,
+} as const
 const tinyImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
 const attractionImage = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
@@ -20,6 +25,7 @@ type PlanApiMocks = {
   budgetResponse?: unknown
   attractionDeleteResponse?: unknown
   onChatEditRequest?: (body: Record<string, unknown>) => void
+  onPhotoRequest?: (name: string, city: string) => void
 }
 
 const tripPlanWithBlueprint = {
@@ -198,6 +204,8 @@ const mockCommonApi = async (page: Page, mocks: PlanApiMocks = {}): Promise<void
       return
     }
     if (path === '/api/poi/photo') {
+      const url = new URL(route.request().url())
+      mocks.onPhotoRequest?.(url.searchParams.get('name') || '', url.searchParams.get('city') || '')
       await route.fulfill({ json: { success: true, data: { photo_url: attractionImage } } })
       return
     }
@@ -210,20 +218,39 @@ const preparePlanPage = async (
   plan: TripPlan = tripPlanWithBlueprint,
   locale = 'zh-CN',
   mocks: PlanApiMocks = {},
+  skin: 'default' | 'google' = 'default',
 ): Promise<void> => {
   await page.addInitScript(
-    ({ storedUser, storedPlanId, storedPlan, storedLocale }) => {
+    ({ storedUser, storedPlanId, storedPlan, storedLocale, storedSkin }) => {
       localStorage.setItem('tripstar.user', JSON.stringify(storedUser))
       localStorage.setItem('tripstar-locale', storedLocale)
+      localStorage.setItem('tripstar.skin', storedSkin)
       sessionStorage.setItem('planId', storedPlanId)
       sessionStorage.setItem('tripPlan', JSON.stringify(storedPlan))
     },
-    { storedUser: user, storedPlanId: planId, storedPlan: plan, storedLocale: locale },
+    { storedUser: user, storedPlanId: planId, storedPlan: plan, storedLocale: locale, storedSkin: skin },
   )
   await mockCommonApi(page, mocks)
   await page.goto(`/plan/${planId}`)
   await expect(page.locator('.top-switch-menu')).toBeVisible()
 }
+
+test('applies the clear skin palette throughout the plan overview', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await preparePlanPage(page, tripPlanWithBlueprint, 'zh-CN', {}, 'google')
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+
+  const overviewTab = page.getByRole('menuitem', { name: '行程总览' })
+  const todayTab = page.getByRole('menuitem', { name: '今日行程' })
+  await expect(page.locator('html')).toHaveAttribute('data-skin', 'google')
+  await expect(page.locator('.result-container')).toHaveCSS('background-color', 'rgb(245, 249, 252)')
+  await expect(page.locator('.content-wrapper')).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.82)')
+  await expect(page.locator('.journey__hero')).toHaveCSS('background-color', 'rgb(239, 248, 250)')
+  await expect(overviewTab).toHaveCSS('color', 'rgb(38, 122, 147)')
+  await expect(overviewTab).toHaveCSS('background-color', 'rgba(59, 155, 180, 0.14)')
+  await expect(overviewTab).toHaveCSS('border-color', 'rgba(59, 155, 180, 0.24)')
+  await expect(todayTab).toHaveCSS('border-color', 'rgb(213, 228, 234)')
+})
 
 const mockSharedPlan = async (page: Page, plan: TripPlan): Promise<void> => {
   await page.addInitScript(() => {
@@ -276,49 +303,124 @@ test('binds result-page agent requests to the persisted plan id', async ({ page 
   expect(requestBody?.message).toBe('把第一天安排得轻松一点')
 })
 
-test('uses distinct overview and detailed itinerary labels in Japanese', async ({ page }) => {
-  await preparePlanPage(page, tripPlanWithBlueprint, 'ja-JP')
+test('uses distinct overview and detailed itinerary labels in French', async ({ page }) => {
+  await preparePlanPage(page, tripPlanWithBlueprint, 'fr-FR')
 
-  await expect(page.getByRole('menuitem', { name: '旅程概要' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: '詳細日程' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: '旅程マップ' })).toHaveCount(0)
+  await expect(page.getByRole('menuitem', { name: 'Aperçu du voyage' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Itinéraire détaillé' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: "Aperçu de l'itinéraire" })).toHaveCount(0)
 })
 
-test('lets users drag both journey rails and resumes autoplay after the pointer leaves', async ({ page }) => {
+test('keeps the journey and inspiration browsers stationary, independent, and item-aligned', async ({ page }) => {
   await preparePlanPage(page, makeLongTripPlan(10, '2026-08-01'))
   await page.getByRole('menuitem', { name: '行程总览' }).click()
 
+  const track = page.locator('.journey__track')
+  const cards = page.locator('.journey__cards')
+  await track.evaluate((element) => { element.scrollLeft = 0 })
+  await cards.evaluate((element) => { element.scrollLeft = 0 })
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(4_300)
+  expect(await track.evaluate((element) => element.scrollLeft)).toBe(0)
+  expect(await cards.evaluate((element) => element.scrollLeft)).toBe(0)
+
+  const touchSession = await page.context().newCDPSession(page)
+  await touchSession.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+  const trackBox = await track.boundingBox()
+  expect(trackBox).not.toBeNull()
+  const touchY = trackBox!.y + Math.min(trackBox!.height / 2, 80)
+  const touchStartX = trackBox!.x + Math.min(trackBox!.width - 40, 640)
+  await touchSession.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x: touchStartX, y: touchY }],
+  })
+  await touchSession.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [{ x: touchStartX - 220, y: touchY }],
+  })
+  await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await expect.poll(() => track.evaluate((element) => element.scrollLeft)).toBeGreaterThan(20)
+  await page.waitForTimeout(600)
+  const touchAligned = await track.evaluate((viewport) => {
+    const viewportLeft = viewport.getBoundingClientRect().left
+    return [...viewport.querySelectorAll<HTMLElement>('.journey__stop')]
+      .some((item) => Math.abs(item.getBoundingClientRect().left - viewportLeft) <= 2)
+  })
+  expect(touchAligned).toBe(true)
+  expect(await cards.evaluate((element) => element.scrollLeft)).toBe(0)
+  await track.evaluate((element) => { element.scrollLeft = 0 })
+  await page.waitForTimeout(100)
+
+  await page.getByRole('button', { name: '下一段行程' }).click()
+  await expect.poll(() => track.evaluate((element) => element.scrollLeft)).toBeGreaterThan(20)
+  await page.waitForTimeout(600)
+  expect(await cards.evaluate((element) => element.scrollLeft)).toBe(0)
+  const trackAfterJourneyStep = await track.evaluate((element) => element.scrollLeft)
+
+  await page.getByRole('button', { name: '下一组灵感' }).click()
+  await expect.poll(() => cards.evaluate((element) => element.scrollLeft)).toBeGreaterThan(20)
+  await page.waitForTimeout(600)
+  expect(await track.evaluate((element) => element.scrollLeft)).toBe(trackAfterJourneyStep)
+
   for (const rail of [
-    { viewport: '.journey__track', strip: '.journey__track-strip', manualClass: 'journey__track--manual' },
-    { viewport: '.journey__cards', strip: '.journey__cards-track', manualClass: 'journey__cards--manual' },
+    { viewport: track, items: '.journey__stop' },
+    { viewport: cards, items: '.journey__card' },
   ]) {
-    const viewport = page.locator(rail.viewport)
-    const strip = page.locator(rail.strip)
-    await expect(viewport).toHaveClass(/--loop/)
-    await viewport.hover()
-    const before = await strip.evaluate((element) => Number(element.getAnimations()[0]?.currentTime ?? 0))
-    const box = await viewport.boundingBox()
-    expect(box).not.toBeNull()
-    if (!box) return
-
-    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2, { steps: 6 })
-    await page.mouse.up()
-
-    await expect(viewport).toHaveClass(new RegExp(rail.manualClass))
-    const after = await strip.evaluate((element) => Number(element.getAnimations()[0]?.currentTime ?? 0))
-    expect(Math.abs(after - before)).toBeGreaterThan(100)
-    await expect(strip).toHaveCSS('animation-play-state', 'paused')
-    await expect(page.getByRole('menuitem', { name: '行程总览' })).toHaveAttribute('aria-selected', 'true')
-
-    await page.mouse.move(0, 0)
-    await expect(viewport).not.toHaveClass(new RegExp(rail.manualClass))
-    await expect(strip).toHaveCSS('animation-play-state', 'running')
-    await expect.poll(() => strip.evaluate((element) => (
-      Number(element.getAnimations()[0]?.currentTime ?? 0)
-    ))).toBeGreaterThan(after + 50)
+    const aligned = await rail.viewport.evaluate((viewport, itemSelector) => {
+      const viewportLeft = viewport.getBoundingClientRect().left
+      return [...viewport.querySelectorAll<HTMLElement>(itemSelector)]
+        .some((item) => Math.abs(item.getBoundingClientRect().left - viewportLeft) <= 2)
+    }, rail.items)
+    expect(aligned).toBe(true)
   }
+
+  await expect(page.locator('.journey__pager-status')).toHaveCount(2)
+})
+
+test('loads city photos for journey days that have no attractions', async ({ page }) => {
+  const requestedPhotos: Array<[string, string]> = []
+  const cityOnlyPlan: TripPlan = {
+    ...makeLongTripPlan(3, '2026-08-01'),
+    city: '喀纳斯',
+    cities: ['喀纳斯', '赛里木湖'],
+    days: makeLongTripPlan(3, '2026-08-01').days.map((day, index) => ({
+      ...day,
+      city: index < 2 ? '喀纳斯' : '赛里木湖',
+      attractions: [],
+    })),
+  }
+
+  await preparePlanPage(page, cityOnlyPlan, 'zh-CN', {
+    onPhotoRequest: (name, city) => requestedPhotos.push([name, city]),
+  })
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+
+  await expect.poll(() => requestedPhotos).toContainEqual(['喀纳斯', '喀纳斯'])
+  await expect.poll(() => requestedPhotos).toContainEqual(['赛里木湖', '赛里木湖'])
+  await expect(page.locator('.journey__stop:not(.journey__stop--end) .journey__pin img')).toHaveCount(3)
+})
+
+test('stops overview image effects after the finite entrance transition', async ({ page }) => {
+  await page.addInitScript(() => {
+    Math.random = () => 0
+  })
+  await preparePlanPage(page, tripPlanWithBlueprint)
+  await page.getByRole('menuitem', { name: '行程总览' }).click()
+  await expect(page.locator('.card-img img').first()).toBeVisible()
+  await page.waitForTimeout(1_200)
+
+  const readImageEffects = () => page.locator('.overview-card-item').evaluateAll((cards) => cards.map((card) => {
+    const image = card.querySelector<HTMLElement>('.card-img img')
+    const glow = card.querySelector<HTMLElement>('.img-glow')
+    return {
+      imageTransform: image?.style.transform || '',
+      glowOpacity: glow?.style.opacity || '',
+    }
+  }))
+
+  const settled = await readImageEffects()
+  await page.waitForTimeout(400)
+  expect(await readImageEffects()).toEqual(settled)
 })
 
 test('scrolls the continuous itinerary to a selected journey day', async ({ page }) => {
@@ -499,7 +601,7 @@ test('keeps the mobile result navigation pinned while the plan scrolls', async (
       navigationTop: Math.round(navigation?.getBoundingClientRect().top ?? -2),
       scrolled: (main?.scrollTop ?? 0) > 0,
     }
-  })).toEqual({ mainTop: 52, navigationTop: 52, scrolled: true })
+  })).toEqual({ mainTop: 53, navigationTop: 53, scrolled: true })
 })
 
 test('uses one mobile grouping control and keeps all day media directly visible', async ({ page }) => {

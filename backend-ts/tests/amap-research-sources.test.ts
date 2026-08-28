@@ -57,6 +57,42 @@ describe("AmapResearchSources", () => {
     expect(urls.at(-1)?.searchParams.get("types")).toBe("110000");
   });
 
+  it("falls back to a focused preference query when the combined attraction query is empty", async () => {
+    const placeQueries: string[] = [];
+    const sources = new AmapResearchSources({
+      apiKey: "web-key",
+      minimumRequestIntervalMs: 0,
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/v3/config/district") {
+          return jsonResponse({ status: "1", districts: [{ name: "成都市", adcode: "510100" }] });
+        }
+        const keywords = url.searchParams.get("keywords") ?? "";
+        placeQueries.push(keywords);
+        if (keywords !== "大熊猫") return jsonResponse({ status: "1", pois: [] });
+        return jsonResponse({
+          status: "1",
+          pois: [{
+            id: "B0PANDA",
+            name: "成都大熊猫繁育研究基地",
+            address: "熊猫大道1375号",
+            location: "104.145,30.740",
+            type: "风景名胜",
+          }],
+        });
+      },
+    });
+
+    expect(await sources.searchAttractions("成都", ["看大熊猫"])).toEqual([{
+      poi_id: "B0PANDA",
+      name: "成都大熊猫繁育研究基地",
+      address: "熊猫大道1375号",
+      type: "风景名胜",
+      location: { longitude: 104.145, latitude: 30.74 },
+    }]);
+    expect(placeQueries).toEqual(["热门景点 看大熊猫", "大熊猫"]);
+  });
+
   it("searches hotels without inventing prices", async () => {
     const sources = new AmapResearchSources({
       apiKey: "web-key",

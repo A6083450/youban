@@ -4,12 +4,17 @@ import { dirname } from "node:path";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import {
   CURRENT_SCHEMA_VERSION,
+  AUTH_SCHEMA_SQL,
   CONVERSATION_SESSIONS_SCHEMA_SQL,
   INITIAL_SCHEMA_SQL,
   SKILL_CATALOG_SCHEMA_SQL,
+  USER_PREFERENCES_SCHEMA_SQL,
+  WECHAT_PROFILE_SCHEMA_SQL,
   schema,
   type YoubanSchema,
 } from "./db-schema.ts";
+
+const MAX_COMPATIBLE_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION;
 
 export class YoubanDatabase {
   readonly raw: Database;
@@ -37,15 +42,17 @@ export class YoubanDatabase {
       user_version: number;
     };
     if (currentVersion > CURRENT_SCHEMA_VERSION) {
-      throw new Error(
-        `database schema ${currentVersion} is newer than supported ${CURRENT_SCHEMA_VERSION}`,
-      );
+      this.assertCompatibleSchema(currentVersion);
+      return;
     }
     if (currentVersion === CURRENT_SCHEMA_VERSION) return;
     const migrations: Readonly<Record<number, () => void>> = {
       1: () => this.migrateVersionOne(),
       2: () => this.migrateVersionTwo(),
       3: () => this.migrateVersionThree(),
+      4: () => this.migrateVersionFour(),
+      5: () => this.migrateVersionFive(),
+      6: () => this.migrateVersionSix(),
     };
     const migrate = this.raw.transaction(() => {
       for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {
@@ -58,6 +65,30 @@ export class YoubanDatabase {
     migrate();
   }
 
+  private assertCompatibleSchema(version: number): void {
+    if (version > MAX_COMPATIBLE_SCHEMA_VERSION) {
+      throw new Error(
+        `database schema ${version} is newer than supported ${MAX_COMPATIBLE_SCHEMA_VERSION}`,
+      );
+    }
+    if (version === 3) {
+      this.assertLegacyTables(["tasks", "conversations", "users", "managed_skills", "skill_versions", "skill_agent_assignments", "skill_audit_events"]);
+      return;
+    }
+    throw new Error(`database schema ${version} is unsupported`);
+  }
+
+  private assertLegacyTables(expectedTables: string[]): void {
+    for (const name of expectedTables) {
+      const row = this.raw.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${name}'`).get() as {
+        name: string;
+      } | null;
+      if (!row) {
+        throw new Error(`legacy database missing required table: ${name}`);
+      }
+    }
+  }
+
   private migrateVersionOne(): void {
     this.raw.exec(INITIAL_SCHEMA_SQL);
   }
@@ -68,6 +99,18 @@ export class YoubanDatabase {
 
   private migrateVersionThree(): void {
     this.raw.exec(CONVERSATION_SESSIONS_SCHEMA_SQL);
+  }
+
+  private migrateVersionFour(): void {
+    this.raw.exec(AUTH_SCHEMA_SQL);
+  }
+
+  private migrateVersionFive(): void {
+    this.raw.exec(USER_PREFERENCES_SCHEMA_SQL);
+  }
+
+  private migrateVersionSix(): void {
+    this.raw.exec(WECHAT_PROFILE_SCHEMA_SQL);
   }
 
   quickCheck(): string {

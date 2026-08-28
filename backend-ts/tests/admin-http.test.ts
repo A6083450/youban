@@ -53,7 +53,12 @@ beforeEach(() => {
   process.env.DATA_DIR = dataDir;
   _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
   runtime = createHttpRuntime({ dataDir, planner: new NoopPlanner() });
-  const alice = runtime.users.login("小艾");
+  const now = new Date().toISOString();
+  runtime.users.database.raw.query(`
+    INSERT INTO users (user_id, nickname, created_at, last_login_at)
+    VALUES (?, ?, ?, ?)
+  `).run("admin-alice", "小艾", now, now);
+  const alice = runtime.users.get("admin-alice")!;
   aliceId = alice.user_id;
   runtime.tasks.save(createTaskState("alice-trip", {
     user_id: alice.user_id,
@@ -333,8 +338,8 @@ describe("admin HTTP", () => {
     expect(contentChanged.snapshot_id).not.toBe(replaced.snapshot_id);
 
     runtime.users.database.raw.query(
-      "UPDATE users SET nickname = ?, nickname_key = ? WHERE user_id = ?",
-    ).run("新的昵称", "新的昵称", aliceId);
+      "UPDATE users SET nickname = ? WHERE user_id = ?",
+    ).run("新的昵称", aliceId);
     const nicknameChanged = await readPage(0);
     expect(nicknameChanged.total).toBe(contentChanged.total);
     expect(nicknameChanged.snapshot_id).not.toBe(contentChanged.snapshot_id);
@@ -574,7 +579,8 @@ describe("admin HTTP", () => {
   it("reads and persists filtered runtime settings", async () => {
     const getResponse = await call("GET", "/api/admin/settings", undefined, "admin@123");
     expect(getResponse.status).toBe(200);
-    expect(await getResponse.json()).toEqual(expect.objectContaining({
+    const getBody = await getResponse.json() as Record<string, any>;
+    expect(getBody).toEqual(expect.objectContaining({
       success: true,
       data: expect.objectContaining({
         openai_model: expect.any(String),
@@ -582,6 +588,7 @@ describe("admin HTTP", () => {
         llm_thinking_visible: false,
       }),
     }));
+    expect(getBody.data.fliggy_proxy_token).toBeUndefined();
     const draft = { city: "北京", travel_days: 3 };
     const pendingToken = runtime.assistant.ledger.register(draft, 0.95).token;
     const update = await call("PUT", "/api/admin/settings", {
@@ -591,7 +598,9 @@ describe("admin HTTP", () => {
       unknown_key: "ignored",
     }, "admin@123");
     expect(update.status).toBe(200);
-    expect((await update.json() as Record<string, any>).data.openai_model).toBe("admin-model");
+    const updateBody = await update.json() as Record<string, any>;
+    expect(updateBody.data.openai_model).toBe("admin-model");
+    expect(updateBody.data.fliggy_proxy_token).toBeUndefined();
     expect(runtime.assistant.ledger.validate(pendingToken, draft)).toEqual({ valid: true, reason: "ok" });
     const persisted = JSON.parse(readFileSync(join(dataDir, "runtime_settings.json"), "utf8"));
     expect(persisted).toEqual({

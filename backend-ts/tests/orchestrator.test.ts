@@ -8,6 +8,7 @@ import {
   emptyCheckpoint,
   mergeSegmentDays,
   normalizeCheckpoint,
+  rebalanceSparseAttractionDays,
   type DayPlan,
   type TripPlanningRequest,
 } from "../src/domain/orchestrator.ts";
@@ -104,6 +105,44 @@ describe("deterministic trip orchestrator", () => {
     expect(Object.keys(issues)).toEqual(["seg-02"]);
     expect(issues["seg-02"]?.[0]).toContain("D3");
     expect(issues["seg-02"]?.[0]).toContain("D1");
+  });
+
+  it("fills sparse same-city days by moving surplus trusted attractions", () => {
+    const counts = [3, 1, 2, 0, 3, 1, 0];
+    let poiIndex = 0;
+    const sparseDays = counts.map((count, dayIndex) => ({
+      ...day(dayIndex),
+      city: "三亚",
+      attractions: Array.from({ length: count }, () => {
+        poiIndex += 1;
+        return { name: `景点${poiIndex}`, poi_id: `poi-${poiIndex}` };
+      }),
+    }));
+    const original = structuredClone(sparseDays);
+
+    const balanced = rebalanceSparseAttractionDays(sparseDays);
+    const balancedIds = balanced.flatMap((entry) => entry.attractions.map((item) => item.poi_id));
+
+    expect(balanced.map((entry) => entry.attractions.length)).toEqual([3, 1, 1, 1, 2, 1, 1]);
+    expect(balancedIds.sort()).toEqual(Array.from({ length: 10 }, (_, index) => `poi-${index + 1}`).sort());
+    expect(new Set(balancedIds).size).toBe(10);
+    expect(sparseDays).toEqual(original);
+  });
+
+  it("leaves an empty day unchanged when only another city has surplus attractions", () => {
+    const days = [
+      { ...day(0), city: "三亚", attractions: [] },
+      {
+        ...day(1),
+        city: "海口",
+        attractions: [
+          { name: "海口景点1", poi_id: "haikou-1" },
+          { name: "海口景点2", poi_id: "haikou-2" },
+        ],
+      },
+    ];
+
+    expect(rebalanceSparseAttractionDays(days).map((entry) => entry.attractions.length)).toEqual([0, 2]);
   });
 
   it("computes only modeled costs and filters weather to the trip range", () => {

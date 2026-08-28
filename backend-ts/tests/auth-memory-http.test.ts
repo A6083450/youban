@@ -31,14 +31,23 @@ describe("auth memory HTTP", () => {
   it("lists and removes only the authenticated user's memories", async () => {
     dataDir = mkdtempSync(join(tmpdir(), "youban-auth-memory-"));
     const memory = new FakeMemory();
-    runtime = createHttpRuntime({ dataDir, memory });
-    const user = runtime.users.login("小艾");
+    runtime = createHttpRuntime({
+      dataDir,
+      memory,
+      authentication: {
+        pepper: "auth-memory-test-pepper-with-at-least-32-bytes",
+        exchangeWechatCode: async (code) => code,
+      },
+    });
+    const login = runtime.authentication!.loginWechat("memory-user");
+    runtime.authentication!.completeProfile(login.token, "66666666666666666666666666666666.png");
+    const user = login.user;
     memory.entries.set(user.user_id, [
       { id: "7", memory: "喜欢安静的自然景点", created_at: "2026-08-21" },
       { id: "9", memory: "不吃辣", created_at: "2026-08-20" },
     ]);
 
-    const headers = { "X-User-Id": user.user_id };
+    const headers = { authorization: `Bearer ${login.token}` };
     const listed = await runtime.app.handle(new Request("http://localhost/api/auth/memories", { headers }));
     expect(listed.status).toBe(200);
     expect(await listed.json()).toEqual({
@@ -69,11 +78,18 @@ describe("auth memory HTTP", () => {
 
   it("rejects memory access for an unknown user", async () => {
     dataDir = mkdtempSync(join(tmpdir(), "youban-auth-memory-"));
-    runtime = createHttpRuntime({ dataDir, memory: new FakeMemory() });
+    runtime = createHttpRuntime({
+      dataDir,
+      memory: new FakeMemory(),
+      authentication: {
+        pepper: "auth-memory-test-pepper-with-at-least-32-bytes",
+        exchangeWechatCode: async (code) => code,
+      },
+    });
     const response = await runtime.app.handle(new Request("http://localhost/api/auth/memories", {
-      headers: { "X-User-Id": "ghost" },
+      headers: { authorization: "Bearer forged-session" },
     }));
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ detail: "用户不存在,请重新登录" });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "登录已失效" });
   });
 });

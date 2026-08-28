@@ -11,6 +11,7 @@ import {
 import { PiTripPlanner, type StructuredAgentRunner } from "./pi-trip-planner.ts";
 import type { SkillCatalogProvider } from "./skill-management-service.ts";
 import type { SkillRuntimeDiagnostics } from "./skill-runtime-diagnostics.ts";
+import { FliggyHotelPriceSource } from "../services/fliggy-hotel-price-source.ts";
 
 interface DefaultTripPlannerSettings {
   vite_amap_web_key: string;
@@ -26,6 +27,10 @@ interface DefaultTripPlannerSettings {
   trip_segment_concurrency: number;
   trip_review_enabled: boolean;
   trip_duplicate_repair_rounds: number;
+  fliggy_proxy_token: string;
+  fliggy_proxy_url: string;
+  fliggy_price_timeout_ms: number;
+  fliggy_price_cache_ttl_seconds: number;
 }
 
 export interface DefaultTripPlannerOptions {
@@ -72,5 +77,11 @@ export function createDefaultTripPlanner(options: DefaultTripPlannerOptions): Pi
     reviewEnabled: settings.trip_review_enabled,
     duplicateRepairRounds: settings.trip_duplicate_repair_rounds,
     showThoughts: effectiveThinkingVisible(settings),
+    hotelPrices: new FliggyHotelPriceSource({
+      token: settings.fliggy_proxy_token,
+      baseUrl: settings.fliggy_proxy_url,
+      timeoutMs: settings.fliggy_price_timeout_ms,
+      cacheTtlMs: settings.fliggy_price_cache_ttl_seconds * 1_000,
+    }),
   });
 }

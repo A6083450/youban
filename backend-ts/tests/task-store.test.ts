@@ -9,7 +9,7 @@ import {
   createTaskState,
   type TripTaskState,
 } from "../src/domain/task-store.ts";
-import { INITIAL_SCHEMA_SQL, SKILL_CATALOG_SCHEMA_SQL } from "../src/domain/db-schema.ts";
+import { CURRENT_SCHEMA_VERSION, INITIAL_SCHEMA_SQL, SKILL_CATALOG_SCHEMA_SQL } from "../src/domain/db-schema.ts";
 import { YoubanDatabase } from "../src/domain/database.ts";
 
 const tempDirs: string[] = [];
@@ -61,7 +61,7 @@ describe("SqliteTaskStore", () => {
     store.close();
 
     const db = new Database(path, { readonly: true });
-    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_SCHEMA_VERSION });
     expect(db.query("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
@@ -87,7 +87,7 @@ describe("SqliteTaskStore", () => {
     database.close();
 
     const migrated = new YoubanDatabase(path);
-    expect(migrated.raw.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(migrated.raw.query("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_SCHEMA_VERSION });
     expect(migrated.raw.query("SELECT task_id FROM tasks").get()).toEqual({ task_id: "t1" });
     expect(migrated.raw.query("SELECT user_deleted_at FROM tasks WHERE task_id = 't1'").get()).toEqual({
       user_deleted_at: null,

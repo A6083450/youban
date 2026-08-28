@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./AdminRuntimeSettingsPanel.vue', import.meta.url), 'utf8')
 const apiSource = readFileSync(new URL('../../services/api.ts', import.meta.url), 'utf8')
-const locales = ['zh', 'en', 'ja'].map((locale) => JSON.parse(readFileSync(
+const locales = ['zh', 'en', 'fr'].map((locale) => JSON.parse(readFileSync(
   new URL(`../../i18n/locales/${locale}.json`, import.meta.url),
   'utf8',
 )))

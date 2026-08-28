@@ -22,6 +22,7 @@ output
 .superpowers
 .worktrees/
 .idea
+.DS_Store
 .debug-journal.md
 *.png
 !imgs/**/*.png
@@ -29,3 +30,4 @@ youban-spec
 /docs/superpowers
 backend-ts/node_modules/
 backend-ts/profiles/
+miniprogram/project.private.config.json

@@ -83,7 +83,7 @@ function planPendingBuffer(days: DayPlan[], travelers: number, rooms: number): n
 function adjustmentNote(language: unknown, reduction: number, buffer: number): string {
   const code = String(language ?? "zh").trim().toLocaleLowerCase("und").split("-")[0];
   if (code === "en") return `Meal estimates were reduced by ¥${reduction} to respect the budget, with ¥${buffer} reserved for unquoted items.`;
-  if (code === "ja") return `予算に合わせて食事の見積もりを ¥${reduction} 引き下げ、未見積もり項目に ¥${buffer} を確保しました。`;
+  if (code === "fr") return `Les estimations des repas ont été réduites de ¥${reduction} pour respecter le budget, avec ¥${buffer} réservés aux éléments sans tarif.`;
   return `已根据总预算将餐饮预估下调 ¥${reduction}，并为待报价项目预留 ¥${buffer}。`;
 }
 

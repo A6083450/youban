@@ -16,6 +16,7 @@ export interface UserMemoryItem {
 export interface UserMemoryService extends TripMemory {
   list(userId: string): Promise<UserMemoryItem[]>;
   remove(userId: string, memoryId: string): Promise<boolean>;
+  merge?(sourceUserId: string, targetUserId: string): Promise<{ rollback: () => Promise<void> }>;
 }
 
 export interface HermesMemoryBridgeOptions {
@@ -78,6 +79,34 @@ export class HermesMemoryBridge implements UserMemoryService {
     const normalizedId = memoryId.trim();
     if (!normalizedUser || !normalizedId) return false;
     return (await this.run(normalizedUser, { action: "remove", memoryId: normalizedId })).ok;
+  }
+
+  async merge(sourceUserId: string, targetUserId: string): Promise<{ rollback: () => Promise<void> }> {
+    this.assertOpen();
+    const source = await this.list(sourceUserId);
+    const targetBefore = new Set((await this.list(targetUserId)).map((item) => item.id));
+    const addedTargetIds: string[] = [];
+    const removedSource: UserMemoryItem[] = [];
+    const rollback = async () => {
+      await Promise.allSettled(addedTargetIds.map((id) => this.remove(targetUserId, id)));
+      for (const item of removedSource) await this.remember(sourceUserId, item.memory);
+    };
+    try {
+      for (const item of source) {
+        if (!await this.remember(targetUserId, item.memory)) throw new Error("target memory write failed");
+        for (const candidate of await this.list(targetUserId)) {
+          if (!targetBefore.has(candidate.id) && !addedTargetIds.includes(candidate.id)) addedTargetIds.push(candidate.id);
+        }
+      }
+      for (const item of source) {
+        if (!await this.remove(sourceUserId, item.id)) throw new Error("source memory removal failed");
+        removedSource.push(item);
+      }
+      return { rollback };
+    } catch (error) {
+      await rollback();
+      throw error;
+    }
   }
 
   close(): Promise<void> {

@@ -44,7 +44,18 @@
                 <ShareAltOutlined class="action-icon" />
                 {{ t('result.share.button') }}
               </a-button>
-              <a-dropdown :trigger="['click']" placement="bottomRight">
+              <a-button
+                v-if="embeddedMiniProgram"
+                type="default"
+                class="action-btn"
+                :loading="exportingGuide"
+                :disabled="exportingGuide"
+                @click="exportAsImage"
+              >
+                <DownloadOutlined class="action-icon" />
+                {{ t('result.exportImage') }}
+              </a-button>
+              <a-dropdown v-else :trigger="['click']" placement="bottomRight">
                 <a-button
                   type="default"
                   class="action-btn"
@@ -134,7 +145,7 @@
           <a-empty v-else :description="t('common.noData')" />
           <div class="overview-meta">
             <span class="overview-meta-item overview-meta-item--accent">
-              {{ t('result.dateRange', { start: tripPlan.start_date, end: tripPlan.end_date }) }}
+              {{ t('result.dateRange', { start: formatDisplayDate(tripPlan.start_date), end: formatDisplayDate(tripPlan.end_date) }) }}
             </span>
             <span v-if="planId" class="overview-meta-item">
               Plan ID: {{ planId }}
@@ -784,6 +795,7 @@ import {
 import { gsap } from 'gsap'
 import html2canvas from 'html2canvas'
 import dayjs from 'dayjs'
+import { formatProductDate } from '@/i18n/date'
 import OverviewAttractionCard from '@/components/OverviewAttractionCard.vue'
 import PlanChatPanel from '@/components/PlanChatPanel.vue'
 import SharePlanModal from '@/components/SharePlanModal.vue'
@@ -818,6 +830,7 @@ import type {
 import {
   createBudgetItem,
   createItineraryAttraction,
+  createMiniProgramNativeAction,
   createTripShare,
   deleteBudgetItem as deleteBudgetLedgerItem,
   deleteItineraryAttraction,
@@ -840,11 +853,16 @@ import { canUseCachedPlan } from '@/utils/planConversation.js'
 import {
   buildDayTimeline,
   normalizeReferenceTime,
+  resolveInitialResultSection,
   resolveTripBlueprint,
 } from '@/utils/tripPresentation.js'
 import { findTodayArrayIndex } from '@/utils/tripExecution'
 import { buildTripCalendar, countCalendarEvents } from '@/utils/tripCalendar'
 import { buildImagePdf } from '@/utils/imagePdf.js'
+import {
+  isMiniProgramEmbedded,
+  navigateToNativeAction,
+} from '@/platform/miniProgramHost'
 
 const props = withDefaults(defineProps<{ planId?: string; readonly?: boolean }>(), {
   readonly: false,
@@ -855,6 +873,7 @@ const emit = defineEmits<{
 const router = useRouter()
 const route = useRoute()
 const { t, locale } = useI18n()
+const formatDisplayDate = (value: string) => formatProductDate(value, String(locale.value))
 const tripPlan = ref<TripPlan | null>(null)
 const planId = ref('')
 const attractionPhotos = ref<Record<string, string>>({})
@@ -864,6 +883,7 @@ const failedTaskEvent = ref<TripTaskEvent | null>(null)
 const retryingFailedPlan = ref(false)
 const loadingPlan = ref(false)
 const exportingGuide = ref(false)
+const embeddedMiniProgram = isMiniProgramEmbedded()
 let isAlive = true
 let planOperationToken = 0
 
@@ -969,7 +989,7 @@ const failedTaskCity = computed(() => {
 const failedTaskDateRange = computed(() => {
   const request = failedTaskEvent.value?.request_payload
   return request?.start_date && request.end_date
-    ? `${request.start_date} ${t('common.to')} ${request.end_date}`
+    ? `${formatDisplayDate(request.start_date)} ${t('common.to')} ${formatDisplayDate(request.end_date)}`
     : ''
 })
 const failedTaskError = computed(() =>
@@ -989,17 +1009,12 @@ const todayArrayIndex = computed(() =>
 // 加载完成后的初始落点:URL ?section= 优先;行程期内默认进今日视图
 const applyInitialSection = () => {
   if (props.readonly) return
-  const requested = String(route.query.section || '')
-  if (requested === 'knowledge-graph') {
-    activeSection.value = 'overview'
-    return
-  }
-  const valid = ['overview', 'days', 'map', 'budget', 'weather', 'today']
-  if (requested && valid.includes(requested)) {
-    activeSection.value = requested
-    return
-  }
-  if (todayArrayIndex.value >= 0) activeSection.value = 'today'
+  activeSection.value = resolveInitialResultSection(
+    tripPlan.value || {},
+    route.query.section,
+    props.readonly,
+    todayArrayIndex.value >= 0,
+  )
 }
 
 // 后台刷新 execution;缓存计划缺 id 时顺带换成后端带 id 版本
@@ -1069,7 +1084,7 @@ type TripMapHandle = {
 
 const tripMapRef = ref<TripMapHandle | null>(null)
 
-// ─── 行程概览动画:GSAP 驱动,简约暖风格 ───
+// ─── 行程概览动画:仅保留有限入场,避免页面空闲时持续占用渲染资源 ───
 const overviewSection = ref<HTMLElement | null>(null)
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let overviewGsapCtx: gsap.Context | undefined
@@ -1091,38 +1106,7 @@ const playOverviewIntro = (): void => {
       { clipPath: 'inset(0% 0% 0% 0% round 10px)', scale: 1, duration: 0.75, ease: 'expo.out', stagger: 0.06 },
       '<0.08',
     )
-    startOverviewAmbient()
   }, overviewSection.value)
-}
-
-// 图片极缓慢推近+微移;延迟随机,避免整列同相位
-const animateCardImg = (img: Element): void => {
-  gsap.fromTo(img,
-    { scale: 1.02 },
-    {
-      scale: 1.07,
-      xPercent: 0.8,
-      yPercent: -0.8,
-      duration: 14,
-      yoyo: true,
-      repeat: -1,
-      ease: 'sine.inOut',
-      delay: Math.random() * 5,
-    })
-}
-
-// 持续氛围:暖金色微光呼吸(慢、软、随机错峰),图片极缓慢推近。
-// 微光层始终存在不依赖图片加载;后到位的图片由 attractionPhotos 监听补挂推近动画
-const startOverviewAmbient = (): void => {
-  gsap.to('.img-glow', {
-    opacity: 1,
-    duration: 5.5,
-    yoyo: true,
-    repeat: -1,
-    ease: 'sine.inOut',
-    stagger: { each: 2.1, from: 'random' },
-  })
-  gsap.utils.toArray<Element>('.card-img img').forEach(animateCardImg)
 }
 
 onMounted(() => {
@@ -1133,15 +1117,6 @@ watch(activeSection, async (section) => {
   if (section !== 'overview') return
   await nextTick()  // 等 v-show 恢复布局后再量取/回放
   playOverviewIntro()
-})
-
-// 图片异步到位:给后渲染的 img 补挂推近动画(已在动的不重复挂)
-watch(() => Object.keys(attractionPhotos.value).length, async () => {
-  if (prefersReducedMotion || !overviewSection.value) return
-  await nextTick()
-  overviewSection.value.querySelectorAll('.card-img img').forEach((img) => {
-    if (!gsap.isTweening(img)) animateCardImg(img)
-  })
 })
 
 onBeforeUnmount(() => {
@@ -1156,6 +1131,11 @@ const openShareModal = async (): Promise<void> => {
 
   sharePublishing.value = true
   try {
+    if (embeddedMiniProgram) {
+      const action = await createMiniProgramNativeAction({ type: 'share', plan_id: planId.value })
+      if (!navigateToNativeAction(action.action_id)) throw new Error('微信原生分享暂不可用')
+      return
+    }
     const publication = await createTripShare(planId.value)
     shareCode.value = publication.share_code
     shareModalOpen.value = true
@@ -1276,7 +1256,7 @@ const activeWeatherIndex = ref(0)
 const localeTag = computed(() => {
   const currentLocale = String(locale.value || 'en').toLowerCase()
   if (currentLocale.startsWith('zh')) return 'zh-CN'
-  if (currentLocale.startsWith('ja')) return 'ja-JP'
+  if (currentLocale.startsWith('fr')) return 'fr-FR'
   return 'en-US'
 })
 
@@ -1341,28 +1321,23 @@ watch(() => overviewAttractions.value.length, async (len) => {
   playOverviewIntro()
 })
 
-// 加载所有景点图片
+// 加载景点和途经城市图片，城市图为无景点日的时间轴提供稳定兜底
 const loadAttractionPhotos = async (operation?: PlanOperation) => {
   if (!tripPlan.value || (operation && !ownsPlanOperation(operation))) return
 
   const apiBase = getRuntimeApiBaseUrl()
-  const uniqueNames = Array.from(
-    new Set(
-      tripPlan.value.days.flatMap((day) => day.attractions.map((attraction) => attraction.name))
-    )
-  ).filter((name) => name && !attractionPhotos.value[name])
+  const targets = new Map<string, string>()
+  tripPlan.value.days.forEach((day) => {
+    const city = String((day as { city?: string }).city || tripPlan.value!.city || '').trim()
+    day.attractions.forEach((attraction) => {
+      const name = String(attraction.name || '').trim()
+      if (name && !targets.has(name)) targets.set(name, city)
+    })
+    if (city && !targets.has(city)) targets.set(city, city)
+  })
+  const pendingNames = [...targets.keys()].filter((name) => !attractionPhotos.value[name])
 
-  if (uniqueNames.length === 0) return
-
-  // 多城市行程按景点所在城市查询，单城市回退到整体城市
-  const cityOfAttraction = (name: string): string => {
-    for (const day of tripPlan.value!.days) {
-      if (day.attractions.some((a) => a.name === name)) {
-        return (day as { city?: string }).city || tripPlan.value!.city
-      }
-    }
-    return tripPlan.value!.city
-  }
+  if (pendingNames.length === 0) return
 
   // 并发 2:高德 Web 服务有 QPS 限制,并发过高会导致部分景点取不到图
   const concurrencyLimit = 2
@@ -1375,7 +1350,7 @@ const loadAttractionPhotos = async (operation?: PlanOperation) => {
         const index = currentIndex
         currentIndex += 1
         const name = names[index]
-        const city = cityOfAttraction(name)
+        const city = targets.get(name) || tripPlan.value!.city
 
         try {
           const response = await fetch(
@@ -1399,10 +1374,10 @@ const loadAttractionPhotos = async (operation?: PlanOperation) => {
     await Promise.all(workers)
   }
 
-  await sweep(uniqueNames)
+  await sweep(pendingNames)
 
   // 高德限流/网络抖动可能漏图,延迟后自动补一轮,避免必须刷新页面才能看到
-  const missing = uniqueNames.filter((name) => !attractionPhotos.value[name])
+  const missing = pendingNames.filter((name) => !attractionPhotos.value[name])
   if (missing.length > 0) {
     await new Promise((resolve) => setTimeout(resolve, 1500))
     await sweep(missing)
@@ -1844,15 +1819,23 @@ const formatBudgetCalculation = (item: BudgetLedgerItem): string => {
 }
 
 const formatBudgetSource = (item: BudgetLedgerItem): string => {
-  const provider = item.entity_source === 'amap'
+  const entityProvider = item.entity_source === 'amap'
     ? t('result.budget.amap')
     : item.entity_source
   if (item.price_source === 'user') {
-    return provider
-      ? t('result.budget.userPriceWithSource', { provider })
+    return entityProvider
+      ? t('result.budget.userPriceWithSource', { provider: entityProvider })
       : t('result.budget.userPrice')
   }
   const checked = dayjs(item.price_checked_at)
+  if (item.price_provider === 'fliggy' && entityProvider && checked.isValid()) {
+    return t('result.budget.priceProviderCheckedWithEntity', {
+      provider: t('result.budget.fliggy'),
+      entity: entityProvider,
+      date: checked.format('YYYY-MM-DD'),
+    })
+  }
+  const provider = item.price_provider || entityProvider
   return checked.isValid()
     ? t('result.budget.sourceChecked', { provider, date: checked.format('YYYY-MM-DD') })
     : provider
@@ -2896,10 +2879,21 @@ const exportAsImage = async () => {
       useCORS: true,
       allowTaint: true,
     })
-    const link = document.createElement('a')
-    link.download = `${t('result.export.filePrefix')}_${tripPlan.value?.city}_${new Date().getTime()}.png`
-    link.href = canvas.toDataURL('image/png')
-    link.click()
+    const imageDataUrl = canvas.toDataURL('image/png')
+    if (embeddedMiniProgram && planId.value) {
+      const action = await createMiniProgramNativeAction({
+        type: 'save_guide',
+        plan_id: planId.value,
+        title: `${t('result.export.filePrefix')}_${tripPlan.value?.city || ''}`,
+        image_data_url: imageDataUrl,
+      })
+      if (!navigateToNativeAction(action.action_id)) throw new Error('微信相册保存暂不可用')
+    } else {
+      const link = document.createElement('a')
+      link.download = `${t('result.export.filePrefix')}_${tripPlan.value?.city}_${new Date().getTime()}.png`
+      link.href = imageDataUrl
+      link.click()
+    }
     message.success({ content: t('result.messages.imageSuccess'), key: 'export' })
   } catch (error: any) {
     console.error('导出图片失败:', error)
@@ -2983,7 +2977,7 @@ const handleExportMenuClick = ({ key }: { key: string | number }) => {
   void exportAsImage()
 }
 // 导出为日历订阅文件（.ics）
-const exportAsCalendar = () => {
+const exportAsCalendar = async () => {
   const plan = tripPlan.value
   if (!plan) return
 
@@ -2994,6 +2988,14 @@ const exportAsCalendar = () => {
 
   let url = ''
   try {
+    if (embeddedMiniProgram && planId.value) {
+      const action = await createMiniProgramNativeAction({
+        type: 'add_calendar',
+        plan_id: planId.value,
+      })
+      if (!navigateToNativeAction(action.action_id)) throw new Error('微信日历暂不可用')
+      return
+    }
     const blob = new Blob([buildTripCalendar(plan)], {
       type: 'text/calendar;charset=utf-8',
     })
@@ -3029,8 +3031,9 @@ const escapeHtml = (value: unknown): string => {
   width: 100%;
   min-width: 0;
   min-height: 100vh;
-  background: linear-gradient(180deg, #FAF7F2 0%, #F5F0E8 58%, #EDE6DA 100%);
-  color: #3D3229;
+  background-color: var(--surface-page);
+  background-image: var(--result-page-image);
+  color: var(--text-primary);
   position: relative;
   isolation: isolate;
 }
@@ -3040,7 +3043,7 @@ const escapeHtml = (value: unknown): string => {
   inset: 0% 0 -1px 0;
   z-index: 0;
   pointer-events: none;
-  background: rgba(250, 247, 242, 0.72);
+  background: var(--result-overlay);
 }
 
 .lower-shade::before {
@@ -3050,7 +3053,7 @@ const escapeHtml = (value: unknown): string => {
   right: 0;
   top: -28px;
   height: 28px;
-  background: linear-gradient(to bottom, rgba(250, 247, 242, 0), rgba(250, 247, 242, 0.92));
+  background: var(--result-overlay-fade);
 }
 
 .result-main {
@@ -3067,11 +3070,11 @@ const escapeHtml = (value: unknown): string => {
   max-width: 1240px;
   margin: 0 auto;
   display: block;
-  border: 1.2px solid rgba(61, 50, 41, 0.12);
+  border: 1.2px solid var(--border-subtle);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--result-panel);
   backdrop-filter: blur(18px);
-  box-shadow: 0 24px 80px rgba(61, 50, 41, 0.1);
+  box-shadow: var(--result-panel-shadow);
   padding: 20px;
   container-name: result-content;
   container-type: inline-size;
@@ -3085,12 +3088,12 @@ const escapeHtml = (value: unknown): string => {
   position: sticky;
   top: 0;
   z-index: 30;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--result-sticky);
   backdrop-filter: blur(12px);
   margin: -20px -20px 16px;
   padding: 10px 20px 0;
   border-radius: 22px 22px 0 0;
-  border-bottom: 1px solid rgba(61, 50, 41, 0.12);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .top-switch-menu-wrap {
@@ -3108,24 +3111,25 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .top-switch-menu :deep(.ant-menu-item) {
-  color: rgba(61, 50, 41, 0.65) !important;
+  color: var(--text-secondary) !important;
   border-radius: 10px 10px 0 0;
   margin-right: 4px !important;
   transition: all 0.2s ease;
 }
 
 .top-switch-menu :deep(.ant-menu-item:hover) {
-  color: #3D3229 !important;
+  color: var(--text-primary) !important;
 }
 
-.top-switch-menu :deep(.ant-menu-item-selected) {
-  color: #D97757 !important;
+.top-switch-menu :deep(.ant-menu-item-selected),
+.top-switch-menu :deep(.ant-menu-item-selected:hover) {
+  color: var(--accent-strong) !important;
 }
 
 .top-switch-menu :deep(.ant-menu-item-selected::after),
 .top-switch-menu :deep(.ant-menu-item-active::after),
 .top-switch-menu :deep(.ant-menu-item:hover::after) {
-  border-bottom-color: #D97757 !important;
+  border-bottom-color: var(--accent-primary) !important;
 }
 
 .top-switch-menu :deep(.ant-menu-overflow) {
@@ -3171,7 +3175,7 @@ const escapeHtml = (value: unknown): string => {
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-  color: #C4603D;
+  color: var(--accent-strong);
 }
 
 .guide-export-option > svg {
@@ -3187,13 +3191,13 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .guide-export-option strong {
-  color: #3D3229;
+  color: var(--text-primary);
   font-size: 14px;
   line-height: 1.4;
 }
 
 .guide-export-option small {
-  color: #8B7D6B;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
   white-space: normal;
@@ -3202,7 +3206,7 @@ const escapeHtml = (value: unknown): string => {
 .top-switch-actions :deep(.ant-btn-default) {
   border: none !important;
   background: transparent !important;
-  color: #6B5D52 !important;
+  color: var(--text-secondary) !important;
   border-radius: 10px !important;
   height: 34px !important;
   padding: 0 12px !important;
@@ -3213,8 +3217,8 @@ const escapeHtml = (value: unknown): string => {
 }
 
 .top-switch-actions :deep(.ant-btn-default:hover) {
-  background: rgba(217, 119, 87, 0.1) !important;
-  color: #C4603D !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
 }
 
 .top-switch-actions :deep(.ant-btn-primary) {
@@ -3236,11 +3240,11 @@ const escapeHtml = (value: unknown): string => {
 .empty-state-panel {
   max-width: 900px;
   margin: 0 auto;
-  border: 1.2px solid rgba(61, 50, 41, 0.12);
+  border: 1.2px solid var(--border-subtle);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--result-panel);
   backdrop-filter: blur(18px);
-  box-shadow: 0 24px 80px rgba(61, 50, 41, 0.1);
+  box-shadow: var(--result-panel-shadow);
   padding: 44px 20px;
   text-align: center;
 }
@@ -3252,7 +3256,7 @@ const escapeHtml = (value: unknown): string => {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: rgba(61, 50, 41, 0.65);
+  color: var(--text-secondary);
 }
 
 .empty-desc {
@@ -5075,7 +5079,7 @@ const escapeHtml = (value: unknown): string => {
     top: 0;
     z-index: 40;
     background: var(--surface-elevated);
-    box-shadow: 0 8px 18px rgba(61, 50, 41, 0.08);
+    box-shadow: var(--card-shadow);
   }
 
   .top-switch-actions {
@@ -5112,9 +5116,9 @@ const escapeHtml = (value: unknown): string => {
     height: 36px !important;
     line-height: 36px !important;
     text-align: center;
-    border: 1px solid rgba(100, 80, 60, 0.15);
+    border: 1px solid var(--border-subtle);
     border-radius: 10px;
-    background: #fff;
+    background: var(--surface-elevated);
     font-size: 13px;
     overflow: hidden;
   }
@@ -5124,8 +5128,8 @@ const escapeHtml = (value: unknown): string => {
   }
 
   .top-switch-menu :deep(.ant-menu-item-selected) {
-    background: rgba(217, 119, 87, 0.12);
-    border-color: rgba(217, 119, 87, 0.5);
+    background: var(--accent-selected);
+    border-color: var(--accent-focus);
   }
 
   :deep(.ant-collapse-item) {

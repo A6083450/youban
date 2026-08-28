@@ -46,6 +46,20 @@ test('formats the same draft in English', () => {
   assert.match(text, /Suggested defaults: Transportation/)
 })
 
+test('formats a ready draft in French', () => {
+  const text = formatChatDraft({
+    ...draft,
+    city: 'Paris',
+    cities: [{ city: 'Paris', days: 3 }],
+  }, 'fr-FR')
+
+  assert.match(text, /^### Paris · 3 jours/m)
+  assert.match(text, /\*\*Itinéraire\*\* : Paris 3 jours/)
+  assert.match(text, /\*\*Dates\*\* : du 1 octobre 2026 au 3 octobre 2026/)
+  assert.match(text, /\*\*Voyageurs\*\* : 2 voyageurs · 1 chambre/)
+  assert.match(text, /Valeurs suggérées : Transport/)
+})
+
 test('shows draft actions only with backend readiness and its signed token', () => {
   assert.equal(shouldShowDraftActions(true, 'ready-token'), true)
   assert.equal(shouldShowDraftActions(true, ''), false)

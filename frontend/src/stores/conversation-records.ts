@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { getConversationRecords, getConversationSession, getStoredUser } from '@/services/api'
+import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
 import type { ConversationRecord } from '@/types'
 
 const TITLE_POLL_ATTEMPTS = 6
@@ -79,11 +80,31 @@ export const isPlanRecordActive = (record: ConversationRecord, planId: string): 
 export const isGeneratingRecord = (record: ConversationRecord): boolean =>
   record.state === 'generating' || record.status === 'processing'
 
-export const shouldShowConversationResume = (record: ConversationRecord): boolean =>
-  record.kind === 'conversation'
-  && Boolean(record.session_id)
-  && Boolean(record.plan_id)
-  && isGeneratingRecord(record)
+const matchesActiveTripTask = (
+  activeTask: Pick<ActiveTripTaskRecord, 'taskId' | 'sessionId'>,
+  record: ConversationRecord,
+): boolean => {
+  const taskId = activeTask.taskId.trim()
+  const sessionId = activeTask.sessionId?.trim() ?? ''
+  return (Boolean(sessionId) && record.session_id === sessionId)
+    || (Boolean(taskId) && (record.task_id === taskId || record.plan_id === taskId))
+}
+
+export const shouldShowActiveTripTaskFallback = (
+  activeTask: Pick<ActiveTripTaskRecord, 'taskId' | 'sessionId'> | null,
+  items: readonly ConversationRecord[],
+): boolean => {
+  if (!activeTask) return false
+  return !items.some((item) => matchesActiveTripTask(activeTask, item))
+}
+
+export const shouldClearActiveTripTask = (
+  activeTask: Pick<ActiveTripTaskRecord, 'taskId' | 'sessionId'> | null,
+  items: readonly ConversationRecord[],
+): boolean => Boolean(activeTask && items.some((item) => (
+  matchesActiveTripTask(activeTask, item)
+  && (item.state === 'planned' || item.status === 'completed' || item.status === 'failed')
+)))
 
 export const createOptimisticConversationRecord = (input: {
   sessionId: string
@@ -125,6 +146,30 @@ export const refreshRecords = async (): Promise<void> => {
   } finally {
     recordsLoading.value = false
   }
+}
+
+interface AuthenticationRecordSyncDependencies {
+  refresh: () => Promise<void>
+  clear: () => void
+}
+
+const defaultAuthenticationRecordSyncDependencies: AuthenticationRecordSyncDependencies = {
+  refresh: refreshRecords,
+  clear: () => {
+    records.value = []
+    recordsLoading.value = false
+  },
+}
+
+export const syncRecordsForAuthentication = async (
+  authenticated: boolean,
+  dependencies: AuthenticationRecordSyncDependencies = defaultAuthenticationRecordSyncDependencies,
+): Promise<void> => {
+  if (!authenticated) {
+    dependencies.clear()
+    return
+  }
+  await dependencies.refresh()
 }
 
 const pause = (milliseconds: number): Promise<void> => new Promise((resolve) => {

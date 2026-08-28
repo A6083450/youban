@@ -3,7 +3,12 @@ import type { Page, Route } from '@playwright/test'
 import type { TripPlan } from '../src/types'
 
 const planId = 'map-loading-plan'
-const user = { user_id: 'map-loading-user', nickname: 'Map Loading QA' } as const
+const user = {
+  user_id: 'map-loading-user',
+  nickname: 'Map Loading QA',
+  avatar_url: '/api/avatars/map-loading.jpg',
+  profile_complete: true,
+} as const
 
 const tripPlan = {
   city: '北京',

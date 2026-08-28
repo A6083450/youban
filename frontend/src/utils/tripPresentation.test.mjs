@@ -1,15 +1,43 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  projectResultAvailability,
   buildDayTimeline,
   groupItineraryDays,
   normalizeTripCityNames,
   normalizeReferenceTime,
   resolveItineraryDisplayMode,
+  resolveInitialResultSection,
+  resolveJourneyPinPhotos,
   resolveTripBlueprint,
 } from './tripPresentation.js'
-
 process.env.TZ = 'UTC'
+
+test('projects result sections from the same plan data rendered by the page', () => {
+  const plan = {
+    days: [{
+      date: '2026-09-01',
+      attractions: [{ name: '天山大峡谷', location: { longitude: 87.45, latitude: 43.52 } }],
+      meals: [],
+    }],
+    budget: { total: 0 },
+    weather_info: [{ date: '2026-09-01', day_weather: '晴' }],
+  }
+  assert.deepEqual(projectResultAvailability(plan, false), {
+    sections: ['today', 'overview', 'days', 'map', 'budget', 'weather'],
+    actions: ['share', 'export', 'calendar'],
+  })
+  assert.deepEqual(projectResultAvailability(plan, true), {
+    sections: ['overview', 'days', 'map', 'budget', 'weather'],
+    actions: [],
+  })
+})
+
+test('falls back from unavailable weather deep links without hiding valid weather', () => {
+  assert.equal(resolveInitialResultSection({ weather_info: [{ date: '2026-09-01' }] }, 'weather'), 'weather')
+  assert.equal(resolveInitialResultSection({ weather_info: [] }, 'weather'), 'overview')
+  assert.equal(resolveInitialResultSection({ weather_info: [] }, '', false, true), 'today')
+})
 
 test('normalizes legacy city strings and current city-stay objects for display', () => {
   assert.deepEqual(normalizeTripCityNames([
@@ -19,6 +47,43 @@ test('normalizes legacy city strings and current city-stay objects for display',
     null,
   ], '新疆'), ['乌鲁木齐', '阿勒泰'])
   assert.deepEqual(normalizeTripCityNames([], '新疆'), ['新疆'])
+})
+
+test('uses the first loaded same-city photo for journey days without attractions', () => {
+  const journeyDays = [
+    { city: '三亚', attractions: [{ name: '椰梦长廊' }] },
+    { city: '三亚', attractions: [] },
+    { city: '海口', attractions: [] },
+    { city: '海口', attractions: [{ name: '骑楼老街', image_url: '/images/qilou.jpg' }] },
+    { city: '文昌', attractions: [] },
+  ]
+
+  assert.deepEqual(resolveJourneyPinPhotos(journeyDays, {
+    椰梦长廊: '/images/sanya.jpg',
+  }), [
+    '/images/sanya.jpg',
+    '/images/sanya.jpg',
+    '/images/qilou.jpg',
+    '/images/qilou.jpg',
+    '',
+  ])
+})
+
+test('uses an explicitly loaded city photo when no day in that city has attractions', () => {
+  const journeyDays = [
+    { city: '喀纳斯', attractions: [] },
+    { city: '喀纳斯', attractions: [] },
+    { city: '赛里木湖', attractions: [] },
+  ]
+
+  assert.deepEqual(resolveJourneyPinPhotos(journeyDays, {
+    喀纳斯: '/images/kanas.jpg',
+    赛里木湖: '/images/sayram.jpg',
+  }), [
+    '/images/kanas.jpg',
+    '/images/kanas.jpg',
+    '/images/sayram.jpg',
+  ])
 })
 
 const days = [

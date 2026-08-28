@@ -92,7 +92,20 @@ export class AmapResearchSources {
 
   async searchAttractions(city: string, preferences: string[]): Promise<TrustedPoi[]> {
     const preferenceText = preferences.map((item) => item.trim()).filter(Boolean).slice(0, 4).join(" ");
-    return this.searchPoi(preferenceText ? `热门景点 ${preferenceText}` : "热门景点", city, "110000");
+    const focusedPreferences = preferences
+      .map((item) => item.trim().replace(/^(?:想去|想看|去看|看|参观|游览|喜欢|体验)\s*/u, ""))
+      .filter(Boolean)
+      .slice(0, 4);
+    const queries = [...new Set([
+      preferenceText ? `热门景点 ${preferenceText}` : "热门景点",
+      ...focusedPreferences,
+      "热门景点",
+    ])];
+    for (const query of queries) {
+      const matches = await this.searchPoi(query, city, "110000");
+      if (matches.length > 0) return matches;
+    }
+    return [];
   }
 
   async searchHotels(city: string, accommodation: string): Promise<TrustedPoi[]> {

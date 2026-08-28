@@ -47,6 +47,28 @@ export function reduceConfirmationDecision(state, response) {
     ...(typeof response.readiness_token === 'string'
       ? { readinessToken: response.readiness_token }
       : {}),
+    ...(response.next_step === 'offer_generation'
+      ? { offerGeneration: true }
+      : {}),
     keepDraft: true,
   }
+}
+
+export function reduceTripParseDecision(response) {
+  if (response.action === 'plan' && response.trip) {
+    if (response.auto_generate === true && response.execution_token) {
+      return {
+        type: 'generate',
+        draft: response.trip,
+        token: response.execution_token,
+      }
+    }
+    return {
+      type: 'draft',
+      draft: response.trip,
+      readyToGenerate: response.ready_to_generate === true && Boolean(response.readiness_token),
+      readinessToken: response.readiness_token || '',
+    }
+  }
+  return { type: 'message' }
 }

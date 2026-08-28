@@ -13,6 +13,7 @@ function runtime(options: {
   frontend?: boolean;
   skillRuntimeDiagnostics?: SkillRuntimeDiagnostics;
   poiSearch?: Parameters<typeof createHttpRuntime>[0]["poiSearch"];
+  imageFetch?: Parameters<typeof createHttpRuntime>[0]["imageFetch"];
 } = {}): HttpRuntime {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-http-"));
   tempDirs.push(dataDir);
@@ -32,6 +33,7 @@ function runtime(options: {
     frontendDist,
     skillRuntimeDiagnostics: options.skillRuntimeDiagnostics,
     poiSearch: options.poiSearch,
+    imageFetch: options.imageFetch,
   });
   runtimes.push(value);
   return value;
@@ -82,35 +84,19 @@ describe("HTTP compatibility contract", () => {
     expect(docs.headers.get("content-type")).toContain("text/html");
   });
 
-  it("logs in by normalized nickname and reuses case-insensitive identity", async () => {
+  it("does not restore nickname login when the runtime uses a test identity seam", async () => {
     const { app } = runtime();
-    const login = (nickname: string, path = "/api/auth/login") => app.handle(new Request(
-      `http://localhost${path}`,
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nickname }) },
-    ));
-
-    const first = await json(await login("  Neo   User  "));
-    const second = await json(await login("neo user", "/deployment-id/api/auth/login"));
-    expect(first.success).toBe(true);
-    expect(first.user.nickname).toBe("Neo User");
-    expect(second.user.user_id).toBe(first.user.user_id);
-
-    const me = await app.handle(new Request("http://localhost/api/auth/me", {
-      headers: { "X-User-Id": first.user.user_id },
+    const response = await app.handle(new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nickname: "Neo User" }),
     }));
-    expect(await json(me)).toEqual({ success: true, user: expect.objectContaining({ user_id: first.user.user_id }) });
+    expect(response.status).toBe(404);
+    expect(await json(response)).toEqual({ detail: expect.any(String) });
   });
 
   it("returns status-specific {detail} errors", async () => {
     const { app } = runtime();
-    const blank = await app.handle(new Request("http://localhost/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ nickname: "   " }),
-    }));
-    expect(blank.status).toBe(422);
-    expect(await json(blank)).toEqual({ detail: "昵称不能为空" });
-
     const missing = await app.handle(new Request("http://localhost/api/auth/me", {
       headers: { "X-User-Id": "ghost123" },
     }));
@@ -121,7 +107,7 @@ describe("HTTP compatibility contract", () => {
   it("supports credentialed CORS and serves cached images safely", async () => {
     const value = runtime();
     writeFileSync(join(value.dataDir, "images", "spot.txt"), "image-body");
-    const preflight = await value.app.handle(new Request("http://localhost/api/auth/login", {
+    const preflight = await value.app.handle(new Request("http://localhost/api/auth/wechat/login", {
       method: "OPTIONS",
       headers: {
         origin: "http://localhost:5173",
@@ -134,6 +120,7 @@ describe("HTTP compatibility contract", () => {
 
     const image = await value.app.handle(new Request("http://localhost/api/images/spot.txt"));
     expect(image.status).toBe(200);
+    expect(image.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
     expect(await image.text()).toBe("image-body");
     const traversal = await value.app.handle(new Request("http://localhost/api/images/%2e%2e%2fyouban.db"));
     expect(traversal.status).toBe(404);
@@ -157,6 +144,40 @@ describe("HTTP compatibility contract", () => {
       message: "获取图片成功",
       data: { name: "西湖", photo_url: "/api/images/2cb2b9e654e5c06c.jpg" },
     });
+  });
+
+  it("downloads a missing POI photo once and serves later requests from the local cache", async () => {
+    const imageBody = new Uint8Array(2_048).fill(9);
+    let photoLookups = 0;
+    let imageDownloads = 0;
+    const value = runtime({
+      poiSearch: {
+        searchPoi: async () => [],
+        getPoiPhoto: async () => {
+          photoLookups += 1;
+          return "https://images.example/west-lake.jpg";
+        },
+      },
+      imageFetch: async () => {
+        imageDownloads += 1;
+        return new Response(imageBody, { headers: { "content-type": "image/jpeg" } });
+      },
+    });
+    const request = () => value.app.handle(new Request(
+      "http://localhost/api/poi/photo?name=%E8%A5%BF%E6%B9%96&city=%E6%9D%AD%E5%B7%9E",
+    ));
+
+    const first = await json(await request());
+    const second = await json(await request());
+    const localUrl = first.data.photo_url as string;
+
+    expect(localUrl).toMatch(/^\/api\/images\/[a-f0-9]{16}\.jpg$/);
+    expect(second.data.photo_url).toBe(localUrl);
+    expect(photoLookups).toBe(1);
+    expect(imageDownloads).toBe(1);
+    const cachedImage = await value.app.handle(new Request(`http://localhost${localUrl}`));
+    expect(cachedImage.status).toBe(200);
+    expect(new Uint8Array(await cachedImage.arrayBuffer())).toEqual(imageBody);
   });
 
   it("filters trip history by X-User-Id", async () => {

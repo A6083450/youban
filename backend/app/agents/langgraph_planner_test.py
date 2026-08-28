@@ -323,13 +323,12 @@ class LangGraphPlannerTest(unittest.TestCase):
         self.assertIn("This trip covers 北京 (3 days)", plan.overall_suggestions)
         self.assertNotIn("天", plan.overall_suggestions)
 
-    def test_japanese_request_prompts_and_fallback_use_japanese(self):
-        request = _request(3, language="ja")
+    def test_unsupported_persisted_locale_falls_back_to_chinese(self):
+        request = _request(3, language="xx")
         model = _OrchestrationModel(request, fail_summary=True)
         plan, _ = self._run(request, model)
-        self.assertTrue(any("Japanese" in str(call) for call in model.calls))
-        self.assertIn("この旅行は北京3日間", plan.overall_suggestions)
-        self.assertNotIn("天", plan.overall_suggestions)
+        self.assertTrue(any("所有文字内容使用中文" in str(call) for call in model.calls))
+        self.assertIn("本次行程覆盖北京3天", plan.overall_suggestions)
 
     def test_summary_failure_uses_deterministic_fallback(self):
         request = _request(3)

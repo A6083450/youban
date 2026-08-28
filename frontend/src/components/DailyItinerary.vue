@@ -21,6 +21,7 @@ import {
   resolveItineraryDisplayMode,
 } from '@/utils/tripPresentation.js'
 import { buildAmapNavigationUrl } from '@/utils/tripNavigation'
+import { fliggyHotelPricePresentation } from '@/utils/hotelPricing'
 
 const props = defineProps<{
   tripPlan: TripPlan
@@ -46,7 +47,7 @@ const modeOptions = computed<Array<{ value: ItineraryDisplayMode; label: string 
 const localeTag = computed(() => {
   const current = String(locale.value || 'zh-CN').toLowerCase()
   if (current.startsWith('zh')) return 'zh-CN'
-  if (current.startsWith('ja')) return 'ja-JP'
+  if (current.startsWith('fr')) return 'fr-FR'
   return 'en-US'
 })
 
@@ -130,6 +131,9 @@ const mealLabel = (type: string): string => {
 
 const navigationUrl = (name: string, location?: Location | null): string | null =>
   buildAmapNavigationUrl(name, location)
+
+const formatMoney = (value: number): string =>
+  new Intl.NumberFormat(localeTag.value, { maximumFractionDigits: 2 }).format(value)
 </script>
 
 <template>
@@ -206,6 +210,25 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
                 >
                   {{ t('result.hotelReferencePrice', { price: item.day.hotel.price_range }) }}
                 </span>
+                <div
+                  v-if="fliggyHotelPricePresentation(item.day.hotel)"
+                  class="daily-itinerary__hotel-quote"
+                >
+                  <strong class="daily-itinerary__hotel-price">
+                    {{ t('result.hotelFliggyReferencePrice', {
+                      price: formatMoney(fliggyHotelPricePresentation(item.day.hotel)!.nightlyPrice),
+                    }) }}
+                  </strong>
+                  <a
+                    v-if="fliggyHotelPricePresentation(item.day.hotel)?.sourceUrl"
+                    :href="fliggyHotelPricePresentation(item.day.hotel)!.sourceUrl!"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {{ t('result.hotelFliggyView') }}
+                  </a>
+                  <small>{{ t('result.hotelFliggyDisclaimer') }}</small>
+                </div>
                 <span v-if="item.day.hotel?.price_status === 'unavailable'">{{ t('result.hotelPriceUnavailable') }}</span>
               </dd>
             </div>
@@ -523,6 +546,31 @@ const navigationUrl = (name: string, location?: Location | null): string | null 
 .daily-itinerary__hotel-price {
   color: var(--accent-strong);
   font-weight: 700;
+}
+
+.daily-itinerary__hotel-quote {
+  display: flex;
+  flex: 1 0 100%;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-inline-size: 0;
+  padding-block-start: 2px;
+}
+
+.daily-itinerary__hotel-quote a {
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.daily-itinerary__hotel-quote small {
+  flex: 1 0 100%;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .daily-timeline {

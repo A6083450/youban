@@ -79,6 +79,23 @@ describe("ConversationSessionRepository", () => {
     }
   });
 
+  it("keeps an unchanged snapshot from making a viewed session look recently active", () => {
+    const repository = createRepository();
+    try {
+      createSession(repository);
+      const snapshot = { version: 1, items: [{ id: 1, role: "user", text: "带娃去三亚" }] };
+      const changed = repository.replaceSnapshot("session-1", "user-1", 0, snapshot);
+
+      const unchanged = repository.replaceSnapshot("session-1", "user-1", changed.revision, snapshot);
+
+      expect(unchanged.revision).toBe(changed.revision);
+      expect(unchanged.updatedAt).toBe(changed.updatedAt);
+      expect(unchanged.snapshot).toEqual(snapshot);
+    } finally {
+      repository.close();
+    }
+  });
+
   it("updates a pending title once and links the session to its generated plan", () => {
     const repository = createRepository();
     try {

@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { ArrowLeftOutlined, ArrowRightOutlined } from '@ant-design/icons-vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useMarqueeDrag } from '@/composables/useMarqueeDrag'
+import { useHorizontalPager } from '@/composables/useHorizontalPager'
 import type { TripPlan } from '@/types'
-import { normalizeTripCityNames, resolveTripBlueprint } from '@/utils/tripPresentation.js'
+import {
+  normalizeTripCityNames,
+  resolveJourneyPinPhotos,
+  resolveTripBlueprint,
+} from '@/utils/tripPresentation.js'
 
 const props = defineProps<{ tripPlan: TripPlan; attractionPhotos: Record<string, string> }>()
 const emit = defineEmits<{ (event: 'select-day', dayArrayIndex: number): void }>()
@@ -43,6 +48,7 @@ const dayPhoto = (day: TripDay): string => {
   }
   return ''
 }
+const pinPhotos = computed(() => resolveJourneyPinPhotos(days.value, props.attractionPhotos))
 // hero 背景：全程第一张可用的景点照片
 const heroPhoto = computed(() => {
   for (const day of days.value) {
@@ -54,7 +60,7 @@ const heroPhoto = computed(() => {
 const heroStyle = computed(() => (heroPhoto.value
   ? {
       backgroundImage:
-        `linear-gradient(100deg, rgba(253, 250, 243, 0.97) 25%, rgba(253, 250, 243, 0.75) 55%, rgba(253, 250, 243, 0.25)), url(${heroPhoto.value})`,
+        `linear-gradient(100deg, var(--journey-hero-overlay-start) 25%, var(--journey-hero-overlay-middle) 55%, var(--journey-hero-overlay-end)), url(${heroPhoto.value})`,
     }
   : undefined))
 
@@ -75,15 +81,14 @@ const highlightCards = computed(() => days.value
   }))
   .filter((card) => card.photo))
 
-// 时间轴轮播：图钉沿固定虚线轨道循环滑行（仅桌面横向布局生效）
+// 两块内容分别分页，保留按钮、拖拽和触屏横滑，不自动播放。
 const trackViewportRef = ref<HTMLElement | null>(null)
 const trackStripRef = ref<HTMLElement | null>(null)
-const trackDrag = useMarqueeDrag(trackViewportRef, trackStripRef, days)
+const trackPager = useHorizontalPager(trackViewportRef, trackStripRef, days)
 
-// 灵感卡片轮播
 const cardsViewportRef = ref<HTMLElement | null>(null)
 const cardsStripRef = ref<HTMLElement | null>(null)
-const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards)
+const cardsPager = useHorizontalPager(cardsViewportRef, cardsStripRef, highlightCards)
 </script>
 
 <template>
@@ -101,50 +106,70 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
         </div>
       </div>
 
-      <!-- 脉络时间轴：桌面横向，移动端纵向 -->
+      <!-- 脉络时间轴：桌面与移动端都按完整日期组手动浏览 -->
       <div class="journey__track-wrap">
-        <span class="journey__marker journey__marker--start">{{ t('result.graph.journeyStart') }}</span>
-        <span class="journey__marker journey__marker--end">{{ t('result.graph.journeyEnd') }}</span>
+        <div class="journey__track-toolbar">
+          <span class="journey__marker journey__marker--start">{{ t('result.graph.journeyStart') }}</span>
+          <div v-if="trackPager.overflowing.value" class="journey__pager">
+            <span class="journey__pager-status" aria-live="polite">
+              {{ trackPager.currentPage.value + 1 }} / {{ trackPager.pageCount.value }}
+            </span>
+            <button
+              type="button"
+              class="journey__control"
+              :disabled="!trackPager.canPrevious.value"
+              :aria-label="t('result.graph.previousJourney')"
+              :title="t('result.graph.previousJourney')"
+              @click="trackPager.previous"
+            >
+              <ArrowLeftOutlined aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="journey__control"
+              :disabled="!trackPager.canNext.value"
+              :aria-label="t('result.graph.nextJourney')"
+              :title="t('result.graph.nextJourney')"
+              @click="trackPager.next"
+            >
+              <ArrowRightOutlined aria-hidden="true" />
+            </button>
+          </div>
+          <span class="journey__marker journey__marker--end">{{ t('result.graph.journeyEnd') }}</span>
+        </div>
         <div
           ref="trackViewportRef"
           class="journey__track"
           :class="{
-            'journey__track--loop': trackDrag.loop.value,
-            'journey__track--manual': trackDrag.manual.value,
-            'journey__track--dragging': trackDrag.dragging.value,
+            'journey__track--dragging': trackPager.dragging.value,
+            'journey__track--fit': !trackPager.overflowing.value,
           }"
-          @pointerdown="trackDrag.onPointerDown"
-          @pointermove="trackDrag.onPointerMove"
-          @pointerup="trackDrag.onPointerEnd"
-          @pointercancel="trackDrag.onPointerEnd"
-          @pointerleave="trackDrag.onPointerLeave"
-          @click.capture="trackDrag.onClickCapture"
+          @scroll.passive="trackPager.onScroll"
+          @pointerdown="trackPager.onPointerDown"
+          @pointermove="trackPager.onPointerMove"
+          @pointerup="trackPager.onPointerEnd"
+          @pointercancel="trackPager.onPointerEnd"
+          @click.capture="trackPager.onClickCapture"
           @dragstart.prevent
         >
           <div class="journey__rail" aria-hidden="true" />
           <div
             ref="trackStripRef"
             class="journey__track-strip"
-            :style="trackDrag.loop.value ? { animationDuration: `${trackDrag.duration.value}s` } : undefined"
           >
-            <div
-              v-for="copy in trackDrag.loop.value ? 2 : 1"
-              :key="copy"
-              class="journey__track-group"
-              :aria-hidden="copy === 2 ? 'true' : undefined"
-            >
+            <div class="journey__track-group">
               <button
                 v-for="(day, index) in days"
                 :key="day.day_index"
                 type="button"
                 class="journey__stop"
+                data-pager-item
                 :style="{ '--accent': accentOf(index), '--i': index }"
-                :tabindex="copy === 2 ? -1 : undefined"
                 @click="emit('select-day', index)"
               >
                 <span class="journey__day">D{{ index + 1 }}</span>
                 <span class="journey__pin">
-                  <img v-if="dayPhoto(day)" :src="dayPhoto(day)" :alt="cityOf(day)" loading="lazy" />
+                  <img v-if="pinPhotos[index]" :src="pinPhotos[index]" :alt="cityOf(day)" loading="lazy" />
                   <span v-else class="journey__pin-fallback">{{ cityOf(day).slice(0, 1) || '·' }}</span>
                 </span>
                 <span class="journey__info">
@@ -160,7 +185,12 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
                 </span>
               </button>
 
-              <div class="journey__stop journey__stop--end" aria-hidden="true" :style="{ '--i': days.length }">
+              <div
+                class="journey__stop journey__stop--end"
+                data-pager-item
+                aria-hidden="true"
+                :style="{ '--i': days.length }"
+              >
                 <span class="journey__day">&nbsp;</span>
                 <span class="journey__pin journey__pin--plane">
                   <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
@@ -168,6 +198,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
                   </svg>
                 </span>
               </div>
+              <span class="journey__page-tail journey__page-tail--track" aria-hidden="true" />
             </div>
           </div>
         </div>
@@ -175,41 +206,61 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 
       <!-- 主题灵感卡片 -->
       <div v-if="highlightCards.length" class="journey__highlights">
-        <h3>{{ t('result.graph.highlights') }}</h3>
+        <div class="journey__highlights-header">
+          <h3>{{ t('result.graph.highlights') }}</h3>
+          <div v-if="cardsPager.overflowing.value" class="journey__pager">
+            <span class="journey__pager-status" aria-live="polite">
+              {{ cardsPager.currentPage.value + 1 }} / {{ cardsPager.pageCount.value }}
+            </span>
+            <button
+              type="button"
+              class="journey__control"
+              :disabled="!cardsPager.canPrevious.value"
+              :aria-label="t('result.graph.previousHighlight')"
+              :title="t('result.graph.previousHighlight')"
+              @click="cardsPager.previous"
+            >
+              <ArrowLeftOutlined aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="journey__control"
+              :disabled="!cardsPager.canNext.value"
+              :aria-label="t('result.graph.nextHighlight')"
+              :title="t('result.graph.nextHighlight')"
+              @click="cardsPager.next"
+            >
+              <ArrowRightOutlined aria-hidden="true" />
+            </button>
+          </div>
+        </div>
         <div
           ref="cardsViewportRef"
           class="journey__cards"
           :class="{
-            'journey__cards--loop': cardsDrag.loop.value,
-            'journey__cards--manual': cardsDrag.manual.value,
-            'journey__cards--dragging': cardsDrag.dragging.value,
+            'journey__cards--dragging': cardsPager.dragging.value,
+            'journey__cards--fit': !cardsPager.overflowing.value,
           }"
-          @pointerdown="cardsDrag.onPointerDown"
-          @pointermove="cardsDrag.onPointerMove"
-          @pointerup="cardsDrag.onPointerEnd"
-          @pointercancel="cardsDrag.onPointerEnd"
-          @pointerleave="cardsDrag.onPointerLeave"
-          @click.capture="cardsDrag.onClickCapture"
+          @scroll.passive="cardsPager.onScroll"
+          @pointerdown="cardsPager.onPointerDown"
+          @pointermove="cardsPager.onPointerMove"
+          @pointerup="cardsPager.onPointerEnd"
+          @pointercancel="cardsPager.onPointerEnd"
+          @click.capture="cardsPager.onClickCapture"
           @dragstart.prevent
         >
           <div
             ref="cardsStripRef"
             class="journey__cards-track"
-            :style="cardsDrag.loop.value ? { animationDuration: `${cardsDrag.duration.value}s` } : undefined"
           >
-            <div
-              v-for="copy in cardsDrag.loop.value ? 2 : 1"
-              :key="copy"
-              class="journey__cards-group"
-              :aria-hidden="copy === 2 ? 'true' : undefined"
-            >
+            <div class="journey__cards-group">
               <button
                 v-for="(card, cardIndex) in highlightCards"
                 :key="card.index"
                 type="button"
                 class="journey__card"
+                data-pager-item
                 :style="{ '--i': cardIndex }"
-                :tabindex="copy === 2 ? -1 : undefined"
                 @click="emit('select-day', card.index)"
               >
                 <span class="journey__card-photo">
@@ -219,6 +270,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
                 <strong>{{ card.name }}</strong>
                 <span class="journey__card-city">{{ card.city }}</span>
               </button>
+              <span class="journey__page-tail journey__page-tail--cards" aria-hidden="true" />
             </div>
           </div>
         </div>
@@ -242,16 +294,16 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 /* ---- Hero ---- */
 .journey__hero {
   padding: 26px 28px 24px;
-  border: 1px solid #eadfc9;
+  border: 1px solid var(--journey-hero-border);
   border-radius: 20px;
-  background-color: #fdf8ec;
+  background-color: var(--journey-hero);
   background-position: right center;
   background-size: cover;
 }
 
 .journey__eyebrow {
   margin: 0 0 6px;
-  color: #b09a77;
+  color: var(--journey-muted);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -259,7 +311,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 
 .journey__hero h2 {
   margin: 0;
-  color: #3d3229;
+  color: var(--text-primary);
   font-size: 22px;
   font-weight: 700;
   line-height: 1.35;
@@ -268,7 +320,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 .journey__summary {
   margin: 8px 0 0;
   max-inline-size: 560px;
-  color: #7a6a58;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -285,10 +337,10 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   align-items: center;
   gap: 7px;
   padding: 6px 13px;
-  border: 1px solid #e8dcc4;
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.75);
-  color: #6b5a45;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
 }
@@ -297,41 +349,98 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   inline-size: 7px;
   block-size: 7px;
   border-radius: 50%;
-  background: #e8963c;
+  background: var(--accent-primary);
 }
 
 /* ---- 时间轴 ---- */
 .journey__track-wrap {
   position: relative;
   margin-block-start: 22px;
-  padding-block-start: 26px;
+}
+
+.journey__track-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-block-size: 40px;
+  margin-block-end: 10px;
+  padding-inline: 14px;
 }
 
 .journey__marker {
-  position: absolute;
-  inset-block-start: 0;
-  color: #b09a77;
+  color: var(--journey-muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
 }
 
-.journey__marker--start {
-  inset-inline-start: 14px;
+.journey__marker--end {
+  justify-self: end;
 }
 
-.journey__marker--end {
-  inset-inline-end: 14px;
+.journey__pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.journey__pager-status {
+  min-inline-size: 38px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.journey__control {
+  display: inline-grid;
+  inline-size: 36px;
+  block-size: 36px;
+  padding: 0;
+  border: 1px solid var(--journey-hero-border);
+  border-radius: 50%;
+  background: var(--journey-card);
+  color: var(--accent-primary);
+  cursor: pointer;
+  place-items: center;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.journey__control:hover,
+.journey__control:focus-visible {
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.journey__control:disabled {
+  border-color: var(--border-subtle);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  cursor: default;
+  opacity: 0.42;
 }
 
 .journey__track {
   position: relative;
-  padding: 0 6px 8px;
+  padding: 0 0 8px;
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(120, 100, 70, 0.3) transparent;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
   cursor: grab;
   touch-action: pan-y;
+  container-type: inline-size;
+}
+
+.journey__track::-webkit-scrollbar,
+.journey__cards::-webkit-scrollbar {
+  display: none;
+}
+
+.journey__track--fit,
+.journey__cards--fit {
+  overflow-x: hidden;
+  cursor: default;
 }
 
 /* 非循环时 strip/group 撑满可视区，图钉 flex-grow 均布（保持原有排版） */
@@ -347,43 +456,16 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   padding-inline-end: 4px;
 }
 
-/* 循环模式：strip 收缩为内容宽并做 marquee，轨道虚线固定不动 */
-.journey__track--loop {
-  overflow-x: hidden;
-}
-
-.journey__track--loop .journey__track-strip {
-  inline-size: max-content;
-  animation: track-marquee linear infinite;
-}
-
-.journey__track--loop .journey__track-group {
-  inline-size: max-content;
-}
-
-/* 悬停或键盘聚焦时暂停，方便点击图钉 */
-.journey__track--loop:hover .journey__track-strip,
-.journey__track--loop:focus-within .journey__track-strip,
-.journey__track--manual .journey__track-strip {
-  animation-play-state: paused;
-}
-
 .journey__track--dragging {
   cursor: grabbing;
   user-select: none;
-}
-
-@keyframes track-marquee {
-  to {
-    transform: translateX(-50%);
-  }
 }
 
 .journey__rail {
   position: absolute;
   inset-block-start: calc(20px + 12px + 36px);
   inset-inline: 70px;
-  border-block-start: 2px dashed #d9c6a4;
+  border-block-start: 2px dashed var(--journey-rail);
 }
 
 .journey__stop {
@@ -400,6 +482,8 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   color: inherit;
   text-align: center;
   cursor: pointer;
+  scroll-snap-align: start;
+  scroll-snap-stop: normal;
 }
 
 .journey__day {
@@ -420,8 +504,8 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   block-size: 72px;
   border: 3px solid var(--accent, #5b8ff9);
   border-radius: 50%;
-  background: #f3ead7;
-  box-shadow: 0 3px 10px rgba(90, 70, 40, 0.18);
+  background: var(--surface-soft);
+  box-shadow: var(--card-shadow);
   place-items: center;
   transition: transform 160ms ease;
 }
@@ -451,20 +535,20 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 }
 
 .journey__pin-fallback {
-  color: #a08a68;
+  color: var(--text-secondary);
   font-size: 24px;
   font-weight: 700;
 }
 
 .journey__pin--plane {
   border-style: dashed;
-  border-color: #c9b28a;
-  color: #b09a77;
+  border-color: var(--journey-rail);
+  color: var(--journey-muted);
   box-shadow: none;
 }
 
 .journey__pin--plane::after {
-  border-block-start-color: #c9b28a;
+  border-block-start-color: var(--journey-rail);
 }
 
 .journey__info {
@@ -475,7 +559,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 }
 
 .journey__city {
-  color: #3d3229;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;
   line-height: 1.4;
@@ -485,8 +569,8 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   margin-block-start: 4px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(120, 100, 70, 0.1);
-  color: #8a7457;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -496,7 +580,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   flex-direction: column;
   gap: 2px;
   margin-block-start: 7px;
-  color: #9a8871;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -518,20 +602,28 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 }
 
 .journey__highlights h3 {
-  margin: 0 0 14px;
-  color: #3d3229;
+  margin: 0;
+  color: var(--text-primary);
   font-size: 16px;
   font-weight: 700;
+}
+
+.journey__highlights-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block-end: 14px;
 }
 
 .journey__cards {
   padding-block-end: 8px;
   overflow-x: auto;
   scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(120, 100, 70, 0.3) transparent;
+  scrollbar-width: none;
   cursor: grab;
   touch-action: pan-y;
+  container-type: inline-size;
 }
 
 .journey__cards-track {
@@ -546,31 +638,23 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   padding-inline-end: 12px;
 }
 
-.journey__cards--loop {
-  overflow-x: hidden;
-  scroll-snap-type: none;
+.journey__page-tail {
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
-.journey__cards--loop .journey__cards-track {
-  animation: cards-marquee linear infinite;
+.journey__page-tail--track {
+  inline-size: max(0px, calc(100cqi - 134px));
 }
 
-/* 悬停或键盘聚焦时暂停，方便点击 */
-.journey__cards--loop:hover .journey__cards-track,
-.journey__cards--loop:focus-within .journey__cards-track,
-.journey__cards--manual .journey__cards-track {
-  animation-play-state: paused;
+.journey__page-tail--cards {
+  inline-size: max(0px, calc(100cqi - 180px));
 }
 
 .journey__cards--dragging {
   cursor: grabbing;
   user-select: none;
-}
-
-@keyframes cards-marquee {
-  to {
-    transform: translateX(-50%);
-  }
 }
 
 .journey__card {
@@ -580,9 +664,9 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   align-items: flex-start;
   gap: 4px;
   padding: 0 0 10px;
-  border: 1px solid #eadfc9;
+  border: 1px solid var(--journey-hero-border);
   border-radius: 14px;
-  background: #fffdf8;
+  background: var(--journey-card);
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -591,7 +675,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 }
 
 .journey__card:hover {
-  box-shadow: 0 6px 16px rgba(90, 70, 40, 0.14);
+  box-shadow: var(--card-shadow-hover);
   transform: translateY(-3px);
 }
 
@@ -623,7 +707,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 
 .journey__card strong {
   padding-inline: 10px;
-  color: #3d3229;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 700;
   line-height: 1.4;
@@ -631,7 +715,7 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
 
 .journey__card-city {
   padding-inline: 10px;
-  color: #9a8871;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -647,15 +731,39 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
   }
 
   .journey__track-wrap {
-    padding-block-start: 0;
+    margin-block-start: 18px;
+  }
+
+  .journey__track-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    min-block-size: 44px;
+    margin-block-end: 8px;
+    padding-inline: 0;
   }
 
   .journey__marker {
     display: none;
   }
 
+  .journey__control {
+    inline-size: 44px;
+    block-size: 44px;
+  }
+
+  .journey__track {
+    margin-inline: -4px;
+  }
+
   .journey__card {
-    flex-basis: 148px;
+    flex-basis: clamp(156px, 72vw, 232px);
+  }
+}
+
+@media (pointer: coarse), (max-width: 900px) and (max-height: 500px) {
+  .journey__control {
+    inline-size: 44px;
+    block-size: 44px;
   }
 }
 
@@ -707,15 +815,5 @@ const cardsDrag = useMarqueeDrag(cardsViewportRef, cardsStripRef, highlightCards
     animation: none;
   }
 
-  /* 减少动态：不自动播放，退回手动横滑 */
-  .journey__cards--loop,
-  .journey__track--loop {
-    overflow-x: auto;
-  }
-
-  .journey__cards--loop .journey__cards-track,
-  .journey__track--loop .journey__track-strip {
-    animation: none;
-  }
 }
 </style>

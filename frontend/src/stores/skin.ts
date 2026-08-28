@@ -1,6 +1,7 @@
 import { ref } from 'vue'
+import { getSkinDefinition, type AppSkin } from '@/themes'
 
-export type AppSkin = 'default' | 'google'
+export type { AppSkin } from '@/themes'
 
 export const SKIN_STORAGE_KEY = 'tripstar.skin'
 
@@ -25,7 +26,12 @@ export const applySkin = (nextSkin: AppSkin): void => {
     // Persistence is optional in privacy-restricted browser contexts.
   }
   if (globalThis.document?.documentElement) {
-    globalThis.document.documentElement.dataset.skin = skin.value
+    const root = globalThis.document.documentElement
+    root.dataset.skin = skin.value
+    const definition = getSkinDefinition(skin.value)
+    Object.entries(definition.cssVariables).forEach(([name, value]) => {
+      root.style.setProperty(name, value)
+    })
   }
 }
 

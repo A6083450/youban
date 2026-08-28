@@ -1,0 +1,19 @@
+{
+  "pages": [
+    "pages/login/index",
+    "pages/web/index",
+    "pages/native-action/index"
+  ],
+  "window": {
+    "backgroundColor": "#faf7f2",
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "游伴"
+  },
+  "networkTimeout": {
+    "request": 60000,
+    "connectSocket": 10000
+  },
+  "sitemapLocation": "sitemap.json"
+}

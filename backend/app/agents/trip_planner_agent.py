@@ -415,11 +415,11 @@ def _completed_other_attractions(segment: dict, checkpoint: dict) -> str:
 
 def _language_instruction(request: TripRequest) -> str:
     language = (request.language or "zh").strip().lower().split("-")[0]
-    names = {"en": "English", "ja": "Japanese", "ko": "Korean",
+    names = {"en": "English", "ko": "Korean",
              "fr": "French", "de": "German", "es": "Spanish"}
-    if language == "zh":
+    if language == "zh" or language not in names:
         return "所有文字内容使用中文，JSON key 保持英文。"
-    return f"Use {names.get(language, language)} for all text values; keep JSON keys in English."
+    return f"Use {names[language]} for all text values; keep JSON keys in English."
 
 
 def _build_segment_query(request, segment, attractions, weather, hotels,
@@ -658,9 +658,6 @@ def _fallback_suggestions(request: TripRequest) -> str:
             for stay in request.cities
         )
         return f"This trip covers {cities}. Follow the daily plan and allow flexibility for weather and local conditions."
-    if language == "ja":
-        cities = "、".join(f"{stay.city}{stay.days}日間" for stay in request.cities)
-        return f"この旅行は{cities}を巡ります。毎日の計画に沿い、気象や現地状況に応じて余裕を持ってください。"
     cities = "、".join(f"{stay.city}{stay.days}天" for stay in request.cities)
     return f"本次行程覆盖{cities}，请按每日安排出行，并根据天气与现场情况预留机动时间。"
 
@@ -1057,9 +1054,10 @@ def _build_planner_query(
         # 如果用户选择了非中文语言，指示模型用目标语言输出所有文字内容
         _lang = (getattr(request, 'language', 'zh') or 'zh').strip().lower().split('-')[0]
         if _lang != 'zh':
-            _lang_names = {"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
-            _target_lang = _lang_names.get(_lang, _lang)
-            query += f"""\n\n**语言要求 (Language Requirement):**
+            _lang_names = {"en": "English", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
+            _target_lang = _lang_names.get(_lang)
+            if _target_lang:
+                query += f"""\n\n**语言要求 (Language Requirement):**
 请用 {_target_lang} 语言输出所有文字内容（包括 description, overall_suggestions, meals 中的 name/description, attractions 中的 name/address/description 等）。
 JSON 的 key 名称保持英文不变，只翻译 value 中的文字。"""
 

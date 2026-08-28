@@ -1,0 +1,32 @@
+services:
+  trip-planner-bun:
+    build:
+      context: .
+      dockerfile: Dockerfile.ts
+      args:
+        VITE_AMAP_WEB_JS_KEY: ${VITE_AMAP_WEB_JS_KEY:?required}
+        VITE_AMAP_WEB_KEY: ${VITE_AMAP_WEB_KEY:?required}
+    container_name: youban-trip-planner-bun
+    ports:
+      - "127.0.0.1:${BUN_CANDIDATE_PORT:-7861}:7860"
+    environment:
+      AUTH_PEPPER: ${AUTH_PEPPER:?required}
+      DATA_DIR: /app/data
+      HOST: 0.0.0.0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_STYLE: ${OPENAI_API_STYLE:-responses}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4}
+      PORT: 7860
+      VITE_AMAP_WEB_KEY: ${VITE_AMAP_WEB_KEY:?required}
+      WECHAT_APP_ID: wx42ddc076b365bf0d
+      WECHAT_APP_SECRET: ${WECHAT_APP_SECRET:?required}
+    volumes:
+      - ${YOUBAN_DATA_DIR:?required}:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:7860/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s

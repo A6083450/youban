@@ -79,6 +79,16 @@ class BudgetGuardTest(unittest.TestCase):
             400,
         )
 
+    def test_unsupported_persisted_locale_falls_back_to_chinese(self):
+        request = _request(700)
+        request.language = "xx-XX"
+        _, report = adjust_generated_days_to_budget(request, [_day(0), _day(1)])
+
+        self.assertEqual(
+            report["budget_adjustment_note"],
+            "已根据总预算将餐饮预估下调 ¥300，并为待报价项目预留 ¥200。",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

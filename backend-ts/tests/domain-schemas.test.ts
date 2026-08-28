@@ -8,7 +8,12 @@ import {
 
 describe("HTTP TypeBox DTO schemas", () => {
   it("accepts current frontend auth/history/task event shapes", () => {
-    expect(Value.Check(UserInfoSchema, { user_id: "u1", nickname: "Neo" })).toBe(true);
+    expect(Value.Check(UserInfoSchema, {
+      user_id: "u1",
+      nickname: "微信用户",
+      avatar_url: "/api/avatars/0123456789abcdef0123456789abcdef.png",
+      profile_complete: true,
+    })).toBe(true);
     expect(Value.Check(TripHistoryItemSchema, {
       plan_id: "p1",
       task_id: "t1",

@@ -1,0 +1,15 @@
+<view wx:if="{{error}}" class="web-state">
+  <view class="web-state__title">页面暂时无法打开</view>
+  <view class="web-state__detail">{{error}}</view>
+  <button class="web-state__retry" bindtap="retry">重试</button>
+</view>
+<view wx:elif="{{!src}}" class="web-state">
+  <view class="web-state__spinner"></view>
+  <view class="web-state__detail">正在连接游伴...</view>
+</view>
+<web-view
+  wx:else
+  src="{{src}}"
+  bindload="onWebViewLoad"
+  binderror="onWebViewError"
+></web-view>

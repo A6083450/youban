@@ -1,29 +1,20 @@
 <template>
   <a-config-provider :theme="antTheme">
-  <div class="app-shell">
-    <!-- 移动端顶栏 -->
-    <header v-if="!isBareRoute" class="mobile-topbar">
-      <button
-        type="button"
-        class="mobile-menu-btn"
-        :aria-label="t('sidebar.plans')"
-        @click="mobileMenuOpen = true"
-      >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      </button>
-      <router-link to="/" class="mobile-brand">{{ t('app.brand') }}</router-link>
-      <div class="mobile-topbar-right">
-        <button type="button" class="mobile-new-btn" :aria-label="t('sidebar.newPlan')" @click="goNewPlan">＋</button>
-        <UserBadge />
-      </div>
-    </header>
+  <div class="app-shell" :class="{ 'app-shell--mini-program': embeddedMiniProgram }">
+    <MobileAppHeader
+      :state="mobileHeaderState"
+      :embedded-mini-program="embeddedMiniProgram"
+      @open-menu="mobileMenuOpen = true"
+      @new-plan="goNewPlan"
+      @go-home="goHome"
+    />
 
     <!-- 移动端抽屉遮罩 -->
     <Transition name="mask-fade">
-      <div v-if="!isBareRoute && mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false"></div>
+      <div v-if="isPrivateRoute && mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false"></div>
     </Transition>
 
-    <aside v-if="!isBareRoute" class="sidebar" :class="{ open: mobileMenuOpen }">
+    <aside v-if="isPrivateRoute && (!embeddedMiniProgram || mobileMenuOpen)" class="sidebar" :class="{ open: mobileMenuOpen }">
       <div class="sidebar-header">
         <router-link to="/" class="sidebar-brand">{{ t('app.brand') }}</router-link>
       </div>
@@ -36,7 +27,7 @@
       </div>
 
       <ActiveTripTaskButton
-        v-if="activeTripTask"
+        v-if="showActiveTripTaskFallback && activeTripTask"
         :task="activeTripTask"
         @activate="returnToActiveTask"
       />
@@ -62,16 +53,6 @@
               <span v-if="isGeneratingRecord(item)" class="sidebar-item-date">
                 <span class="sidebar-item-badge processing">{{ t('sidebar.processing') }}</span>
               </span>
-            </button>
-            <button
-              v-if="shouldShowConversationResume(item)"
-              type="button"
-              class="sidebar-item-resume"
-              @click.stop="openConversation(item.session_id)"
-              @keydown.enter.stop
-            >
-              <PlayCircleOutlined aria-hidden="true" />
-              <span>{{ t('sidebar.returnToGeneration') }}</span>
             </button>
             <a-popconfirm
               :title="t('sidebar.deleteConfirm')"
@@ -157,7 +138,11 @@
 
           <div class="preference-group">
             <span class="preference-group__label">{{ t('app.language.label') }}</span>
-            <div class="preference-segment" role="group" :aria-label="t('app.language.label')">
+            <div
+              class="preference-segment preference-segment--language"
+              role="group"
+              :aria-label="t('app.language.label')"
+            >
               <button
                 v-for="option in VISIBLE_LOCALE_OPTIONS"
                 :key="option.value"
@@ -182,7 +167,7 @@
                 class="preference-option"
                 :class="{ active: skin === option.value }"
                 :aria-pressed="skin === option.value"
-                @click="applySkin(option.value)"
+                @click="setAccountSkin(option.value)"
               >
                 <span
                   class="preference-swatch"
@@ -232,27 +217,47 @@ import {
   isPlanRecordActive,
   plannedRecords,
   recordsLoading,
+  records,
   refreshRecords,
   removeRecord,
-  shouldShowConversationResume,
+  shouldClearActiveTripTask,
+  shouldShowActiveTripTaskFallback,
+  syncRecordsForAuthentication,
 } from '@/stores/conversation-records'
 import { PLANS_UPDATED_EVENT } from '@/stores/plans'
 import { deleteConversation, deleteTripPlan, getStoredUser } from '@/services/api'
 import UserBadge from '@/components/UserBadge.vue'
+import MobileAppHeader from '@/components/MobileAppHeader.vue'
 import ActiveTripTaskButton from '@/components/ActiveTripTaskButton.vue'
 import SidebarShareCodeTool from '@/components/SidebarShareCodeTool.vue'
 import YoubanSplash from '@/splash/YoubanSplash.vue'
-import { AUTH_UPDATED_EVENT } from '@/stores/auth'
-import { ACTIVE_TRIP_TASK_UPDATED_EVENT, readActiveTripTask } from '@/stores/activeTripTask'
-import { applySkin, skin } from '@/stores/skin'
+import { AUTH_UPDATED_EVENT, currentUser, isLoginReady } from '@/stores/auth'
+import {
+  ACTIVE_TRIP_TASK_UPDATED_EVENT,
+  clearActiveTripTask,
+  readActiveTripTask,
+} from '@/stores/activeTripTask'
+import { skin } from '@/stores/skin'
+import { setAccountLocale, setAccountSkin, syncAccountPreferences } from '@/stores/account-preferences'
+import { getSkinDefinition } from '@/themes'
 import { VISIBLE_LOCALE_OPTIONS, VISIBLE_SKIN_OPTIONS } from '@/stores/preference-options'
 import type { ActiveTripTaskRecord } from '@/stores/activeTripTask'
 import type { ConversationRecord } from '@/types'
 import { NEW_PLAN_EVENT } from '@/utils/planConversation.js'
+import {
+  isMiniProgramEmbedded,
+  resolveDocumentTitle,
+  resolveMobileHeaderState,
+} from '@/platform/miniProgramHost'
 
 const { t, locale } = useI18n()
 const router = useRouter()
 const route = useRoute()
+const embeddedMiniProgram = isMiniProgramEmbedded()
+const mobileHeaderState = computed(() =>
+  resolveMobileHeaderState(String(route.name || ''), embeddedMiniProgram),
+)
+const isPrivateRoute = computed(() => mobileHeaderState.value.variant === 'private')
 
 const activePlanId = computed(() => (route.name === 'PlanView' ? String(route.params.id || '') : ''))
 const activeConversationId = computed(() => (
@@ -266,38 +271,29 @@ const isOngoing = (item: ConversationRecord): boolean => {
   return item.start_date <= today && item.end_date >= today
 }
 
-const antTheme = computed(() => ({
-  token: {
-    colorPrimary: skin.value === 'google' ? '#3b9bb4' : '#d97757',
-    colorSuccess: skin.value === 'google' ? '#2d8c72' : '#3a9c7a',
-    colorError: skin.value === 'google' ? '#c85c5c' : '#c2413a',
-    colorText: skin.value === 'google' ? '#22313a' : '#3d3229',
-    colorBgLayout: skin.value === 'google' ? '#f5f9fc' : '#faf7f2',
-    borderRadius: skin.value === 'google' ? 12 : 8,
-  },
-}))
+const antTheme = computed(() => getSkinDefinition(skin.value).antTheme)
 
 const switchLocale = (value: AppLocale) => {
-  locale.value = value
+  void setAccountLocale(value)
 }
-
-// 后台页面：独立布局，不显示侧边栏/顶栏
-const isAdminRoute = computed(() => route.name === 'Admin')
-const isShareRoute = computed(() => route.name === 'Share')
-
-// 登录和公开分享页走无侧栏布局:不暴露当前用户或历史计划
-const isBareRoute = computed(() => isAdminRoute.value || isShareRoute.value || route.name === 'Login')
 
 // 移动端抽屉
 const mobileMenuOpen = ref(false)
 const resumingPlanId = ref('')
 const activeTripTask = ref<ActiveTripTaskRecord | null>(null)
+const showActiveTripTaskFallback = computed(() =>
+  shouldShowActiveTripTaskFallback(activeTripTask.value, records.value),
+)
 
 watch(
   locale,
   (nextLocale) => {
     setAppLocale(normalizeLocale(nextLocale))
-    document.title = t('app.title')
+    document.title = resolveDocumentTitle(
+      embeddedMiniProgram,
+      t('app.brand'),
+      t('app.title'),
+    )
   },
   { immediate: true }
 )
@@ -315,6 +311,11 @@ const goNewPlan = () => {
   if (route.path !== '/' || activeConversationId.value) {
     router.push('/')
   }
+}
+
+const goHome = async () => {
+  mobileMenuOpen.value = false
+  if (route.path !== '/') await router.push('/')
 }
 
 const openConversation = async (sessionId: string | null): Promise<void> => {
@@ -337,6 +338,15 @@ const syncActiveTripTask = (): void => {
   const ownerId = getStoredUser()?.user_id || 'anonymous'
   activeTripTask.value = readActiveTripTask(ownerId)
 }
+
+watch(
+  [activeTripTask, records],
+  ([task, items]) => {
+    if (!task || !shouldClearActiveTripTask(task, items)) return
+    const ownerId = getStoredUser()?.user_id || 'anonymous'
+    clearActiveTripTask(task.taskId, ownerId)
+  },
+)
 
 const returnToActiveTask = async (): Promise<void> => {
   mobileMenuOpen.value = false
@@ -379,18 +389,19 @@ const deleteRecord = async (item: ConversationRecord) => {
 
 const onRecordsUpdated = () => {
   syncActiveTripTask()
-  void refreshRecords()
+  void syncRecordsForAuthentication(isLoginReady(currentUser.value))
 }
 
 const onAuthUpdated = () => {
   invalidateAllConversationTitlePolling()
   syncActiveTripTask()
-  void refreshRecords()
+  if (isLoginReady(currentUser.value)) void syncAccountPreferences()
+  void syncRecordsForAuthentication(isLoginReady(currentUser.value))
 }
 
 onMounted(() => {
   syncActiveTripTask()
-  void refreshRecords()
+  void syncRecordsForAuthentication(isLoginReady(currentUser.value))
   window.addEventListener(CONVERSATION_RECORDS_UPDATED_EVENT, onRecordsUpdated)
   window.addEventListener(PLANS_UPDATED_EVENT, onRecordsUpdated)
   window.addEventListener(AUTH_UPDATED_EVENT, onAuthUpdated)
@@ -430,6 +441,14 @@ onUnmounted(() => {
   min-height: 0;
 }
 
+.app-shell--mini-program .main-area {
+  width: 100%;
+}
+
+.app-shell--mini-program {
+  flex-direction: column;
+}
+
 /* ─── 固定左侧栏（Codex 式会话列表） ─── */
 .sidebar {
   width: var(--desktop-sidebar-width);
@@ -437,8 +456,8 @@ onUnmounted(() => {
   height: 100%;
   position: sticky;
   top: 0;
-  background: #fff;
-  border-right: 1px solid rgba(61, 50, 41, 0.1);
+  background: var(--surface-navigation);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   z-index: 10;
@@ -536,7 +555,7 @@ onUnmounted(() => {
 }
 
 .sidebar-item-main:focus-visible {
-  outline: 2px solid #D97757;
+  outline: 2px solid var(--accent-primary);
   outline-offset: 4px;
 }
 
@@ -569,15 +588,15 @@ onUnmounted(() => {
 }
 
 .sidebar-item:hover {
-  background: rgba(217, 119, 87, 0.08);
+  background: var(--accent-hover);
 }
 
 .sidebar-item.active {
-  background: rgba(217, 119, 87, 0.14);
+  background: var(--accent-selected);
 }
 
 .sidebar-item-city {
-  color: #3D3229;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
@@ -586,7 +605,7 @@ onUnmounted(() => {
 }
 
 .sidebar-item-date {
-  color: rgba(61, 50, 41, 0.5);
+  color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -691,6 +710,15 @@ onUnmounted(() => {
   background: var(--surface-soft);
 }
 
+.preference-segment--language {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.preference-segment--language .preference-option {
+  min-height: 38px;
+  padding-inline: 4px;
+}
+
 .preference-option {
   min-width: 0;
   min-height: 44px;
@@ -748,7 +776,7 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  background: #f9f9f9;
+  background: var(--surface-page);
   display: flex;
   flex-direction: column;
 }
@@ -794,62 +822,6 @@ onUnmounted(() => {
   }
 }
 
-/* ─── 移动端顶栏(桌面隐藏) ─── */
-.mobile-topbar {
-  display: none;
-  align-items: center;
-  justify-content: space-between;
-  height: 52px;
-  padding: 0 12px;
-  background: #fff;
-  border-bottom: 1px solid rgba(61, 50, 41, 0.1);
-  position: sticky;
-  top: 0;
-  z-index: 90;
-  flex-shrink: 0;
-}
-
-.mobile-brand {
-  color: #3D3229;
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-decoration: none;
-}
-
-.mobile-menu-btn,
-.mobile-new-btn {
-  width: 38px;
-  height: 38px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: #6B5D52;
-  font-size: 22px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.mobile-new-btn {
-  color: #C4603D;
-  font-weight: 700;
-}
-
-.mobile-topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* 移动端顶栏里的用户徽标:限宽,避免昵称把顶栏撑开 */
-.mobile-topbar-right .user-badge {
-  width: auto;
-  max-width: 140px;
-}
-
 .mobile-mask {
   position: fixed;
   inset: 0;
@@ -862,10 +834,6 @@ onUnmounted(() => {
     flex-direction: column;
     height: 100dvh;
     min-height: 100dvh;
-  }
-
-  .mobile-topbar {
-    display: flex;
   }
 
   /* 侧边栏变左侧抽屉 */

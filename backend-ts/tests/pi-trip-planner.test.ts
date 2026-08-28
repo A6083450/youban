@@ -7,6 +7,7 @@ import {
   type TripResearchSources,
 } from "../src/agents/pi-trip-planner.ts";
 import { emptyCheckpoint, type TripPlanningRequest } from "../src/domain/orchestrator.ts";
+import type { HotelPriceSource } from "../src/services/hotel-price-source.ts";
 
 const REQUEST: TripPlanningRequest = {
   city: "大理",
@@ -71,6 +72,8 @@ class FakeAgents implements StructuredAgentRunner {
   failReview = false;
   finalizationDelayMs = 0;
   omitLastSegmentDay = false;
+  packAttractionsIntoEarlyDays = false;
+  hotelPoiId: string | null = null;
 
   async run(request: StructuredAgentRequest): Promise<unknown> {
     this.requests.push({
@@ -85,7 +88,12 @@ class FakeAgents implements StructuredAgentRunner {
       await sleepWithSignal(5 + (isFinalization ? this.finalizationDelayMs : 0), request.signal);
       const input = request.input as Record<string, any>;
       if (request.agent === "destination-researcher") {
-        return { selected_poi_ids: this.hallucinateResearch ? ["FAKE"] : POIS.map((poi) => poi.poi_id) };
+        const candidates = input.candidates as Array<Record<string, any>>;
+        return {
+          selected_poi_ids: this.hallucinateResearch
+            ? ["FAKE"]
+            : candidates.map((poi) => poi.poi_id),
+        };
       }
       if (request.agent === "segment-planner") {
         const segment = input.segment as Record<string, any>;
@@ -99,11 +107,24 @@ class FakeAgents implements StructuredAgentRunner {
             description: `第${dayIndex + 1}天`,
             transportation: "公共交通",
             accommodation: "湖景酒店",
-            hotel: null,
-            attractions: [{
-              name: this.hallucinate ? "虚构景点" : candidates[offset]?.name ?? candidates[0]?.name,
-              poi_id: this.hallucinate ? "FAKE" : candidates[offset]?.poi_id ?? candidates[0]?.poi_id,
-            }],
+            hotel: this.hotelPoiId === null ? null : {
+              poi_id: this.hotelPoiId,
+              name: "模型改名",
+              estimated_cost: 1,
+            },
+            attractions: this.packAttractionsIntoEarlyDays
+              ? (offset === 0
+                  ? candidates.slice(0, 3)
+                  : offset === 1
+                    ? candidates.slice(3, 4)
+                    : offset === 2 && segment.day_indices.length === 4
+                      ? candidates.slice(4)
+                      : [])
+                .map((candidate) => ({ name: candidate.name, poi_id: candidate.poi_id }))
+              : [{
+                  name: this.hallucinate ? "虚构景点" : candidates[offset]?.name ?? candidates[0]?.name,
+                  poi_id: this.hallucinate ? "FAKE" : candidates[offset]?.poi_id ?? candidates[0]?.poi_id,
+                }],
             meals: this.mealCost === null ? [] : [{
               type: "lunch",
               name: "午餐",
@@ -145,7 +166,7 @@ function context(checkpoint = emptyCheckpoint()) {
 }
 
 describe("PiTripPlanner", () => {
-  it("emits only deterministic stage summaries when thought visibility is enabled", async () => {
+  it("emits safe stage activity plus deterministic thought summaries when visibility is enabled", async () => {
     const planner = new PiTripPlanner({
       research: new FakeResearch(),
       agents: new FakeAgents(),
@@ -162,7 +183,11 @@ describe("PiTripPlanner", () => {
       type: "thinking",
       title: "正在为大理筛选符合偏好的可信景点",
     }));
-    expect(details.every((detail) => detail.type === "thinking" && detail.title.length <= 160)).toBeTrue();
+    expect(details).toContainEqual(expect.objectContaining({
+      type: "info",
+      title: "正在查询大理天气",
+    }));
+    expect(details.every((detail) => detail.title.length <= 160)).toBeTrue();
     expect(JSON.stringify(details)).not.toContain("selected_poi_ids");
     expect(JSON.stringify(details)).not.toContain("overall_suggestions");
     expect((run.progress.at(-1) as { details: Array<{ title: string }> }).details.map((detail) => detail.title))
@@ -188,6 +213,11 @@ describe("PiTripPlanner", () => {
         (detail as { type?: string }).type === "thinking"
       ))
     ))).toBeTrue();
+    expect((run.progress.at(-1) as { details: Array<{ type: string; title: string }> }).details)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "info", title: "正在初始化旅行规划" }),
+        expect.objectContaining({ type: "info", title: "正在并行生成分段行程" }),
+      ]));
   });
 
   it("prefetches trusted facts, runs bounded segment children, and checkpoints every wave", async () => {
@@ -275,6 +305,72 @@ describe("PiTripPlanner", () => {
     expect(attractions.every((item) => item.name.startsWith("景点"))).toBeTrue();
   });
 
+  it("restores selected hotels from trusted AMap candidates", async () => {
+    const agents = new FakeAgents();
+    agents.hotelPoiId = "H1";
+    const result = await new PiTripPlanner({ research: new FakeResearch(), agents })
+      .plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days.slice(0, -1).every((day) => (
+      day.hotel.name === "湖景酒店"
+      && day.hotel.source === "amap"
+      && day.hotel.source_hotel_id === "H1"
+      && day.hotel.price_status === "unavailable"
+      && day.hotel.estimated_cost === undefined
+    ))).toBeTrue();
+    expect(days.at(-1)?.hotel).toBeNull();
+    expect(days.filter((day) => day.hotel !== null)).toHaveLength(3);
+    const segmentRequest = agents.requests.find((request) => request.agent === "segment-planner")!;
+    expect((segmentRequest.schema as any).properties.days.items.properties.hotel.anyOf[1]
+      .properties.poi_id.enum).toEqual(["H1"]);
+  });
+
+  it("rejects an agent-selected hotel outside trusted candidates", async () => {
+    const agents = new FakeAgents();
+    agents.hotelPoiId = "FAKE";
+    const result = await new PiTripPlanner({ research: new FakeResearch(), agents })
+      .plan(REQUEST, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+
+    expect(days.every((day) => day.hotel === null)).toBeTrue();
+  });
+
+  it("enriches trusted hotel stays before calculating the budget", async () => {
+    const agents = new FakeAgents();
+    agents.hotelPoiId = "H1";
+    const requests: unknown[] = [];
+    const hotelPrices: HotelPriceSource = {
+      async quote(request) {
+        requests.push(request);
+        return {
+          provider: "fliggy",
+          hotel_name: "湖景酒店",
+          nightly_price: 420,
+          currency: "CNY",
+          source_url: "https://router.feizhu.com/h/1",
+          checked_at: "2026-08-26T03:00:00.000Z",
+          method: "lowest_nightly_browse",
+        };
+      },
+    };
+    const planner = new PiTripPlanner({ research: new FakeResearch(), agents, hotelPrices } as any);
+
+    const result = await planner.plan(REQUEST, context().value);
+    const data = result.data as Record<string, any>;
+
+    expect(requests).toEqual([expect.objectContaining({
+      hotelName: "湖景酒店",
+      checkIn: "2026-10-01",
+      checkOut: "2026-10-04",
+      adults: 2,
+    })]);
+    expect(data.days.slice(0, 3).every((day: Record<string, any>) => (
+      day.hotel.price_source === "fliggy" && day.hotel.estimated_cost === 420
+    ))).toBeTrue();
+    expect(data.budget.total_hotels).toBe(1260);
+  });
+
   it("falls back to ranked trusted candidates when the research child selects only unknown ids", async () => {
     const agents = new FakeAgents();
     agents.hallucinateResearch = true;
@@ -323,6 +419,39 @@ describe("PiTripPlanner", () => {
       minItems: 4,
       maxItems: 4,
     }));
+  });
+
+  it("rebalances sparse enhanced output when trusted candidates can cover every day", async () => {
+    const tenPois = Array.from({ length: 10 }, (_, index) => ({
+      poi_id: `S${index + 1}`,
+      name: `三亚景点${index + 1}`,
+      address: `地址${index + 1}`,
+      type: "风景名胜",
+      location: { longitude: 109 + index / 100, latitude: 18 + index / 100 },
+    }));
+    class DenseResearch extends FakeResearch {
+      override async searchAttractions(city: string) {
+        this.calls.push(`attractions:${city}`);
+        return structuredClone(tenPois);
+      }
+    }
+    const agents = new FakeAgents();
+    agents.packAttractionsIntoEarlyDays = true;
+    const planner = new PiTripPlanner({ research: new DenseResearch(), agents });
+    const sevenDayRequest = {
+      ...REQUEST,
+      cities: [{ city: "三亚", days: 7 }],
+      city: "三亚",
+      end_date: "2026-10-07",
+      travel_days: 7,
+    };
+
+    const result = await planner.plan(sevenDayRequest, context().value);
+    const days = (result.data as Record<string, any>).days as Array<Record<string, any>>;
+    const poiIds = days.flatMap((day) => day.attractions.map((item: Record<string, any>) => item.poi_id));
+
+    expect(days.map((day) => day.attractions.length)).toEqual([3, 1, 1, 1, 2, 1, 1]);
+    expect(new Set(poiIds).size).toBe(10);
   });
 
   it("keeps a segment usable without inventing POIs when research has no trusted candidates", async () => {

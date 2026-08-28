@@ -7,10 +7,13 @@ import type {
   TripPlanner,
 } from "../src/agents/trip-planner.ts";
 import { emptyCheckpoint, type PlanningCheckpoint, type TripPlanningRequest } from "../src/domain/orchestrator.ts";
+import { _resetSettingsForTest } from "../src/config/settings.ts";
 import { createHttpRuntime, type HttpRuntime } from "../src/http/app.ts";
+import { createTaskState } from "../src/domain/task-store.ts";
 
 const runtimes: HttpRuntime[] = [];
 const tempDirs: string[] = [];
+const dataDirOverrides: Array<string | undefined> = [];
 
 const DRAFT = {
   city: "大理",
@@ -188,8 +191,22 @@ function makeRuntime(planner = new FakePlanner()): { runtime: HttpRuntime; plann
 
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
+  if (dataDirOverrides.length > 0) {
+    const previousDataDir = dataDirOverrides.pop();
+    if (previousDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDataDir;
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+  }
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function isolateRuntimeSettings(): void {
+  dataDirOverrides.push(process.env.DATA_DIR);
+  const settingsDir = mkdtempSync(join(tmpdir(), "youban-plan-settings-"));
+  tempDirs.push(settingsDir);
+  process.env.DATA_DIR = settingsDir;
+  _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+}
 
 function request(app: HttpRuntime["app"], method: string, path: string, body?: unknown, userId = "owner-1") {
   return app.handle(new Request(`http://localhost${path}`, {
@@ -232,6 +249,31 @@ async function submit(runtime: HttpRuntime): Promise<Record<string, any>> {
 }
 
 describe("trip planning HTTP lifecycle", () => {
+  it("returns accumulated Agent details to polling clients while generation is running", async () => {
+    const { runtime } = makeRuntime();
+    runtime.tasks.save(createTaskState("task-with-details", {
+      user_id: "owner-1",
+      stage: "weather_search",
+      progress: 24,
+      message: "正在查询成都天气",
+      details: [
+        { type: "thinking", title: "正在核对成都出行期间的天气条件", timestamp: 1 },
+        { type: "found", title: "已找到成都景点", content: "武侯祠、杜甫草堂", timestamp: 2 },
+      ],
+    }), { immediate: true });
+
+    const response = await request(runtime.app, "GET", "/api/trip/status/task-with-details");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "processing",
+      progress_text: "正在查询成都天气",
+      details: [
+        { type: "thinking", title: "正在核对成都出行期间的天气条件" },
+        { type: "found", title: "已找到成都景点", content: "武侯祠、杜甫草堂" },
+      ],
+    });
+  });
+
   it("includes planner startup delay in accepted-to-persisted elapsed time", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-accepted-clock-http-"));
     tempDirs.push(dataDir);
@@ -312,6 +354,32 @@ describe("trip planning HTTP lifecycle", () => {
     }));
     const status = await request(runtime.app, "GET", `/api/trip/status/${accepted.task_id}`);
     expect(await status.json()).toEqual(expect.objectContaining({
+      status: "completed",
+      plan_quality: "enhanced",
+      enhancement_status: "completed",
+    }));
+  });
+
+  it("applies background enhancement after the result page reads the budget ledger", async () => {
+    const { runtime, planner, clock } = makeDeadlineRuntime();
+    const accepted = await submit(runtime);
+    await waitFor(() => planner.runs.length === 1);
+
+    clock.advanceBy(5_500);
+    await waitFor(() => runtime.tasks.get(accepted.task_id)?.plan_quality === "fast");
+    const budget = await request(
+      runtime.app,
+      "GET",
+      `/api/trip/plan/${accepted.task_id}/budget-items`,
+    );
+    expect(budget.status).toBe(200);
+
+    planner.succeed(0);
+    await waitFor(() => {
+      const status = runtime.tasks.get(accepted.task_id)?.enhancement_status;
+      return status === "completed" || status === "skipped";
+    });
+    expect(runtime.tasks.get(accepted.task_id)).toEqual(expect.objectContaining({
       status: "completed",
       plan_quality: "enhanced",
       enhancement_status: "completed",
@@ -465,6 +533,7 @@ describe("trip planning HTTP lifecycle", () => {
   });
 
   it("drains the active service generation before applying runtime settings", async () => {
+    isolateRuntimeSettings();
     const dataDir = mkdtempSync(join(tmpdir(), "youban-plan-refresh-"));
     tempDirs.push(dataDir);
     const first = new BlockingPlanner();

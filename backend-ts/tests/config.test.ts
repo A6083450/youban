@@ -58,6 +58,10 @@ const ENV_KEYS = [
   "PI_PARENT_SESSION_IDLE_SECONDS",
   "LLM_THINKING_ENABLED",
   "LLM_THINKING_VISIBLE",
+  "FLIGGY_PROXY_TOKEN",
+  "FLIGGY_PROXY_URL",
+  "FLIGGY_PRICE_TIMEOUT_MS",
+  "FLIGGY_PRICE_CACHE_TTL_SECONDS",
 ];
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -162,6 +166,31 @@ describe("settings: env 读取", () => {
     expect(settings.pi_parent_session_idle_seconds).toBe(1800);
     expect(settings.llm_thinking_enabled).toBe(false);
     expect(settings.llm_thinking_visible).toBe(false);
+    expect(settings.fliggy_proxy_token).toBe("");
+    expect(settings.fliggy_proxy_url).toBe("https://1439498936-6sysdjjt99.ap-guangzhou.tencentscf.com");
+    expect(settings.fliggy_price_timeout_ms).toBe(3000);
+    expect(settings.fliggy_price_cache_ttl_seconds).toBe(300);
+  });
+
+  it("reads bounded Fliggy server-only settings", () => {
+    process.env.FLIGGY_PROXY_TOKEN = "server-token";
+    process.env.FLIGGY_PROXY_URL = "https://proxy.example/hotel";
+    process.env.FLIGGY_PRICE_TIMEOUT_MS = "1200";
+    process.env.FLIGGY_PRICE_CACHE_TTL_SECONDS = "60";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    expect(getSettings()).toEqual(expect.objectContaining({
+      fliggy_proxy_token: "server-token",
+      fliggy_proxy_url: "https://proxy.example/hotel",
+      fliggy_price_timeout_ms: 1200,
+      fliggy_price_cache_ttl_seconds: 60,
+    }));
+
+    process.env.FLIGGY_PRICE_TIMEOUT_MS = "499";
+    process.env.FLIGGY_PRICE_CACHE_TTL_SECONDS = "1801";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+    expect(getSettings().fliggy_price_timeout_ms).toBe(3000);
+    expect(getSettings().fliggy_price_cache_ttl_seconds).toBe(300);
   });
 
   it("reads valid model thinking environment overrides", () => {
@@ -266,6 +295,18 @@ describe("settings: runtime 覆盖", () => {
 });
 
 describe("settings: updateRuntimeSettings", () => {
+  it("does not allow runtime settings to expose or overwrite the Fliggy token", () => {
+    process.env.FLIGGY_PROXY_TOKEN = "server-token";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    const updated = updateRuntimeSettings({
+      fliggy_proxy_token: "runtime-leak",
+    } as unknown as Partial<RuntimeSettings>);
+
+    expect((updated as unknown as Record<string, unknown>).fliggy_proxy_token).toBe("server-token");
+    expect(readJson(join(caseDir, "runtime_settings.json")).fliggy_proxy_token).toBeUndefined();
+  });
+
   it("keeps a prepared candidate invisible until it is committed", () => {
     const previous = getSettings().openai_model;
     const prepared = prepareRuntimeSettings({ openai_model: "candidate-model" });

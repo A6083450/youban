@@ -137,7 +137,7 @@ function expectUpgradeRejected(url: string): Promise<{ opened: boolean }> {
   });
 }
 
-function handshakeStatus(url: string): Promise<number> {
+function handshakeStatus(url: string, headers: Record<string, string> = {}): Promise<number> {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const socket = connect(Number(target.port), target.hostname);
@@ -153,6 +153,7 @@ function handshakeStatus(url: string): Promise<number> {
         "Connection: Upgrade",
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
         "Sec-WebSocket-Version: 13",
+        ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
         "",
         "",
       ].join("\r\n"));
@@ -169,6 +170,40 @@ function handshakeStatus(url: string): Promise<number> {
 }
 
 describe("trip task websocket contract", () => {
+  it("ignores query user IDs in secure mode and accepts a Bearer handshake", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-ws-secure-"));
+    tempDirs.push(dataDir);
+    const runtime = createHttpRuntime({
+      dataDir,
+      authentication: {
+        pepper: "websocket-test-pepper-with-at-least-32-bytes",
+        exchangeWechatCode: async () => "secure-openid",
+      },
+    });
+    runtimes.push(runtime);
+    runtime.app.listen({ hostname: "127.0.0.1", port: 0 });
+    const port = runtime.app.server?.port;
+    if (!port) throw new Error("test server did not bind a port");
+    const loginResponse = await runtime.app.handle(new Request(`http://127.0.0.1:${port}/api/auth/wechat/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "once" }),
+    }));
+    const login = await loginResponse.json() as { token: string; user: { user_id: string } };
+    runtime.authentication!.completeProfile(login.token, "55555555555555555555555555555555.png");
+    runtime.tasks.save(createTaskState("secure-task", {
+      user_id: login.user.user_id,
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      result: { success: true },
+    }), { immediate: true });
+    const url = `ws://127.0.0.1:${port}/api/trip/ws/secure-task`;
+
+    expect(await handshakeStatus(`${url}?user_id=${login.user.user_id}`)).toBe(401);
+    expect(await handshakeStatus(url, { Authorization: `Bearer ${login.token}` })).toBe(101);
+  });
+
   it("publishes a slow seven-day request through the existing terminal frame at 5.5 seconds", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "youban-ws-deadline-"));
     tempDirs.push(dataDir);

@@ -143,7 +143,7 @@
         </button>
       </div>
       <Welcome
-        v-if="items.length === 0"
+        v-if="items.length === 0 && ongoingPlans.length === 0"
         class="welcome"
         :title="t('chatHome.title')"
         :description="t('chatHome.desc')"
@@ -204,6 +204,7 @@ import {
   waitForConversationTitle,
 } from '@/stores/conversation-records'
 import { buildTripPlanRequest, orchestrateConfirmationReply, shouldClearActiveTask } from '@/utils/confirmationOrchestration.js'
+import { reduceTripParseDecision } from '@/utils/confirmationState.js'
 import { buildConversationHistory } from '@/utils/conversationHistory.js'
 import { formatChatDraft, migrateLegacyDraftItems, shouldShowDraftActions } from '@/utils/chatDraft.js'
 import {
@@ -309,14 +310,18 @@ const markdownStyle = {
 const busy = ref(false)
 const generating = ref(false)
 let operationToken = 0
+let conversationBusyLeaseToken = 0
 let isAlive = true
 
 const userId = () => currentUser.value?.user_id || 'anonymous'
-const beginOperation = (): ConversationOperationContext => captureConversationOperation({
-  token: ++operationToken,
-  ownerId: userId(),
-  sessionId: conversationIdentity.sessionId,
-})
+const beginOperation = (): ConversationOperationContext => {
+  conversationBusyLeaseToken += 1
+  return captureConversationOperation({
+    token: ++operationToken,
+    ownerId: userId(),
+    sessionId: conversationIdentity.sessionId,
+  })
+}
 const ownsOperation = (context: ConversationOperationContext): boolean =>
   isConversationOperationCurrent(context, {
     token: operationToken,
@@ -324,7 +329,25 @@ const ownsOperation = (context: ConversationOperationContext): boolean =>
     sessionId: conversationIdentity.sessionId,
     alive: isAlive,
   })
-const invalidateOperations = (): void => { operationToken += 1 }
+const invalidateOperations = (): void => {
+  operationToken += 1
+  conversationBusyLeaseToken += 1
+}
+const acquireConversationBusyLease = () => {
+  const lease = {
+    token: ++conversationBusyLeaseToken,
+    ownerId: userId(),
+  }
+  busy.value = true
+  return lease
+}
+const releaseConversationBusyLease = (lease: { token: number; ownerId: string }): boolean => {
+  if (!isAlive
+    || lease.token !== conversationBusyLeaseToken
+    || lease.ownerId !== userId()) return false
+  busy.value = false
+  return true
+}
 // 当前行程草稿的对话锚点:不完整时指向追问消息,完整时指向带操作按钮的草稿消息
 const pendingConfirmId = ref<number | null>(null)
 const pendingDraft = ref<ParsedTripDraft | null>(null)
@@ -527,7 +550,6 @@ const writeConversationPersistence = async (
     const updated = await updateConversationSession(
       sessionId,
       { revision: capture.revision, snapshot },
-      ownerId,
       signal,
     )
     if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
@@ -539,12 +561,18 @@ const writeConversationPersistence = async (
   } catch (error: unknown) {
     if (error instanceof ConversationSessionRevisionConflictError) {
       try {
-        const current = await getConversationSession(sessionId, ownerId, signal)
+        const current = await getConversationSession(sessionId, signal)
+        const updated = await updateConversationSession(
+          sessionId,
+          { revision: current.revision, snapshot },
+          signal,
+        )
         if (userId() === ownerId && conversationIdentity.sessionId === sessionId) {
-          applyConversationDetail(current)
+          acceptConversationRevision(conversationIdentity, sessionId, updated.revision)
+          upsertRecord(updated)
         }
         removePersistedConversationCapture(capture)
-        return { revision: current.revision, discardPendingForSession: true }
+        return { revision: updated.revision }
       } catch (conflictError: unknown) {
         if (conflictError instanceof ConversationSessionNotFoundError) {
           removePersistedConversationCapture(capture)
@@ -987,7 +1015,7 @@ const restoreServerConversation = async (sessionId: string): Promise<void> => {
     if (!restoreIsCurrent()) return
     const targetPersistencePending = persistenceQueue.hasPending(ownerId, sessionId)
     const detail = await runWithConversationDeadline(
-      (signal) => getConversationSession(sessionId, ownerId, signal),
+      (signal) => getConversationSession(sessionId, signal),
       CONVERSATION_RESTORE_TIMEOUT_MS,
       restoreAbortController.signal,
     )
@@ -1226,7 +1254,7 @@ const handlePendingReply = async (
   currentUserItemId: number
 ) => {
   const context = beginOperation()
-  busy.value = true
+  const busyLease = acquireConversationBusyLease()
   pendingUserText.value = text
   persistSoon()
   const streamId = pushItem({ role: 'assistant', type: 'streaming', text: '' })
@@ -1320,7 +1348,7 @@ const handlePendingReply = async (
         && effect.readyToGenerate
         && effect.readinessToken
         && pendingDraft.value) {
-        pendingConfirmId.value = anchor?.type === 'draft' && anchor.ready
+        pendingConfirmId.value = !effect.offerGeneration && anchor?.type === 'draft' && anchor.ready
           ? anchor.id
           : pushDraftMessage(pendingDraft.value)
       } else if (anchor?.type !== 'draft') {
@@ -1335,9 +1363,8 @@ const handlePendingReply = async (
       text: error?.message || t('composer.parseFailed'),
     })
   } finally {
-    if (ownsOperation(context)) {
+    if (releaseConversationBusyLease(busyLease)) {
       pendingUserText.value = null
-      busy.value = false
       persistSoon()
     }
   }
@@ -1347,13 +1374,13 @@ const handlePendingReply = async (
 // 用户消息重新发起(自动重发续上)
 const runParseStream = async (text: string, userItemId: number) => {
   const context = beginOperation()
-  busy.value = true
+  const busyLease = acquireConversationBusyLease()
   pendingUserText.value = text
   persistSoon()
   const streamId = pushItem({ role: 'assistant', type: 'streaming', text: '' })
   let acc = ''
   let finalRes: TripParseApiResponse | null = null
-  let streamError = false
+  let streamError = ''
   try {
     const history = getConversationHistory(userItemId)
     await parseTripTextStream(text, getCurrentLocale(), history, {
@@ -1366,22 +1393,36 @@ const runParseStream = async (text: string, userItemId: number) => {
         if (ownsOperation(context)) setStreamingThinking(streamId, detail)
       },
       onFinal: (res) => { finalRes = res },
-      onError: () => { streamError = true },
+      onError: (message) => { streamError = message || t('composer.parseFailed') },
     })
     if (!ownsOperation(context)) return
-    if (streamError || !finalRes) throw new Error(t('composer.parseFailed'))
+    if (streamError || !finalRes) throw new Error(streamError || t('composer.parseFailed'))
     const res: TripParseApiResponse = finalRes
 
-    if (res.action === 'recommend' || res.action === 'chat' || res.action === 'clarify' || !res.trip) {
+    const parseDecision = reduceTripParseDecision(res)
+    if (parseDecision.type === 'message') {
       // 逐字流出的是 reply;final 到达后补全为完整回复(含推荐列表/追问)
       replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
+    } else if (parseDecision.type === 'generate') {
+      replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
+      pendingDraft.value = parseDecision.draft
+      pendingReadinessToken.value = res.readiness_token || ''
+      pendingConfirmId.value = streamId
+      const outcome = await onConfirmGenerate(parseDecision.draft, parseDecision.token, context)
+      if (outcome.status === 'submit_failed' && ownsOperation(context)) {
+        pendingConfirmId.value = pendingReadinessToken.value
+          ? pushDraftMessage(parseDecision.draft)
+          : streamId
+      } else if (ownsOperation(context)) {
+        clearPendingConfirm()
+      }
     } else {
       // 未完整时继续用普通对话追问;完整后再补一条带常驻操作的路线草稿消息
       replaceItem(streamId, { role: 'assistant', type: 'text', text: formatAgentReply(res) })
-      pendingDraft.value = res.trip
-      pendingReadinessToken.value = res.readiness_token || ''
-      pendingConfirmId.value = res.ready_to_generate === true && pendingReadinessToken.value
-        ? pushDraftMessage(res.trip)
+      pendingDraft.value = parseDecision.draft
+      pendingReadinessToken.value = parseDecision.readinessToken
+      pendingConfirmId.value = parseDecision.readyToGenerate
+        ? pushDraftMessage(parseDecision.draft)
         : streamId
     }
   } catch (error: any) {
@@ -1392,9 +1433,8 @@ const runParseStream = async (text: string, userItemId: number) => {
       text: error?.message || t('composer.parseFailed'),
     })
   } finally {
-    if (ownsOperation(context)) {
+    if (releaseConversationBusyLease(busyLease)) {
       pendingUserText.value = null
-      busy.value = false
       persistSoon()
     }
   }
@@ -1581,6 +1621,7 @@ const onConfirmGenerate = async (
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  background: var(--surface-page);
 }
 
 .chat-scroll {
@@ -1652,6 +1693,49 @@ const onConfirmGenerate = async (
   font-size: 14px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+:deep(.assistant-markdown table) {
+  width: 100%;
+  margin: 12px 0;
+  border: 1px solid var(--border-subtle);
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-elevated);
+}
+
+:deep(.assistant-markdown th),
+:deep(.assistant-markdown td) {
+  padding: 10px 12px;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+:deep(.assistant-markdown th) {
+  color: var(--text-primary);
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+
+:deep(.assistant-markdown th:first-child) {
+  width: 34%;
+}
+
+:deep(.assistant-markdown th:last-child),
+:deep(.assistant-markdown td:last-child) {
+  width: 92px;
+  border-right: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+:deep(.assistant-markdown tbody tr:last-child td) {
+  border-bottom: 0;
 }
 
 .assistant-message {
@@ -1916,42 +2000,44 @@ const onConfirmGenerate = async (
 }
 
 .ongoing-banner {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   width: 100%;
-  max-width: 640px;
+  max-width: 720px;
   min-width: 0;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .ongoing-card {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  min-height: 92px;
   min-width: 0;
-  padding: 13px 16px;
-  border: 1px solid rgba(201, 138, 45, 0.25);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(216, 169, 78, 0.14), rgba(201, 138, 45, 0.08));
+  padding: 12px 14px;
+  border: 1px solid var(--accent-focus);
+  border-radius: var(--card-radius);
+  background: var(--surface-elevated);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.ongoing-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(201, 138, 45, 0.12); }
-.ongoing-card:focus-visible { outline: 2px solid #D97757; outline-offset: 2px; }
-.ongoing-card-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-.ongoing-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #d8a94e, #c98a2d); }
+.ongoing-card:hover { transform: translateY(-1px); box-shadow: var(--card-shadow-hover); }
+.ongoing-card:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.ongoing-card-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ongoing-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; color: #fff; background: var(--accent-primary); }
 .ongoing-title {
   display: -webkit-box;
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  color: #3d3229;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.5;
@@ -1960,8 +2046,8 @@ const onConfirmGenerate = async (
   -webkit-line-clamp: 2;
 }
 .ongoing-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.ongoing-day { color: #8B7B6E; font-size: 12px; }
-.ongoing-cta { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: #a8752a; font-size: 12.5px; font-weight: 600; }
+.ongoing-day { color: var(--text-secondary); font-size: 12px; }
+.ongoing-cta { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: var(--accent-strong); font-size: 12.5px; font-weight: 600; }
 
 .welcome {
   width: 100%;
@@ -1997,23 +2083,44 @@ const onConfirmGenerate = async (
   gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
+  width: 100%;
+  max-width: 720px;
 }
 
-.suggestions :deep(.el-prompts) {
+.suggestions :deep(.elx-prompts) {
   width: 100%;
 }
 
-.suggestions :deep(.el-prompts-item) {
-  min-height: 38px;
+.suggestions :deep(.elx-prompts__items) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  overflow: visible;
+}
+
+.suggestions :deep(.elx-prompts__item) {
+  width: 100%;
+  min-height: 44px;
+  max-height: 64px;
+  padding: 10px 12px;
   border-color: var(--border-subtle);
   border-radius: 8px;
   background: var(--surface-elevated);
   color: var(--text-secondary);
 }
 
-.suggestions :deep(.el-prompts-item:hover) {
+.suggestions :deep(.elx-prompts__item:hover) {
   border-color: var(--accent-primary);
   color: var(--accent-strong);
+}
+
+.suggestions :deep(.elx-prompts__item-label) {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-primary);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .suggestion-chip {
@@ -2068,6 +2175,14 @@ const onConfirmGenerate = async (
   .chat-input-area.is-empty.has-ongoing .ongoing-banner,
   .chat-input-area.is-empty.has-ongoing .welcome {
     align-self: center;
+  }
+
+  .ongoing-banner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .suggestions :deep(.elx-prompts__items) {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

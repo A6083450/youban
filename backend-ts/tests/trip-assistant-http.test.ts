@@ -61,6 +61,18 @@ class AbortAwareLlm implements LlmClient {
   }
 }
 
+class FailingLlm implements LlmClient {
+  readonly model = new FakeLlmClient([]).model;
+
+  async *stream(): AsyncIterable<string> {
+    throw new Error("DeepSeek request failed with status 400");
+  }
+
+  async complete(): Promise<string> {
+    throw new Error("DeepSeek request failed with status 400");
+  }
+}
+
 class AgentOnlyLlm implements LlmClient {
   readonly model = new FakeLlmClient([]).model;
   readonly calls: Array<{ prompt: string; options: PiAgentCallOptions }> = [];
@@ -198,6 +210,233 @@ describe("trip parse/confirm HTTP and SSE", () => {
     }));
     expect(result.readiness_token).not.toBe("");
     expect(llm.prompts[0]).toContain("国庆帮我安排大理七天");
+  });
+
+  it("gives the intake model a warm first-turn and private emotion policy", async () => {
+    const output = JSON.stringify({
+      action: "clarify",
+      emotion: "neutral",
+      emotion_score: 2,
+      engagement: "engaged",
+      response_mode: "question",
+      reply: "带娃去三亚放松几天很合适，我先帮你把节奏放轻松。更偏海边玩水，还是亲子乐园？",
+    });
+    const { runtime, llm } = makeRuntime([[output]]);
+
+    await post(runtime.app, "/api/trip/parse", {
+      text: "带娃去三亚海边度假4天",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [],
+    });
+
+    expect(llm.prompts[0]).toContain("内部情绪负面分");
+    expect(llm.prompts[0]).toContain("1-3");
+    expect(llm.prompts[0]).toContain("首次对话");
+    expect(llm.prompts[0]).toContain("最多追问一个");
+    expect(llm.prompts[0]).toContain("不得向用户展示");
+  });
+
+  it("asks the Agent to infer dialogue stage, intent, emotion, and next step from full context", async () => {
+    const output = JSON.stringify({
+      action: "recommend",
+      emotion: "uncertain",
+      emotion_score: 4,
+      engagement: "uncertain",
+      dialogue_stage: "exploring",
+      next_step: "offer_generation",
+      response_mode: "choices",
+      reply: "没关系，我先给你几个容易选的方向。",
+      choice_options: [
+        { name: "海边放松", highlights: "慢节奏亲子玩水", suggested_days: "4天" },
+        { name: "雨林探索", highlights: "自然体验与轻徒步", suggested_days: "4天" },
+      ],
+    });
+    const { runtime, llm } = makeRuntime([[output]]);
+
+    await post(runtime.app, "/api/trip/parse", {
+      text: "我也没什么思路，你看着推荐吧",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [
+        { role: "user", content: "想带孩子出去玩几天，但还没想好去哪" },
+        { role: "assistant", content: "更喜欢海边还是山里？" },
+      ],
+    });
+
+    expect(llm.prompts[0]).toContain("dialogue_stage");
+    expect(llm.prompts[0]).toContain("next_step");
+    expect(llm.prompts[0]).toContain("结合完整对话语义");
+    expect(llm.prompts[0]).toContain("一句话可能同时包含");
+    expect(llm.prompts[0]).not.toContain("consecutive_low_engagement_turns");
+  });
+
+  it("lets the Agent advance from a recommendation to a ready draft without another choice loop", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "neutral",
+      emotion_score: 5,
+      engagement: "disengaging",
+      dialogue_stage: "decision_fatigue",
+      next_step: "offer_generation",
+      response_mode: "support",
+      reply: "好，我替你收住选择，也会避开让孩子太累的安排。轻松的海边亲子路线已经整理好，要现在生成游玩计划吗？",
+      cities: [{ city: "三亚", days: 4 }],
+      start_date: "2026-08-25",
+      transportation: "公共交通",
+      accommodation: "亲子酒店",
+      traveler_count: 2,
+      room_count: 1,
+      preferences: ["自然风光", "亲子", "轻松"],
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "我没心思继续挑了，不过孩子不能玩太累",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [
+        { role: "user", content: "带孩子去三亚玩4天" },
+        { role: "assistant", content: "我推荐海边放松、雨林探索和经典景点三种方向。" },
+      ],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result).toEqual(expect.objectContaining({
+      action: "plan",
+      next_step: "offer_generation",
+      auto_generate: false,
+      ready_to_generate: true,
+      trip: expect.objectContaining({
+        city: "三亚",
+        preferences: ["自然风光", "亲子", "轻松"],
+      }),
+    }));
+    expect(result.reply).toContain("孩子太累");
+    expect(result.reply).not.toContain("| 方案 |");
+  });
+
+  it("issues a one-time execution token when the Agent confidently chooses direct generation", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "frustrated",
+      emotion_score: 7,
+      engagement: "disengaging",
+      dialogue_stage: "decision_fatigue",
+      next_step: "generate_now",
+      next_step_confidence: 0.93,
+      response_mode: "support",
+      reply: "明白，我不再让你做选择，按刚才推荐的轻松路线直接生成。",
+      cities: [{ city: "三亚", days: 4 }],
+      start_date: "2026-08-25",
+      transportation: "公共交通",
+      accommodation: "亲子酒店",
+      traveler_count: 2,
+      room_count: 1,
+      preferences: ["自然风光", "亲子", "轻松"],
+      ready_to_generate: true,
+    });
+    const { runtime, ledger } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "别再让我选了，孩子不能太累，其他你安排",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [
+        { role: "user", content: "带孩子去三亚玩4天" },
+        { role: "assistant", content: "我已经推荐了三个适合亲子的方向。" },
+      ],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.auto_generate).toBeTrue();
+    expect(result.execution_token).not.toBe("");
+    expect(ledger.validate(result.execution_token, { ...result.trip, language: "zh-CN" }).valid).toBeTrue();
+  });
+
+  it("downgrades an uncertain direct-generation decision to an explicit offer", async () => {
+    const output = JSON.stringify({
+      action: "plan",
+      emotion: "uncertain",
+      engagement: "disengaging",
+      dialogue_stage: "decision_fatigue",
+      next_step: "generate_now",
+      next_step_confidence: 0.68,
+      response_mode: "support",
+      reply: "我先替你选好轻松路线，你确认后就可以生成。",
+      cities: [{ city: "三亚", days: 4 }],
+      start_date: "2026-08-25",
+      preferences: ["亲子", "轻松"],
+      ready_to_generate: true,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "我有点拿不准，先帮我看看",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [{ role: "assistant", content: "我推荐了三个亲子方向。" }],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.next_step).toBe("offer_generation");
+    expect(result.auto_generate).toBeFalse();
+    expect(result.execution_token).toBe("");
+    expect(result.readiness_token).not.toBe("");
+  });
+
+  it("does not render a follow-up question already contained in the main reply", async () => {
+    const question = "住宿和出行方式，你更倾向哪种？";
+    const output = JSON.stringify({
+      action: "clarify",
+      emotion: "neutral",
+      reply: `带娃去三亚放松几天很合适。${question}`,
+      follow_up_question: question,
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "带娃去三亚海边度假4天",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.follow_up_question).toBe("");
+  });
+
+  it("renders model choice options as one Markdown comparison table", async () => {
+    const output = JSON.stringify({
+      action: "clarify",
+      emotion: "neutral",
+      response_mode: "choices",
+      reply: "序号 方案 特点 建议天数\n1 亚龙湾 热带天堂森林公园 2天\n\n1. 亚龙湾：热带天堂森林公园",
+      choice_options: [
+        { name: "亚龙湾 + 热带天堂森林公园", highlights: "沙滩海水与雨林景观", suggested_days: "2天" },
+        { name: "蜈支洲岛 + 后海村", highlights: "海岛浮潜与渔村赶海", suggested_days: "2天" },
+        { name: "大小洞天 + 南山文化旅游区", highlights: "礁石海岸与椰林", suggested_days: "2天" },
+      ],
+      recommendations: [
+        { destination: "亚龙湾 + 热带天堂森林公园", reason: "沙滩海水与雨林景观", suggested_days: 2 },
+        { destination: "蜈支洲岛 + 后海村", reason: "海岛浮潜与渔村赶海", suggested_days: 2 },
+      ],
+    });
+    const { runtime } = makeRuntime([[output]]);
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "自然风光",
+      language: "zh-CN",
+      today: "2026-08-24",
+      history: [
+        { role: "user", content: "带娃去三亚海边度假4天" },
+        { role: "assistant", content: "你更想看自然风光，还是逛吃和人文？" },
+      ],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.reply).toContain("| 方案 | 特点 | 建议天数 |");
+    expect(result.reply).toContain("| --- | --- | --- |");
+    expect(result.reply.match(/亚龙湾/g)).toHaveLength(1);
+    expect(result.reply).not.toContain("序号 方案 特点");
+    expect(result.follow_up_question).toBe("");
+    expect(result.recommendations).toEqual([]);
   });
 
   it("trims city stays to the 30-day planning limit without breaking their sum", async () => {
@@ -338,6 +577,111 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(events.at(-1)).toBe("done");
   });
 
+  it("reports an unavailable intake model instead of repeating a clarification fallback", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-assistant-unavailable-"));
+    tempDirs.push(dataDir);
+    const runtime = createHttpRuntime({
+      dataDir,
+      assistant: new TripAssistant({
+        llm: new FailingLlm(),
+        ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 23) }),
+      }),
+    });
+    runtimes.push(runtime);
+
+    const response = await post(runtime.app, "/api/trip/parse/stream", {
+      text: "自然风光",
+      language: "zh-CN",
+    });
+    const raw = await response.text();
+    const events = sseEvents(raw);
+    const errors = events.filter((event): event is Record<string, any> => (
+      event !== "done" && event.type === "error"
+    ));
+
+    expect(errors).toEqual([{
+      type: "error",
+      message: "游伴暂时没有连接上，请稍后再试。刚才的消息已经保留。",
+    }]);
+    expect(events.some((event) => event !== "done" && event.type === "final")).toBeFalse();
+    expect(raw).not.toContain("你更想看自然风光");
+  });
+
+  it("reports intake failures in French", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-assistant-unavailable-fr-"));
+    tempDirs.push(dataDir);
+    const runtime = createHttpRuntime({
+      dataDir,
+      assistant: new TripAssistant({
+        llm: new FailingLlm(),
+        ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 31) }),
+      }),
+    });
+    runtimes.push(runtime);
+
+    const response = await post(runtime.app, "/api/trip/parse/stream", {
+      text: "Je cherche un voyage nature et économique",
+      language: "fr-FR",
+    });
+    const events = sseEvents(await response.text());
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: "YouBan n'a pas pu se connecter. Réessayez dans un instant ; votre message a bien été conservé.",
+    });
+    expect(events.some((event) => event !== "done" && event.type === "final")).toBeFalse();
+  });
+
+  it("falls an unsupported persisted locale back to Chinese", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-assistant-unsupported-locale-"));
+    tempDirs.push(dataDir);
+    const runtime = createHttpRuntime({
+      dataDir,
+      assistant: new TripAssistant({
+        llm: new FailingLlm(),
+        ledger: new ConfirmationLedger({ secret: Buffer.alloc(32, 32) }),
+      }),
+    });
+    runtimes.push(runtime);
+
+    const response = await post(runtime.app, "/api/trip/parse/stream", {
+      text: "继续规划",
+      language: "xx-XX",
+    });
+    const events = sseEvents(await response.text());
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: "游伴暂时没有连接上，请稍后再试。刚才的消息已经保留。",
+    });
+  });
+
+  it("requests French output and renders French comparison tables", async () => {
+    const output = JSON.stringify({
+      action: "recommend",
+      emotion: "neutral",
+      next_step: "recommend",
+      response_mode: "choices",
+      reply: "Je vous propose trois destinations.",
+      choice_options: [
+        { name: "Annecy", highlights: "Lac et montagne", suggested_days: "3 jours" },
+        { name: "Auvergne", highlights: "Volcans et randonnée", suggested_days: "4 jours" },
+      ],
+    });
+    const { runtime, llm } = makeRuntime([[output]]);
+
+    const response = await post(runtime.app, "/api/trip/parse", {
+      text: "Je voudrais des idées nature",
+      language: "fr-FR",
+      history: [],
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(llm.prompts[0]).toContain("回复语言：fr-FR");
+    expect(result.reply).toContain("| Option | Points forts | Durée conseillée |");
+    expect(result.reply).toContain("Répondez avec un numéro");
+  });
+
   it("streams a safe intake summary only from an enabled visibility snapshot", async () => {
     for (const [thinkingVisible, expectedCount] of [[false, 0], [true, 1]] as const) {
       const dataDir = mkdtempSync(join(tmpdir(), `youban-intake-thinking-${thinkingVisible}-`));
@@ -453,6 +797,65 @@ describe("trip parse/confirm HTTP and SSE", () => {
     });
   });
 
+  it("renders requested choices and keeps a ready draft actionable", async () => {
+    const draft = {
+      city: "大理",
+      cities: [
+        { city: "大理", days: 2 },
+        { city: "丽江", days: 3 },
+      ],
+      start_date: "2026-10-01",
+      end_date: "2026-10-05",
+      travel_days: 5,
+      transportation: "公共交通",
+      accommodation: "经济型酒店",
+      traveler_count: 1,
+      room_count: 1,
+      budget_amount: null,
+      budget_basis: "group_total",
+      preferences: ["自然风光", "古城文化"],
+      free_text_input: "国庆去云南大理丽江玩5天",
+      origin_text: "国庆去云南大理丽江玩5天",
+    };
+    const output = JSON.stringify({
+      action: "chat",
+      confidence: 0.91,
+      message: "我给你两个方向参考。",
+      response_mode: "choices",
+      choice_options: [
+        { name: "苍山 + 洱海", highlights: "自然风光，适合大理段", suggested_days: "2天" },
+        { name: "玉龙雪山 + 蓝月谷", highlights: "高山景观，适合丽江段", suggested_days: "1天" },
+      ],
+      next_step: "recommend",
+    });
+    const { runtime, ledger, llm } = makeRuntime([[output]]);
+    const readinessToken = ledger.attestReady({ ...draft, language: "zh-CN" });
+
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "一个给两个景点我参考吧",
+      draft,
+      language: "zh-CN",
+      today: "2026-08-25",
+      history: [{ role: "assistant", content: "我先按聊到的信息整理了一份路线初稿。" }],
+      readiness_token: readinessToken,
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result).toEqual(expect.objectContaining({
+      action: "chat",
+      next_step: "offer_generation",
+      ready_to_generate: true,
+      readiness_token: readinessToken,
+      execution_token: "",
+    }));
+    expect(result.message).toContain("| 方案 | 特点 | 建议天数 |");
+    expect(result.message).toContain("苍山 + 洱海");
+    expect(result.message).toContain("玉龙雪山 + 蓝月谷");
+    expect(result.message).toContain("生成详细行程吗");
+    expect(llm.prompts[0]).toContain("choice_options");
+    expect(llm.prompts[0]).toContain("next_step");
+  });
+
   it("downgrades low-confidence confirm to ask_confirmation without a token", async () => {
     const output = JSON.stringify({ action: "confirm", confidence: 0.5, message: "开始吧" });
     const { runtime } = makeRuntime([[output]]);
@@ -470,15 +873,118 @@ describe("trip parse/confirm HTTP and SSE", () => {
     }));
   });
 
+  it("applies a structured traveler patch without resetting the rest of the draft", async () => {
+    const originalDraft = {
+      city: "乌鲁木齐",
+      cities: [
+        { city: "乌鲁木齐", days: 3 },
+        { city: "喀纳斯", days: 4 },
+        { city: "赛里木湖", days: 3 },
+        { city: "伊宁", days: 3 },
+        { city: "那拉提", days: 2 },
+        { city: "巴音布鲁克", days: 2 },
+        { city: "库车", days: 2 },
+        { city: "喀什", days: 3 },
+        { city: "塔什库尔干", days: 2 },
+        { city: "和田", days: 2 },
+        { city: "库尔勒", days: 2 },
+        { city: "吐鲁番", days: 2 },
+      ],
+      start_date: "2026-08-26",
+      end_date: "2026-09-24",
+      travel_days: 30,
+      transportation: "自驾",
+      accommodation: "经济型酒店与民宿结合",
+      traveler_count: 1,
+      room_count: 1,
+      preferences: ["自然风光", "自驾", "南疆北疆环线"],
+    };
+    const output = JSON.stringify({
+      action: "update",
+      confidence: 0.97,
+      message: "好的，两个人一起自驾新疆，住宿和费用也可以分摊。",
+      draft_patch: { traveler_count: 2 },
+      ready_to_generate: true,
+      next_step: "offer_generation",
+    });
+    const { runtime, ledger, llm } = makeRuntime([[output]]);
+    const readinessToken = ledger.attestReady({ ...originalDraft, language: "zh-CN" });
+
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "两个人",
+      draft: originalDraft,
+      language: "zh-CN",
+      today: "2026-08-25",
+      readiness_token: readinessToken,
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result).toEqual(expect.objectContaining({
+      action: "update",
+      next_step: "offer_generation",
+      trip: expect.objectContaining({
+        traveler_count: 2,
+        room_count: 1,
+        travel_days: 30,
+        start_date: "2026-08-26",
+        end_date: "2026-09-24",
+      }),
+    }));
+    expect(result.trip.cities).toEqual(originalDraft.cities);
+    expect(result.readiness_token).not.toBe("");
+    expect(result.readiness_token).not.toBe(readinessToken);
+    expect(llm.prompts[0]).toContain("draft_patch");
+  });
+
+  it("rejects a narrative-only update instead of presenting an unchanged draft as updated", async () => {
+    const originalDraft = {
+      city: "乌鲁木齐",
+      cities: [{ city: "乌鲁木齐", days: 3 }],
+      start_date: "2026-08-26",
+      end_date: "2026-08-28",
+      travel_days: 3,
+      traveler_count: 1,
+      room_count: 1,
+    };
+    const output = JSON.stringify({
+      action: "update",
+      confidence: 0.97,
+      message: "已经改成两个人了。",
+      draft_patch: {},
+      ready_to_generate: true,
+      next_step: "offer_generation",
+    });
+    const { runtime, ledger } = makeRuntime([[output]]);
+    const readinessToken = ledger.attestReady({ ...originalDraft, language: "zh-CN" });
+
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "两个人",
+      draft: originalDraft,
+      language: "zh-CN",
+      today: "2026-08-25",
+      readiness_token: readinessToken,
+    });
+    const result = await response.json() as Record<string, any>;
+
+    expect(result.action).toBe("chat");
+    expect(result.next_step).toBe("ask");
+    expect(result.message).toContain("没有成功写入草稿");
+    expect(result.message).not.toContain("已经改成两个人");
+    expect(result.trip).toBeNull();
+    expect(result.readiness_token).toBe(readinessToken);
+  });
+
   it("keeps an updated draft conversational while required details are still missing", async () => {
     const output = JSON.stringify({
       action: "update",
       confidence: 0.92,
       message: "三天记下了。你大概什么时候出发？",
-      cities: [{ city: "北京", days: 3 }],
-      traveler_count: 1,
+      draft_patch: {
+        cities: [{ city: "北京", days: 3 }],
+        traveler_count: 1,
+        inferred_fields: ["dates", "transportation", "accommodation"],
+      },
       ready_to_generate: false,
-      inferred_fields: ["dates", "transportation", "accommodation"],
     });
     const { runtime } = makeRuntime([[output]]);
     const response = await post(runtime.app, "/api/trip/confirm-reply", {
@@ -502,15 +1008,17 @@ describe("trip parse/confirm HTTP and SSE", () => {
       action: "update",
       confidence: 0.96,
       message: "信息齐了，我先给你一份路线初稿。",
-      cities: [{ city: "北京", days: 3 }],
-      start_date: "2026-10-01",
-      transportation: "公共交通",
-      accommodation: "舒适型酒店",
-      traveler_count: 2,
-      room_count: 1,
-      preferences: ["历史文化"],
+      draft_patch: {
+        cities: [{ city: "北京", days: 3 }],
+        start_date: "2026-10-01",
+        transportation: "公共交通",
+        accommodation: "舒适型酒店",
+        traveler_count: 2,
+        room_count: 1,
+        preferences: ["历史文化"],
+        inferred_fields: [],
+      },
       ready_to_generate: true,
-      inferred_fields: [],
     });
     const { runtime } = makeRuntime([[output]]);
     const response = await post(runtime.app, "/api/trip/confirm-reply", {
@@ -534,7 +1042,85 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(result.readiness_token).not.toBe("");
   });
 
-  it("honors an explicit execution command even when the model asks for confirmation again", async () => {
+  it("keeps duration updates consistent and lets the Agent finish the revised draft", async () => {
+    const originalDraft = {
+      city: "大理",
+      cities: [
+        { city: "大理", days: 2 },
+        { city: "丽江", days: 3 },
+      ],
+      start_date: "2026-10-01",
+      end_date: "2026-10-05",
+      travel_days: 5,
+      transportation: "公共交通",
+      accommodation: "经济型酒店",
+      traveler_count: 1,
+      room_count: 1,
+      preferences: ["自然风光", "古城文化"],
+    };
+    const { runtime, ledger } = makeRuntime([
+      [JSON.stringify({
+        action: "update",
+        confidence: 0.97,
+        message: "已经调整为 7 天。要按这份草稿生成详细行程吗？",
+        draft_patch: { travel_days: 7 },
+        next_step: "offer_generation",
+      })],
+      [JSON.stringify({
+        action: "confirm",
+        confidence: 0.94,
+        message: "好，我按刚刚调整好的 7 天方案生成。",
+        next_step: "generate_now",
+        next_step_confidence: 0.94,
+      })],
+    ]);
+    const originalToken = ledger.attestReady({ ...originalDraft, language: "zh-CN" });
+
+    const updatedResponse = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "行程增加到7天",
+      draft: originalDraft,
+      language: "zh-CN",
+      today: "2026-08-25",
+      history: [{ role: "assistant", content: "我先按聊到的信息整理了一份 5 天路线初稿。" }],
+      readiness_token: originalToken,
+    });
+    const updated = await updatedResponse.json() as Record<string, any>;
+
+    expect(updated).toEqual(expect.objectContaining({
+      action: "update",
+      next_step: "offer_generation",
+      ready_to_generate: true,
+      execution_token: "",
+      trip: expect.objectContaining({
+        travel_days: 7,
+        end_date: "2026-10-07",
+      }),
+    }));
+    expect(updated.trip.cities.reduce((sum: number, city: { days: number }) => sum + city.days, 0)).toBe(7);
+    expect(updated.readiness_token).not.toBe("");
+    expect(updated.readiness_token).not.toBe(originalToken);
+
+    const confirmedResponse = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "这几天看着够了，后面直接安排吧",
+      draft: updated.trip,
+      language: "zh-CN",
+      today: "2026-08-25",
+      history: [
+        { role: "user", content: "行程增加到7天" },
+        { role: "assistant", content: updated.message },
+      ],
+      readiness_token: updated.readiness_token,
+    });
+    const confirmed = await confirmedResponse.json() as Record<string, any>;
+
+    expect(confirmed.action).toBe("confirm");
+    expect(confirmed.next_step).toBe("generate_now");
+    expect(confirmed.trip.travel_days).toBe(7);
+    expect(confirmed.execution_token).not.toBe("");
+    expect(ledger.validate(confirmed.execution_token, { ...updated.trip, language: "zh-CN" }).valid).toBeTrue();
+  });
+
+  it("honors a high-confidence Agent execution decision for a ready draft", async () => {
     const draft = {
       city: "乌鲁木齐",
       cities: [{ city: "乌鲁木齐", days: 3 }],
@@ -543,9 +1129,11 @@ describe("trip parse/confirm HTTP and SSE", () => {
       travel_days: 3,
     };
     const output = JSON.stringify({
-      action: "ask_confirmation",
-      confidence: 0.2,
-      message: "还需要确认吗？",
+      action: "confirm",
+      confidence: 0.96,
+      message: "好，我现在按这份草稿生成。",
+      next_step: "generate_now",
+      next_step_confidence: 0.96,
     });
     const { runtime, ledger } = makeRuntime([[output]]);
     const readinessToken = ledger.attestReady({ ...draft, language: "zh-CN" });
@@ -558,7 +1146,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
     const result = await response.json() as Record<string, any>;
 
     expect(result.action).toBe("confirm");
-    expect(result.confidence).toBe(1);
+    expect(result.confidence).toBe(0.96);
     expect(result.execution_token).not.toBe("");
     expect(ledger.validate(result.execution_token, { ...draft, language: "zh-CN" }).valid).toBeTrue();
   });
@@ -603,7 +1191,13 @@ describe("trip parse/confirm HTTP and SSE", () => {
         confidence: 0.96,
         message: "草稿完整，可以开始生成。",
       })],
-      [JSON.stringify({ action: "ask_confirmation", confidence: 0.2, message: "再确认一次？" })],
+      [JSON.stringify({
+        action: "confirm",
+        confidence: 0.95,
+        message: "好，我现在开始生成。",
+        next_step: "generate_now",
+        next_step_confidence: 0.95,
+      })],
     ]);
 
     const refreshed = await post(runtime.app, "/api/trip/confirm-reply", {
@@ -634,7 +1228,7 @@ describe("trip parse/confirm HTTP and SSE", () => {
     expect(confirmedResult.execution_token).not.toBe("");
   });
 
-  it("accepts visible Chinese and English authorization commands for an attested draft", async () => {
+  it("does not override the Agent decision with a local authorization phrase list", async () => {
     const draft = {
       city: "北京",
       cities: [{ city: "北京", days: 3 }],
@@ -642,31 +1236,25 @@ describe("trip parse/confirm HTTP and SSE", () => {
       end_date: "2026-10-03",
       travel_days: 3,
     };
+    const output = JSON.stringify({
+      action: "chat",
+      confidence: 0.91,
+      message: "我先回答你刚才的问题，再由你决定是否生成。",
+      next_step: "offer_generation",
+    });
+    const { runtime, ledger } = makeRuntime([[output]]);
+    const readinessToken = ledger.attestReady({ ...draft, language: "zh-CN" });
+    const response = await post(runtime.app, "/api/trip/confirm-reply", {
+      text: "生成详细行程",
+      draft,
+      language: "zh-CN",
+      readiness_token: readinessToken,
+    });
+    const result = await response.json() as Record<string, any>;
 
-    for (const [text, language] of [
-      ["生成详细行程", "zh-CN"],
-      ["Generate detailed itinerary", "en-US"],
-      ["confirm", "en-US"],
-    ] as const) {
-      const output = JSON.stringify({
-        action: "ask_confirmation",
-        confidence: 0.2,
-        message: "需要确认吗？",
-      });
-      const { runtime, ledger } = makeRuntime([[output]]);
-      const readinessToken = ledger.attestReady({ ...draft, language });
-      const response = await post(runtime.app, "/api/trip/confirm-reply", {
-        text,
-        draft,
-        language,
-        readiness_token: readinessToken,
-      });
-      const result = await response.json() as Record<string, any>;
-
-      expect(result.action).toBe("confirm");
-      expect(result.execution_token).not.toBe("");
-      expect(ledger.validate(result.execution_token, { ...draft, language }).valid).toBeTrue();
-    }
+    expect(result.action).toBe("chat");
+    expect(result.next_step).toBe("offer_generation");
+    expect(result.execution_token).toBe("");
   });
 
   it("never treats a negated confirmation phrase as explicit authorization", async () => {
@@ -727,6 +1315,10 @@ describe("trip parse/confirm HTTP and SSE", () => {
     ]);
     expect(llm.calls.every((call) => call.options.systemPrompt.length < 500)).toBeTrue();
     expect(llm.calls.every((call) => call.options.thinkingEnabled === true)).toBeTrue();
+    expect(llm.calls[0]?.prompt).toContain("首次对话先亲切承接");
+    expect(llm.calls[0]?.prompt).toContain('输出必须以 {"reply":" 开始');
+    expect(llm.calls[1]?.prompt).toContain("连续低意愿时停止重复确认");
+    expect(llm.calls[1]?.prompt).toContain('输出必须以 {"message":" 开始');
     expect(parent.scopes).toEqual([]);
   });
 });

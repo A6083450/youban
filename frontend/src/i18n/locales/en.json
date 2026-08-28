@@ -109,13 +109,17 @@
     "brand": "YouBan",
     "subBrand": "YouBan · AI Travel Engine",
     "badge": "AI Travel Agent",
+    "navigation": {
+      "home": "Back to Home"
+    },
     "preferences": {
       "label": "Preferences"
     },
     "language": {
       "label": "Language",
       "zh": "中文",
-      "en": "English"
+      "en": "English",
+      "fr": "Français"
     },
     "skin": {
       "label": "Appearance",
@@ -127,12 +131,16 @@
     "footerTech": "Powered by HelloAgents + AMap MCP"
   },
   "login": {
-    "subtitle": "Enter a nickname to start your journey",
-    "placeholder": "Your nickname",
-    "enter": "Let's go",
-    "hint": "No password needed — the same nickname brings back your trips and memories",
-    "welcome": "Welcome back, {name}!",
-    "failed": "Login failed, please try again"
+    "loading": "Creating a sign-in request",
+    "pending": "Confirm sign-in in the YouBan Mini Program",
+    "approved": "WeChat sign-in confirmed",
+    "failed": "This sign-in request has expired",
+    "qrAlt": "WeChat Mini Program sign-in QR code",
+    "avatarAlt": "WeChat avatar",
+    "shortCode": "Short code",
+    "refresh": "Refresh QR code",
+    "welcome": "Welcome, {name}",
+    "avatarHint": "The Web app uses the WeChat avatar you selected when signing in to the Mini Program"
   },
   "user": {
     "myMemories": "My memories",
@@ -608,7 +616,11 @@
       "journeyTitle": "{days}-Day {cities}",
       "journeyEnd": "Journey Complete",
       "journeyStart": "Start",
-      "highlights": "Trip Highlights"
+      "highlights": "Trip Highlights",
+      "previousJourney": "Previous journey segment",
+      "nextJourney": "Next journey segment",
+      "previousHighlight": "Previous highlights",
+      "nextHighlight": "Next highlights"
     },
     "daily": {
       "daySelector": "Choose a day",
@@ -740,7 +752,9 @@
       "enteredPerPerson": "Entered per person",
       "enteredGroupTotal": "Entered as group total",
       "amap": "Amap",
+      "fliggy": "Fliggy",
       "sourceChecked": "{provider} · checked {date}",
+      "priceProviderCheckedWithEntity": "Reference price: {provider}, checked {date} · Hotel information: {entity}",
       "userPrice": "Amount entered by user",
       "userPriceWithSource": "Amount entered by user · hotel source {provider}",
       "addAttraction": "Add itinerary attraction",
@@ -765,7 +779,10 @@
     "hotelTitle": "Hotel Recommendation",
     "hotelVerifiedByAmap": "Verified by AMap",
     "hotelReferencePrice": "Reference price {price}/room-night",
-    "hotelPriceUnavailable": "Live price unavailable",
+    "hotelPriceUnavailable": "Hotel quote not currently available",
+    "hotelFliggyReferencePrice": "Fliggy reference ¥{price}/night",
+    "hotelFliggyView": "View on Fliggy",
+    "hotelFliggyDisclaimer": "Room type, taxes, availability, and cancellation terms are subject to the Fliggy page",
     "mealsTitle": "Meal Plan",
     "weatherTitle": "Weather Information",
     "weatherNight": "Night",

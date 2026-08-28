@@ -2,6 +2,7 @@ interface SmokeOptions {
   baseUrl: string;
   healthOnly: boolean;
   timeoutMs: number;
+  bearerToken: string;
 }
 
 interface StepResult {
@@ -44,6 +45,9 @@ function optionsFromArgv(argv: string[]): SmokeOptions {
     baseUrl: baseUrl.replace(/\/+$/, ""),
     healthOnly: argv.includes("--health-only"),
     timeoutMs: Number.isFinite(rawTimeout) ? Math.max(5_000, rawTimeout) : 180_000,
+    bearerToken: argv.find((arg) => arg.startsWith("--bearer-token="))?.slice("--bearer-token=".length)
+      ?? process.env.YOUBAN_SMOKE_BEARER_TOKEN
+      ?? "",
   };
 }
 
@@ -51,11 +55,10 @@ async function jsonRequest(
   options: SmokeOptions,
   path: string,
   init: RequestInit = {},
-  userId = "",
 ): Promise<Record<string, any>> {
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
-  if (userId) headers.set("x-user-id", userId);
+  if (options.bearerToken) headers.set("authorization", `Bearer ${options.bearerToken}`);
   const response = await fetch(`${options.baseUrl}${path}`, {
     ...init,
     headers,
@@ -72,12 +75,11 @@ async function timed(results: StepResult[], step: string, run: () => Promise<voi
   results.push({ step, elapsed_ms: Math.round(performance.now() - started) });
 }
 
-function waitForTerminal(options: SmokeOptions, wsPath: string, userId: string): Promise<Record<string, any>> {
+function waitForTerminal(options: SmokeOptions, wsPath: string): Promise<Record<string, any>> {
   const url = new URL(wsPath, `${options.baseUrl}/`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("user_id", userId);
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${options.bearerToken}` } });
     const timer = setTimeout(() => {
       socket.close();
       reject(new Error(`WebSocket did not reach a terminal state within ${options.timeoutMs}ms`));
@@ -110,15 +112,11 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
     if (health.status !== "healthy") throw new Error(`unexpected health payload: ${JSON.stringify(health)}`);
   });
   if (options.healthOnly) return { results };
+  if (!options.bearerToken) throw new Error("full smoke requires --bearer-token or YOUBAN_SMOKE_BEARER_TOKEN");
 
-  let userId = "";
-  await timed(results, "login", async () => {
-    const login = await jsonRequest(options, "/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ nickname: `smoke-${Date.now().toString(36)}` }),
-    });
-    userId = String(login.user?.user_id ?? "");
-    if (!userId) throw new Error("login did not return user_id");
+  await timed(results, "session", async () => {
+    const me = await jsonRequest(options, "/api/auth/me");
+    if (!me.user?.user_id) throw new Error("session did not resolve a user");
   });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -127,7 +125,7 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
     draft = await resolveSmokeDraft((text, history) => jsonRequest(options, "/api/trip/parse", {
       method: "POST",
       body: JSON.stringify({ text, language: "zh-CN", today, history }),
-    }, userId));
+    }));
   });
 
   let token = "";
@@ -135,7 +133,7 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
     const confirmed = await jsonRequest(options, "/api/trip/confirm-reply", {
       method: "POST",
       body: JSON.stringify({ text: "确认，立即按这个方案生成", draft, language: "zh-CN", today, history: [] }),
-    }, userId);
+    });
     token = String(confirmed.execution_token ?? "");
     if (confirmed.action !== "confirm" || !token) {
       throw new Error(`confirmation was not authorized: ${JSON.stringify(confirmed)}`);
@@ -154,20 +152,20 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
         conversation: [{ role: "user", content: "明天去广州玩一天" }],
         execution_token: token,
       }),
-    }, userId);
+    });
     planId = String(accepted.plan_id ?? accepted.task_id ?? "");
     wsPath = String(accepted.ws_url ?? "");
     if (!planId || !wsPath) throw new Error(`plan was not accepted: ${JSON.stringify(accepted)}`);
   });
 
   await timed(results, "websocket", async () => {
-    const terminal = await waitForTerminal(options, wsPath, userId);
+    const terminal = await waitForTerminal(options, wsPath);
     if (!terminal.result?.success) throw new Error(`terminal frame has no successful result: ${JSON.stringify(terminal)}`);
   });
 
   let shareCode = "";
   await timed(results, "share", async () => {
-    const shared = await jsonRequest(options, `/api/trip/share/${encodeURIComponent(planId)}`, { method: "POST" }, userId);
+    const shared = await jsonRequest(options, `/api/trip/share/${encodeURIComponent(planId)}`, { method: "POST" });
     shareCode = String(shared.share_code ?? "");
     if (!/^[a-f0-9]{32}$/.test(shareCode)) throw new Error("share code is invalid");
     const publicPlan = await jsonRequest(options, `/api/trip/share/${shareCode}`);
@@ -175,7 +173,7 @@ export async function runDeploymentSmoke(options: SmokeOptions): Promise<{ resul
   });
 
   await timed(results, "budget", async () => {
-    const budget = await jsonRequest(options, `/api/trip/plan/${encodeURIComponent(planId)}/budget-items`, {}, userId);
+    const budget = await jsonRequest(options, `/api/trip/plan/${encodeURIComponent(planId)}/budget-items`);
     if (!Array.isArray(budget.items) || typeof budget.totals?.total !== "number") {
       throw new Error(`budget payload is invalid: ${JSON.stringify(budget)}`);
     }

@@ -61,7 +61,15 @@ function addDays(startDate: string, offset: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function genericMeals(): DayPlan["meals"] {
+function genericMeals(language: unknown): DayPlan["meals"] {
+  const code = String(language ?? "zh").toLocaleLowerCase("und");
+  if (code.startsWith("fr")) {
+    return [
+      { type: "breakfast", name: "Petit-déjeuner local (à choisir selon les horaires d'ouverture)" },
+      { type: "lunch", name: "Déjeuner local (à choisir selon les horaires d'ouverture)" },
+      { type: "dinner", name: "Dîner local (à choisir selon les horaires d'ouverture)" },
+    ];
+  }
   return [
     { type: "breakfast", name: "当地早餐（请按实际营业情况选择）" },
     { type: "lunch", name: "当地午餐（请按实际营业情况选择）" },
@@ -72,8 +80,16 @@ function genericMeals(): DayPlan["meals"] {
 function genericSuggestion(request: TripPlanningRequest): string {
   const language = String(request.language ?? "zh").toLocaleLowerCase("und");
   if (language.startsWith("en")) return "Confirm opening hours, transport, and reservations before departure.";
-  if (language.startsWith("ja")) return "出発前に営業時間、交通、予約状況を確認してください。";
+  if (language.startsWith("fr")) return "Vérifiez les horaires d'ouverture, les transports et les réservations avant le départ.";
   return "出发前请确认开放时间、交通和预约情况。";
+}
+
+function genericDescription(request: TripPlanningRequest, city: string, dayIndex: number): string {
+  const language = String(request.language ?? "zh").toLocaleLowerCase("und");
+  if (language.startsWith("fr")) {
+    return `Jour ${dayIndex + 1} à ${city} : proposition locale à adapter aux horaires d'ouverture réels.`;
+  }
+  return `第${dayIndex + 1}天在${city}的本地行程建议，请以实际开放时间为准。`;
 }
 
 function summarySuggestion(summary: unknown, request: TripPlanningRequest): string {
@@ -104,12 +120,12 @@ export function buildFastTripPlan(
         date: addDays(request.start_date, dayIndex),
         day_index: dayIndex,
         city: stay.city,
-        description: `第${dayIndex + 1}天在${stay.city}的本地行程建议，请以实际开放时间为准。`,
+        description: genericDescription(request, stay.city, dayIndex),
         transportation: request.transportation,
         accommodation: request.accommodation,
         hotel: null,
         attractions: attraction ? [structuredClone(attraction)] : [],
-        meals: genericMeals(),
+        meals: genericMeals(request.language),
       });
       dayIndex += 1;
     }

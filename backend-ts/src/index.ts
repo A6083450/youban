@@ -2,15 +2,41 @@ import { join } from "node:path";
 import { getDataDir, getRepoRoot } from "./config/paths.ts";
 import { getSettings, validateConfig } from "./config/settings.ts";
 import { createHttpRuntime } from "./http/app.ts";
+import { WechatCodeExchange } from "./services/wechat-code-exchange.ts";
 import {
   installMemoryPressureHandler,
   listenProductionHttpServer,
   shutdownServer,
 } from "./runtime/server-lifecycle.ts";
 
+function runtimeAuthentication() {
+  const developmentMode = process.env.YOUBAN_DEV_WECHAT_AUTH?.trim() === "1";
+  if (developmentMode) {
+    if (process.env.NODE_ENV?.trim() === "production") {
+      throw new Error("YOUBAN_DEV_WECHAT_AUTH cannot be enabled in production");
+    }
+    return {
+      pepper: process.env.AUTH_PEPPER?.trim() || "youban-local-development-only-auth-pepper-v1",
+      exchangeWechatCode: async () => "youban-local-wechat-user",
+    };
+  }
+  const appSecret = process.env.WECHAT_APP_SECRET?.trim() ?? "";
+  const pepper = process.env.AUTH_PEPPER?.trim() ?? "";
+  if (!appSecret) throw new Error("WECHAT_APP_SECRET is required");
+  if (Buffer.byteLength(pepper, "utf8") < 32) {
+    throw new Error("AUTH_PEPPER must contain at least 32 bytes");
+  }
+  const exchange = new WechatCodeExchange({
+    appId: process.env.WECHAT_APP_ID?.trim() || "wx42ddc076b365bf0d",
+    appSecret,
+  });
+  return { pepper, exchangeWechatCode: (code: string) => exchange.exchange(code) };
+}
+
 export const runtime = createHttpRuntime({
   dataDir: getDataDir(),
   frontendDist: join(getRepoRoot(), "frontend", "dist"),
+  authentication: runtimeAuthentication(),
 });
 export const app = runtime.app;
 

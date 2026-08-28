@@ -177,4 +177,34 @@ describe("deterministic fast trip plan", () => {
       total: 0,
     });
   });
+
+  it("localizes deterministic fallback content in French", () => {
+    const frenchRequest = request([{ city: "Paris", days: 1 }], "2026-09-01");
+    frenchRequest.language = "fr-FR";
+    frenchRequest.transportation = "Transports en commun";
+    frenchRequest.accommodation = "Hôtel confortable";
+    const plan = dataFor(frenchRequest, emptyCheckpoint());
+
+    expect(plan.days[0]?.description).toBe(
+      "Jour 1 à Paris : proposition locale à adapter aux horaires d'ouverture réels.",
+    );
+    expect(plan.days[0]?.meals.map((meal: { name: string }) => meal.name)).toEqual([
+      "Petit-déjeuner local (à choisir selon les horaires d'ouverture)",
+      "Déjeuner local (à choisir selon les horaires d'ouverture)",
+      "Dîner local (à choisir selon les horaires d'ouverture)",
+    ]);
+    expect((plan as Record<string, any>).overall_suggestions).toBe(
+      "Vérifiez les horaires d'ouverture, les transports et les réservations avant le départ.",
+    );
+  });
+
+  it("falls an unsupported persisted locale back to Chinese", () => {
+    const legacyRequest = request([{ city: "北京", days: 1 }], "2026-09-01");
+    legacyRequest.language = "xx-XX";
+    const plan = dataFor(legacyRequest, emptyCheckpoint());
+
+    expect((plan as Record<string, any>).overall_suggestions).toBe(
+      "出发前请确认开放时间、交通和预约情况。",
+    );
+  });
 });

@@ -1,8 +1,8 @@
-# Python 242-Test Disposition
+# Python 243-Test Disposition
 
 > 由 `bun run scripts/generate-python-test-disposition.ts` 生成。不要手工编辑。
 
-基线：242/242 已处置；`port=121`，`replace=105`，`retire=16`。
+基线：243/243 已处置；`port=122`，`replace=105`，`retire=16`。
 
 - `port`：业务行为与契约直接迁入 TypeScript 测试。
 - `replace`：旧实现被新架构替代，等价风险由所列 TS 测试承担。
@@ -19,19 +19,19 @@
 | 7 | `app/agents/langgraph_planner_test.py:294::test_completed_segment_with_wrong_date_is_regenerated` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
 | 8 | `app/agents/langgraph_planner_test.py:309::test_memory_context_is_injected_into_segment_prompt` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
 | 9 | `app/agents/langgraph_planner_test.py:315::test_english_request_prompts_and_fallback_use_english` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
-| 10 | `app/agents/langgraph_planner_test.py:326::test_japanese_request_prompts_and_fallback_use_japanese` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
-| 11 | `app/agents/langgraph_planner_test.py:334::test_summary_failure_uses_deterministic_fallback` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
-| 12 | `app/agents/langgraph_planner_test.py:347::test_review_failure_still_yields_plan` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
-| 13 | `app/agents/langgraph_planner_test.py:359::test_review_prompt_contains_segment_mapping` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 14 | `app/agents/langgraph_planner_test.py:369::test_review_revises_only_selected_segment_once` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 15 | `app/agents/langgraph_planner_test.py:378::test_resume_after_failed_revision_does_not_review_again` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 16 | `app/agents/langgraph_planner_test.py:400::test_completed_summary_and_review_checkpoint_are_reused` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
-| 17 | `app/agents/langgraph_planner_test.py:416::test_regenerated_segment_invalidates_completed_summary_and_review` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 18 | `app/agents/langgraph_planner_test.py:437::test_invalid_completed_summary_and_review_are_regenerated` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 19 | `app/agents/langgraph_planner_test.py:456::test_multiple_segment_revision_progress_never_decreases` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 20 | `app/agents/langgraph_planner_test.py:463::test_future_returned_by_checkpoint_callback_is_awaited` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 21 | `app/agents/langgraph_planner_test.py:475::test_generic_checkpoint_callback_failure_is_not_retried` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
-| 22 | `app/agents/langgraph_planner_test.py:494::test_checkpoint_callback_failure_propagates` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 10 | `app/agents/langgraph_planner_test.py:326::test_unsupported_persisted_locale_falls_back_to_chinese` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
+| 11 | `app/agents/langgraph_planner_test.py:333::test_summary_failure_uses_deterministic_fallback` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
+| 12 | `app/agents/langgraph_planner_test.py:346::test_review_failure_still_yields_plan` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
+| 13 | `app/agents/langgraph_planner_test.py:358::test_review_prompt_contains_segment_mapping` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 14 | `app/agents/langgraph_planner_test.py:368::test_review_revises_only_selected_segment_once` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 15 | `app/agents/langgraph_planner_test.py:377::test_resume_after_failed_revision_does_not_review_again` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 16 | `app/agents/langgraph_planner_test.py:399::test_completed_summary_and_review_checkpoint_are_reused` | `replace` | tests/pi-trip-planner.test.ts, tests/orchestrator.test.ts | 有业务价值的并发、恢复、校验或降级语义由无图 Pi 编排器覆盖 |
+| 17 | `app/agents/langgraph_planner_test.py:415::test_regenerated_segment_invalidates_completed_summary_and_review` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 18 | `app/agents/langgraph_planner_test.py:436::test_invalid_completed_summary_and_review_are_regenerated` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 19 | `app/agents/langgraph_planner_test.py:455::test_multiple_segment_revision_progress_never_decreases` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 20 | `app/agents/langgraph_planner_test.py:462::test_future_returned_by_checkpoint_callback_is_awaited` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 21 | `app/agents/langgraph_planner_test.py:474::test_generic_checkpoint_callback_failure_is_not_retried` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
+| 22 | `app/agents/langgraph_planner_test.py:493::test_checkpoint_callback_failure_propagates` | `retire` | - | LangGraph callback/revision-loop implementation no longer exists |
 | 23 | `app/agents/plan_parser_test.py:30::test_parse_valid_fenced_json` | `port` | tests/plan-parser.test.ts | JSON 修复链由 TS 纯函数逐类覆盖 |
 | 24 | `app/agents/plan_parser_test.py:35::test_sanitize_strips_arithmetic_expressions` | `port` | tests/plan-parser.test.ts | JSON 修复链由 TS 纯函数逐类覆盖 |
 | 25 | `app/agents/plan_parser_test.py:39::test_remove_trailing_commas` | `port` | tests/plan-parser.test.ts | JSON 修复链由 TS 纯函数逐类覆盖 |
@@ -127,7 +127,7 @@
 | 115 | `app/api/routes/trip_confirmation_endpoint_test.py:380::test_update_recalculates_end_date_when_new_duration_omits_it` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
 | 116 | `app/api/routes/trip_confirmation_endpoint_test.py:400::test_update_explicit_empty_lists_clear_existing_values` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
 | 117 | `app/api/routes/trip_confirmation_endpoint_test.py:430::test_update_invalid_list_types_safely_fall_back_to_existing_values` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
-| 118 | `app/api/routes/trip_confirmation_endpoint_test.py:460::test_japanese_fallback_is_natural_japanese` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
+| 118 | `app/api/routes/trip_confirmation_endpoint_test.py:460::test_unsupported_persisted_locale_falls_back_to_chinese` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
 | 119 | `app/api/routes/trip_confirmation_endpoint_test.py:476::test_cancel_preserves_draft_and_never_signs` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
 | 120 | `app/api/routes/trip_confirmation_endpoint_test.py:489::test_model_ask_confirmation_never_signs` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
 | 121 | `app/api/routes/trip_confirmation_endpoint_test.py:502::test_llm_json_error_asks_confirmation_without_signing` | `replace` | tests/trip-assistant-http.test.ts, tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 确认判断、签名与一次性执行被拆到智能体、账本和计划端点测试 |
@@ -208,47 +208,48 @@
 | 196 | `app/services/budget_guard_test.py:44::test_group_budget_limit_supports_per_person_basis` | `port` | tests/budget-guard.test.ts | 预算上限、待报价缓冲和餐饮调整逐例迁移 |
 | 197 | `app/services/budget_guard_test.py:49::test_status_separates_current_overage_from_pending_buffer` | `port` | tests/budget-guard.test.ts | 预算上限、待报价缓冲和餐饮调整逐例迁移 |
 | 198 | `app/services/budget_guard_test.py:67::test_generated_plan_reduces_only_meal_estimates_once` | `port` | tests/budget-guard.test.ts | 预算上限、待报价缓冲和餐饮调整逐例迁移 |
-| 199 | `app/services/budget_ledger_test.py:47::test_two_travelers_one_room_two_nights_is_900_total_and_450_per_person` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
-| 200 | `app/services/budget_ledger_test.py:66::test_three_travelers_default_to_two_rooms` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
-| 201 | `app/services/budget_ledger_test.py:76::test_unavailable_hotel_price_remains_pending` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
-| 202 | `app/services/budget_ledger_test.py:86::test_diy_per_person_input_is_converted_to_group_total` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
-| 203 | `app/services/budget_ledger_test.py:90::test_user_price_override_does_not_restore_provider_formula` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
-| 204 | `app/services/chat_service_test.py:10::test_extracts_first_output_text` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 205 | `app/services/chat_service_test.py:19::test_empty_output_returns_empty_string` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 206 | `app/services/chat_service_test.py:25::test_edit_prompt_allows_blueprint_and_reference_times` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 207 | `app/services/chat_service_test.py:29::test_validated_edit_keeps_updated_blueprint` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 208 | `app/services/chat_service_test.py:40::test_invalid_edited_blueprint_degrades_without_rejecting_days` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 209 | `app/services/chat_service_test.py:51::test_edit_agent_cannot_replace_verified_hotel` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
-| 210 | `app/services/flyai_provider_test.py:47::test_maps_structured_hotel_and_starting_price` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
-| 211 | `app/services/flyai_provider_test.py:93::test_maps_masked_prices_to_auditable_lower_bounds` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
-| 212 | `app/services/flyai_provider_test.py:117::test_rejects_malformed_json` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
-| 213 | `app/services/flyai_provider_test.py:126::test_wraps_timeout_as_provider_error` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
-| 214 | `app/services/flyai_provider_test.py:135::test_reports_missing_cli_without_running_a_shell` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
-| 215 | `app/services/hotel_search_service_test.py:10::test_prefers_flyai_priced_inventory` | `retire` | - | FlyAI 酒店库存与补全链已删除；TS 仅接受高德可信酒店 POI |
-| 216 | `app/services/hotel_search_service_test.py:28::test_falls_back_to_amap_identity_without_price` | `replace` | tests/amap-research-sources.test.ts | 酒店来源统一为高德可信 POI，不推测价格 |
-| 217 | `app/services/hotel_search_service_test.py:51::test_enriches_missing_flyai_location_from_amap` | `retire` | - | FlyAI 酒店库存与补全链已删除；TS 仅接受高德可信酒店 POI |
-| 218 | `app/services/itinerary_scheduler_test.py:37::test_fills_missing_times_and_marks_non_live_sources` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
-| 219 | `app/services/itinerary_scheduler_test.py:53::test_uses_forecast_basis_and_avoids_hot_afternoon_for_first_outdoor_stop` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
-| 220 | `app/services/itinerary_scheduler_test.py:70::test_preserves_existing_user_time_and_only_derives_missing_end` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
-| 221 | `app/services/itinerary_scheduler_test.py:80::test_schedules_missing_meals_around_attractions` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
-| 222 | `app/services/llm_service_test.py:60::test_disable_thinking_stream_uses_responses_reasoning_none` | `replace` | tests/pi-llm-client.test.ts | 旧 OpenAI SDK 封装由 pi-ai provider/stream 适配层替代 |
-| 223 | `app/services/llm_service_test.py:81::test_non_deepseek_stream_omits_deepseek_reasoning_option` | `replace` | tests/pi-llm-client.test.ts | 旧 OpenAI SDK 封装由 pi-ai provider/stream 适配层替代 |
-| 224 | `app/services/memory_service_test.py:12::test_recall_returns_empty_when_memory_unavailable` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
-| 225 | `app/services/memory_service_test.py:16::test_recall_formats_results` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
-| 226 | `app/services/memory_service_test.py:27::test_recall_swallow_exceptions` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
-| 227 | `app/services/memory_service_test.py:33::test_remember_background_noops_without_user` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
-| 228 | `app/services/memory_service_test.py:38::test_get_memory_returns_none_without_api_key` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
-| 229 | `app/services/trip_confirmation_test.py:29::test_high_confidence_decision_issues_valid_token` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 230 | `app/services/trip_confirmation_test.py:35::test_invalid_confidence_does_not_issue_token` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 231 | `app/services/trip_confirmation_test.py:40::test_token_is_bound_to_all_execution_semantics` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 232 | `app/services/trip_confirmation_test.py:66::test_equivalent_integer_and_float_json_numbers_share_the_same_hash` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 233 | `app/services/trip_confirmation_test.py:87::test_zero_budget_is_not_equivalent_to_an_unspecified_budget` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 234 | `app/services/trip_confirmation_test.py:95::test_register_cleans_expired_entries_but_keeps_unexpired_consumed_entries` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 235 | `app/services/trip_confirmation_test.py:106::test_token_is_one_time` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 236 | `app/services/trip_confirmation_test.py:111::test_concurrent_consumers_only_consume_token_once` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 237 | `app/services/trip_confirmation_test.py:132::test_token_expires_at_exact_deadline` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
-| 238 | `app/services/user_service_test.py:21::test_login_creates_user_and_returns_stable_id` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
-| 239 | `app/services/user_service_test.py:28::test_login_normalizes_whitespace_and_casefold` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
-| 240 | `app/services/user_service_test.py:34::test_login_rejects_empty_and_too_long` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
-| 241 | `app/services/user_service_test.py:40::test_get_user` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
-| 242 | `app/services/user_service_test.py:45::test_persisted_across_reload` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
+| 199 | `app/services/budget_guard_test.py:82::test_unsupported_persisted_locale_falls_back_to_chinese` | `port` | tests/budget-guard.test.ts | 预算上限、待报价缓冲和餐饮调整逐例迁移 |
+| 200 | `app/services/budget_ledger_test.py:47::test_two_travelers_one_room_two_nights_is_900_total_and_450_per_person` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
+| 201 | `app/services/budget_ledger_test.py:66::test_three_travelers_default_to_two_rooms` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
+| 202 | `app/services/budget_ledger_test.py:76::test_unavailable_hotel_price_remains_pending` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
+| 203 | `app/services/budget_ledger_test.py:86::test_diy_per_person_input_is_converted_to_group_total` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
+| 204 | `app/services/budget_ledger_test.py:90::test_user_price_override_does_not_restore_provider_formula` | `port` | tests/budget-http.test.ts | 人数、房间、晚数、待报价和用户覆盖口径已迁移 |
+| 205 | `app/services/chat_service_test.py:10::test_extracts_first_output_text` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 206 | `app/services/chat_service_test.py:19::test_empty_output_returns_empty_string` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 207 | `app/services/chat_service_test.py:25::test_edit_prompt_allows_blueprint_and_reference_times` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 208 | `app/services/chat_service_test.py:29::test_validated_edit_keeps_updated_blueprint` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 209 | `app/services/chat_service_test.py:40::test_invalid_edited_blueprint_degrades_without_rejecting_days` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 210 | `app/services/chat_service_test.py:51::test_edit_agent_cannot_replace_verified_hotel` | `replace` | tests/trip-chat-service.test.ts, tests/trip-chat-http.test.ts | 整篇重写改为 revision-bound JSON Patch，并保留不可变事实和降级路径 |
+| 211 | `app/services/flyai_provider_test.py:47::test_maps_structured_hotel_and_starting_price` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
+| 212 | `app/services/flyai_provider_test.py:93::test_maps_masked_prices_to_auditable_lower_bounds` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
+| 213 | `app/services/flyai_provider_test.py:117::test_rejects_malformed_json` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
+| 214 | `app/services/flyai_provider_test.py:126::test_wraps_timeout_as_provider_error` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
+| 215 | `app/services/flyai_provider_test.py:135::test_reports_missing_cli_without_running_a_shell` | `retire` | - | FlyAI 已按用户决策从 TS 配置、依赖和运行时删除 |
+| 216 | `app/services/hotel_search_service_test.py:10::test_prefers_flyai_priced_inventory` | `retire` | - | FlyAI 酒店库存与补全链已删除；TS 仅接受高德可信酒店 POI |
+| 217 | `app/services/hotel_search_service_test.py:28::test_falls_back_to_amap_identity_without_price` | `replace` | tests/amap-research-sources.test.ts | 酒店来源统一为高德可信 POI，不推测价格 |
+| 218 | `app/services/hotel_search_service_test.py:51::test_enriches_missing_flyai_location_from_amap` | `retire` | - | FlyAI 酒店库存与补全链已删除；TS 仅接受高德可信酒店 POI |
+| 219 | `app/services/itinerary_scheduler_test.py:37::test_fills_missing_times_and_marks_non_live_sources` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
+| 220 | `app/services/itinerary_scheduler_test.py:53::test_uses_forecast_basis_and_avoids_hot_afternoon_for_first_outdoor_stop` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
+| 221 | `app/services/itinerary_scheduler_test.py:70::test_preserves_existing_user_time_and_only_derives_missing_end` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
+| 222 | `app/services/itinerary_scheduler_test.py:80::test_schedules_missing_meals_around_attractions` | `port` | tests/itinerary-scheduler.test.ts, tests/pi-trip-planner.test.ts | 调度纯函数逐例迁移并接入最终计划 |
+| 223 | `app/services/llm_service_test.py:60::test_disable_thinking_stream_uses_responses_reasoning_none` | `replace` | tests/pi-llm-client.test.ts | 旧 OpenAI SDK 封装由 pi-ai provider/stream 适配层替代 |
+| 224 | `app/services/llm_service_test.py:81::test_non_deepseek_stream_omits_deepseek_reasoning_option` | `replace` | tests/pi-llm-client.test.ts | 旧 OpenAI SDK 封装由 pi-ai provider/stream 适配层替代 |
+| 225 | `app/services/memory_service_test.py:12::test_recall_returns_empty_when_memory_unavailable` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
+| 226 | `app/services/memory_service_test.py:16::test_recall_formats_results` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
+| 227 | `app/services/memory_service_test.py:27::test_recall_swallow_exceptions` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
+| 228 | `app/services/memory_service_test.py:33::test_remember_background_noops_without_user` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
+| 229 | `app/services/memory_service_test.py:38::test_get_memory_returns_none_without_api_key` | `replace` | tests/hermes-memory-bridge.test.ts, tests/hermes-compatibility.test.ts, tests/auth-memory-http.test.ts | mem0 适配由用户隔离的 pi-hermes-memory 双存储桥替代 |
+| 230 | `app/services/trip_confirmation_test.py:29::test_high_confidence_decision_issues_valid_token` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 231 | `app/services/trip_confirmation_test.py:35::test_invalid_confidence_does_not_issue_token` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 232 | `app/services/trip_confirmation_test.py:40::test_token_is_bound_to_all_execution_semantics` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 233 | `app/services/trip_confirmation_test.py:66::test_equivalent_integer_and_float_json_numbers_share_the_same_hash` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 234 | `app/services/trip_confirmation_test.py:87::test_zero_budget_is_not_equivalent_to_an_unspecified_budget` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 235 | `app/services/trip_confirmation_test.py:95::test_register_cleans_expired_entries_but_keeps_unexpired_consumed_entries` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 236 | `app/services/trip_confirmation_test.py:106::test_token_is_one_time` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 237 | `app/services/trip_confirmation_test.py:111::test_concurrent_consumers_only_consume_token_once` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 238 | `app/services/trip_confirmation_test.py:132::test_token_expires_at_exact_deadline` | `port` | tests/confirmation-ledger.test.ts, tests/trip-planning-http.test.ts | 签名语义、数值归一、过期和单次消费已迁移 |
+| 239 | `app/services/user_service_test.py:21::test_login_creates_user_and_returns_stable_id` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
+| 240 | `app/services/user_service_test.py:28::test_login_normalizes_whitespace_and_casefold` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
+| 241 | `app/services/user_service_test.py:34::test_login_rejects_empty_and_too_long` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
+| 242 | `app/services/user_service_test.py:40::test_get_user` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |
+| 243 | `app/services/user_service_test.py:45::test_persisted_across_reload` | `replace` | tests/http-contract.test.ts, tests/task-store.test.ts | 用户持久化并入 SQLite users 表和 auth HTTP 契约 |

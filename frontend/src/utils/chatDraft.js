@@ -1,3 +1,5 @@
+import { formatProductDate } from '../i18n/date'
+
 const INFERRED_LABELS = {
   zh: {
     dates: '日期',
@@ -13,6 +15,13 @@ const INFERRED_LABELS = {
     preferences: 'Preferences',
     traveler_count: 'Travelers',
   },
+  fr: {
+    dates: 'Dates',
+    transportation: 'Transport',
+    accommodation: 'Hébergement',
+    preferences: 'Préférences',
+    traveler_count: 'Voyageurs',
+  },
 }
 
 const clean = (value) => String(value ?? '')
@@ -25,28 +34,33 @@ const positiveInteger = (value, fallback = 1) =>
 
 const formatBudget = (amount, locale) => {
   if (!Number.isFinite(amount) || amount < 0) return ''
-  return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'zh-CN', {
+  const localeTag = locale === 'en' ? 'en-US' : locale === 'fr' ? 'fr-FR' : 'zh-CN'
+  return new Intl.NumberFormat(localeTag, {
     maximumFractionDigits: 0,
   }).format(amount)
 }
 
 export function formatChatDraft(draft, locale = 'zh-CN') {
   const english = String(locale).toLowerCase().startsWith('en')
-  const lang = english ? 'en' : 'zh'
+  const french = String(locale).toLowerCase().startsWith('fr')
+  const lang = english ? 'en' : french ? 'fr' : 'zh'
   const city = clean(draft?.city || draft?.cities?.[0]?.city)
   const days = positiveInteger(draft?.travel_days, draft?.cities?.[0]?.days || 1)
   const cities = Array.isArray(draft?.cities) && draft.cities.length
     ? draft.cities
     : [{ city, days }]
   const route = cities
-    .map((item) => english
-      ? `${clean(item.city)} ${positiveInteger(item.days)} ${positiveInteger(item.days) === 1 ? 'day' : 'days'}`
-      : `${clean(item.city)} ${positiveInteger(item.days)}天`)
+    .map((item) => {
+      const itemDays = positiveInteger(item.days)
+      if (english) return `${clean(item.city)} ${itemDays} ${itemDays === 1 ? 'day' : 'days'}`
+      if (french) return `${clean(item.city)} ${itemDays} ${itemDays === 1 ? 'jour' : 'jours'}`
+      return `${clean(item.city)} ${itemDays}天`
+    })
     .join(' → ')
   const travelerCount = positiveInteger(draft?.traveler_count)
   const roomCount = positiveInteger(draft?.room_count, Math.ceil(travelerCount / 2))
   const preferences = Array.isArray(draft?.preferences)
-    ? draft.preferences.map(clean).filter(Boolean).join(english ? ', ' : '、')
+    ? draft.preferences.map(clean).filter(Boolean).join(english || french ? ', ' : '、')
     : ''
   const inferred = Array.isArray(draft?.inferred_fields)
     ? draft.inferred_fields.map((field) => INFERRED_LABELS[lang][field]).filter(Boolean)
@@ -68,6 +82,26 @@ export function formatChatDraft(draft, locale = 'zh-CN') {
     if (budget) lines.push(`- **Budget**: ¥${budget} (${draft?.budget_basis === 'per_person' ? 'per person' : 'total'})`)
     if (preferences) lines.push(`- **Preferences**: ${preferences}`)
     if (inferred.length) lines.push('', `Suggested defaults: ${inferred.join(', ')}`)
+    return lines.join('\n')
+  }
+
+  if (french) {
+    const startDate = formatProductDate(draft?.start_date, 'fr-FR')
+    const endDate = formatProductDate(draft?.end_date, 'fr-FR')
+    const lines = [
+      `### ${city} · ${days} ${days === 1 ? 'jour' : 'jours'}`,
+      '',
+      'Voici une première proposition basée sur notre échange :',
+      '',
+      `- **Itinéraire** : ${route}`,
+      `- **Dates** : du ${startDate} au ${endDate}`,
+      `- **Transport** : ${clean(draft?.transportation)}`,
+      `- **Hébergement** : ${clean(draft?.accommodation)}`,
+      `- **Voyageurs** : ${travelerCount} ${travelerCount === 1 ? 'voyageur' : 'voyageurs'} · ${roomCount} ${roomCount === 1 ? 'chambre' : 'chambres'}`,
+    ]
+    if (budget) lines.push(`- **Budget** : ¥${budget} (${draft?.budget_basis === 'per_person' ? 'par personne' : 'au total'})`)
+    if (preferences) lines.push(`- **Préférences** : ${preferences}`)
+    if (inferred.length) lines.push('', `Valeurs suggérées : ${inferred.join(', ')}`)
     return lines.join('\n')
   }
 

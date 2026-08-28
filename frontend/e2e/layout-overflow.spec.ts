@@ -6,6 +6,8 @@ const planId = 'layout-overflow'
 const user = {
   user_id: 'layout-test-user',
   nickname: 'Layout QA',
+  avatar_url: '/api/avatars/layout-test.jpg',
+  profile_complete: true,
 } as const
 
 const createDay = (index: number): DayPlan => ({

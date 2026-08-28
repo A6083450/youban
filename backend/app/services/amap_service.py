@@ -458,7 +458,7 @@ def search_amap_attractions(city: str, keywords: str, language: str = "zh") -> s
     poi_text = "\n".join(poi_lines)
 
     _lang = (language or "zh").strip().lower().split("-")[0]
-    _lang_names = {"en": "English", "ja": "Japanese", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
+    _lang_names = {"en": "English", "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish"}
     translation_instruction = ""
     if _lang != "zh" and _lang in _lang_names:
         translation_instruction = f"""

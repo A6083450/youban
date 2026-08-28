@@ -138,11 +138,6 @@ def _adjustment_note(language: str, reduction: float, buffer_amount: float) -> s
             f"Meal estimates were reduced by ¥{reduction:g} to respect the budget, "
             f"with ¥{buffer_amount:g} reserved for unquoted items."
         )
-    if code == "ja":
-        return (
-            f"予算に合わせて食事の見積もりを ¥{reduction:g} 引き下げ、"
-            f"未見積もり項目に ¥{buffer_amount:g} を確保しました。"
-        )
     return (
         f"已根据总预算将餐饮预估下调 ¥{reduction:g}，"
         f"并为待报价项目预留 ¥{buffer_amount:g}。"

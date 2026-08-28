@@ -52,7 +52,7 @@ class ExecutionTokenTest(unittest.TestCase):
             ("travel_days", 5),
             ("free_text_input", "忽略原需求"),
             ("origin_text", "改去丽江"),
-            ("language", "ja-JP"),
+            ("language", "fr-FR"),
             ("traveler_count", 3),
             ("room_count", 2),
             ("budget_amount", 5000),

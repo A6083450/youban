@@ -58,6 +58,7 @@ export interface Hotel {
   price_checked_at?: string
   price_method?: string
   price_status?: 'unavailable' | 'estimated' | 'live'
+  price_source?: string
 }
 
 export interface Budget {
@@ -91,6 +92,7 @@ export interface BudgetLedgerItem {
   nights: number | null
   origin: 'itinerary' | 'user'
   price_source: 'unavailable' | 'estimated' | 'live' | 'user'
+  price_provider: string
   linked_item_id: string
   entity_source: string
   source_url: string
@@ -251,7 +253,6 @@ export interface TripPlanResponse {
 }
 
 export interface SharedTripPlanResponse {
-  plan_id: string
   status: 'completed'
   result: TripPlanResponse
 }
@@ -570,6 +571,7 @@ export interface ParsedTripDraft {
 
 export type TripParseAction = 'plan' | 'clarify' | 'recommend' | 'chat'
 export type TripUserEmotion = 'neutral' | 'uncertain' | 'frustrated' | 'excited' | 'anxious'
+export type TripConversationNextStep = 'ask' | 'recommend' | 'offer_generation' | 'generate_now' | 'pause'
 
 export interface TripDestinationRecommendation {
   destination: string
@@ -581,6 +583,9 @@ export interface TripParseApiResponse {
   success: boolean
   action?: TripParseAction
   emotion?: TripUserEmotion
+  next_step?: TripConversationNextStep
+  auto_generate?: boolean
+  execution_token?: string
   reply?: string
   follow_up_question?: string
   recommendations?: TripDestinationRecommendation[]
@@ -601,6 +606,7 @@ export interface TripConfirmReplyResponse {
   action: TripConfirmReplyAction
   confidence: number
   message: string
+  next_step?: TripConversationNextStep
   ready_to_generate?: boolean
   readiness_token?: string
   trip?: ParsedTripDraft | null
@@ -608,10 +614,12 @@ export interface TripConfirmReplyResponse {
   execution_token?: string
 }
 
-// ===== 用户身份(昵称登录) =====
+// ===== 微信身份 =====
 export interface UserInfo {
   user_id: string
   nickname: string
+  avatar_url: string | null
+  profile_complete: boolean
   created_at?: string
   last_login_at?: string
 }

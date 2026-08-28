@@ -1,0 +1,7 @@
+{
+  "desc": "公开分享页允许被索引，其余页面仅在小程序内访问",
+  "rules": [
+    { "action": "allow", "page": "pages/web/index" },
+    { "action": "disallow", "page": "*" }
+  ]
+}

@@ -9,10 +9,17 @@ import {
 
 describe('skin store', () => {
   const values = new Map<string, string>()
-  const documentElement = { dataset: {} as Record<string, string> }
+  const styles = new Map<string, string>()
+  const documentElement = {
+    dataset: {} as Record<string, string>,
+    style: {
+      setProperty: (name: string, value: string) => styles.set(name, value),
+    },
+  }
 
   beforeEach(() => {
     values.clear()
+    styles.clear()
     documentElement.dataset = {}
     Object.assign(globalThis, {
       document: { documentElement },
@@ -43,5 +50,15 @@ describe('skin store', () => {
 
     expect(values.get(SKIN_STORAGE_KEY)).toBe('google')
     expect(documentElement.dataset.skin).toBe('google')
+    expect(styles.get('--accent-primary')).toBe('#3b9bb4')
+    expect(styles.get('--surface-navigation')).toBe('#eef7f9')
+  })
+
+  test('replaces clear theme variables with warm theme variables', () => {
+    applySkin('google')
+    applySkin('default')
+
+    expect(styles.get('--accent-primary')).toBe('#d97757')
+    expect(styles.get('--surface-navigation')).toBe('#fffaf6')
   })
 })

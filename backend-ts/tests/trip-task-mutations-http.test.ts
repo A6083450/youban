@@ -36,7 +36,13 @@ function runtime() {
     status: "completed",
     stage: "completed",
     progress: 100,
-    result: { success: true, data: structuredClone(PLAN) },
+    result: {
+      success: true,
+      plan_id: "plan-1",
+      task_id: "plan-1",
+      user_id: "owner-1",
+      data: { ...structuredClone(PLAN), plan_id: "nested-plan-1" },
+    },
     request_payload: { city: "北京" },
   }), { immediate: true });
   value.conversations.save("plan-1", "owner-1", [{ role: "user", content: "私密创建对话" }]);
@@ -81,11 +87,12 @@ describe("share, execution, and deletion contracts", () => {
     const publicResponse = await call(value.app, "GET", `/api/trip/share/${shared.share_code}`, undefined, "");
     const publicPayload = await publicResponse.json();
     expect(publicPayload).toEqual({
-      plan_id: "plan-1",
       status: "completed",
       result: { success: true, data: PLAN },
     });
     const raw = JSON.stringify(publicPayload);
+    expect(raw).not.toContain("plan-1");
+    expect(raw).not.toContain("nested-plan-1");
     expect(raw).not.toContain("owner-1");
     expect(raw).not.toContain("私密创建对话");
   });

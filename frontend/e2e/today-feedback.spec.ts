@@ -3,7 +3,12 @@ import type { Page } from '@playwright/test'
 import type { ExecutionMap, TripPlan } from '../src/types'
 
 const planId = 'today-feedback-plan'
-const user = { user_id: 'today-feedback-user', nickname: 'Today QA' } as const
+const user = {
+  user_id: 'today-feedback-user',
+  nickname: 'Today QA',
+  avatar_url: '/api/avatars/today-feedback.jpg',
+  profile_complete: true,
+} as const
 const today = new Date().toLocaleDateString('en-CA')
 
 const tripPlan = {

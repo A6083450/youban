@@ -1,0 +1,12 @@
+.action-page {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 128rpx 40rpx calc(env(safe-area-inset-bottom) + 44rpx);
+  background: #faf7f2;
+  color: #3d3229;
+}
+.action-title { margin-bottom: 56rpx; text-align: center; font-size: 40rpx; font-weight: 700; line-height: 1.4; }
+.action-error { margin-bottom: 28rpx; padding: 24rpx; background: #fff0ed; color: #a23d2f; font-size: 25rpx; line-height: 1.6; }
+.action-primary, .action-secondary { width: 100%; min-height: 92rpx; border-radius: 8rpx; font-size: 28rpx; font-weight: 650; }
+.action-primary { background: #d97757; color: #fff; }
+.action-secondary { margin-top: 24rpx; background: #fff; color: #6b5d52; border: 1rpx solid #ded4ca; }

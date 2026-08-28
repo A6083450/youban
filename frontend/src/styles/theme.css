@@ -10,69 +10,8 @@
   --color-muted: var(--text-secondary);
   --radius-card: var(--card-radius);
 }
-:root,
-:root[data-skin='default'] {
+:root {
   color-scheme: light;
-  --surface-page: #faf7f2;
-  --surface-soft: #f5f0e8;
-  --surface-elevated: #ffffff;
-  --text-primary: #3d3229;
-  --text-secondary: #6b5d52;
-  --accent-primary: #d97757;
-  --accent-strong: #c4603d;
-  --accent-soft: rgba(217, 119, 87, 0.1);
-  --accent-focus: rgba(217, 119, 87, 0.24);
-  --brand-companion: #c17f59;
-  --border-subtle: rgba(61, 50, 41, 0.12);
-  --status-success: #3a9c7a;
-  --status-danger: #c2413a;
-  --chat-user-bubble: linear-gradient(135deg, #d97757 0%, #c4603d 100%);
-  --chat-ai-bg: #ffffff;
-  --chat-ai-border: rgba(100, 80, 60, 0.14);
-  --card-radius: 12px;
-  --card-shadow: 0 4px 16px rgba(100, 80, 60, 0.06);
-  --card-shadow-hover: 0 8px 24px rgba(100, 80, 60, 0.12);
-  --el-color-primary: #d97757;
-  --el-color-primary-light-3: #e59d85;
-  --el-color-primary-light-5: #ecbbaa;
-  --el-color-primary-light-7: #f4d9cf;
-  --el-color-primary-light-9: #fcf2ef;
-  --el-border-radius-base: 8px;
-  --el-text-color-primary: var(--text-primary);
-  --el-border-color: var(--border-subtle);
-  --el-bg-color: var(--surface-elevated);
-}
-
-:root[data-skin='google'] {
-  color-scheme: light;
-  --surface-page: #f5f9fc;
-  --surface-soft: #eaf3f7;
-  --surface-elevated: #ffffff;
-  --text-primary: #22313a;
-  --text-secondary: #61727b;
-  --accent-primary: #3b9bb4;
-  --accent-strong: #267a93;
-  --accent-soft: rgba(59, 155, 180, 0.1);
-  --accent-focus: rgba(59, 155, 180, 0.24);
-  --brand-companion: #2f8fa9;
-  --border-subtle: #d5e4ea;
-  --status-success: #2d8c72;
-  --status-danger: #c85c5c;
-  --chat-user-bubble: linear-gradient(135deg, #3b9bb4 0%, #267a93 100%);
-  --chat-ai-bg: #ffffff;
-  --chat-ai-border: #d5e4ea;
-  --card-radius: 16px;
-  --card-shadow: 0 2px 8px rgba(34, 76, 89, 0.1), 0 1px 3px rgba(34, 76, 89, 0.06);
-  --card-shadow-hover: 0 4px 14px rgba(34, 76, 89, 0.14);
-  --el-color-primary: #3b9bb4;
-  --el-color-primary-light-3: #75b8c8;
-  --el-color-primary-light-5: #9fced9;
-  --el-color-primary-light-7: #c7e3e9;
-  --el-color-primary-light-9: #edf8fa;
-  --el-border-radius-base: 12px;
-  --el-text-color-primary: var(--text-primary);
-  --el-border-color: var(--border-subtle);
-  --el-bg-color: var(--surface-elevated);
 }
 
 body,
@@ -82,14 +21,12 @@ body,
   color: var(--text-primary);
 }
 
-.sidebar,
-.mobile-topbar {
-  background: var(--surface-elevated);
+.sidebar {
+  background: var(--surface-navigation);
   border-color: var(--border-subtle);
 }
 
-.sidebar-brand,
-.mobile-brand {
+.sidebar-brand {
   color: var(--text-primary);
 }
 

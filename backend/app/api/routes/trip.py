@@ -859,12 +859,9 @@ async def _parse_core(payload: TripParseRequest, x_user_id: str = "", *, on_delt
 用户最新消息：{payload.text}"""
 
     is_en = str(payload.language or "").lower().startswith("en")
-    is_ja = str(payload.language or "").lower().startswith("ja")
     fallback_reply = (
         "I can help narrow it down—would you prefer nature and scenery, or food and culture?"
         if is_en else
-        "行き先選びから一緒に考えましょう。自然や景色と、グルメや文化なら、どちらが気になりますか？"
-        if is_ja else
         "没问题，我可以直接帮你缩小范围。你更想看自然风光，还是逛吃和人文？"
     )
     defaults = {
@@ -1108,8 +1105,6 @@ async def _confirm_core(payload: TripConfirmReplyRequest, *, on_delta=None):
     language = authorization_language.lower()
     if language.startswith("en"):
         fallback_message = "Would you like me to start planning from the current draft?"
-    elif language.startswith("ja"):
-        fallback_message = "現在の下書きで旅行プランの作成を開始しますか？"
     else:
         fallback_message = "你是想按当前这份草稿开始生成计划吗？"
 

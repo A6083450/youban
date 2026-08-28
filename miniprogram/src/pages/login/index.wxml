@@ -1,0 +1,30 @@
+<view class="login-page">
+  <view class="login-main">
+    <view class="brand-mark">游</view>
+    <view class="brand-name">{{copy.common.brand}}</view>
+    <view class="login-title">{{copy.login.title}}</view>
+    <view class="login-description">{{copy.login.description}}</view>
+
+    <button
+      class="avatar-login pressable"
+      open-type="chooseAvatar"
+      bindchooseavatar="chooseAvatar"
+      disabled="{{busy}}"
+      aria-label="{{copy.login.action}}"
+    >
+      <image wx:if="{{previewUrl}}" class="avatar-preview" src="{{previewUrl}}" mode="aspectFill"></image>
+      <image wx:else class="avatar-icon" src="/assets/icons/user.svg" mode="aspectFit"></image>
+    </button>
+
+    <button
+      class="login-button pressable"
+      open-type="chooseAvatar"
+      bindchooseavatar="chooseAvatar"
+      loading="{{busy}}"
+      disabled="{{busy}}"
+    >{{copy.login.action}}</button>
+    <view class="login-note">{{copy.login.note}}</view>
+  </view>
+
+  <button class="privacy-link" bindtap="openPrivacy">{{copy.login.privacy}}</button>
+</view>

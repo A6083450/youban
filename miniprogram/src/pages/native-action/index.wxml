@@ -1,0 +1,43 @@
+<view class="action-page">
+  <view class="action-title">{{title}}</view>
+  <view wx:if="{{error}}" class="action-error">{{error}}</view>
+
+  <button
+    wx:if="{{type === 'share' && ready}}"
+    class="action-primary"
+    open-type="share"
+    disabled="{{busy}}"
+  >分享给朋友</button>
+  <button
+    wx:elif="{{type === 'save_guide' && ready}}"
+    class="action-primary"
+    bindtap="saveGuide"
+    loading="{{busy}}"
+    disabled="{{busy}}"
+  >保存攻略到相册</button>
+  <button
+    wx:elif="{{type === 'add_calendar' && ready}}"
+    class="action-primary"
+    bindtap="addCalendar"
+    loading="{{busy}}"
+    disabled="{{busy}}"
+  >加入系统日历</button>
+  <button
+    wx:elif="{{type === 'avatar' && ready}}"
+    class="action-primary"
+    open-type="chooseAvatar"
+    bindchooseavatar="chooseAvatar"
+    loading="{{busy}}"
+    disabled="{{busy}}"
+  >选择微信头像</button>
+  <button
+    wx:elif="{{type === 'logout' && ready}}"
+    class="action-primary"
+    bindtap="logout"
+    loading="{{busy}}"
+    disabled="{{busy}}"
+  >退出登录</button>
+
+  <button wx:if="{{error}}" class="action-secondary" bindtap="retry">重试</button>
+  <button wx:if="{{permissionError}}" class="action-secondary" bindtap="openSettings">打开系统设置</button>
+</view>

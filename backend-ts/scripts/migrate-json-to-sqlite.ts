@@ -331,14 +331,14 @@ export function migrateJsonToSqlite(options: MigrationOptions): MigrationReport 
           database.orm.insert(usersTable).values({
             userId: user.user_id,
             nickname: user.nickname,
-            nicknameKey: user.nickname.normalize("NFKC").toLocaleLowerCase("und"),
+            avatarFile: null,
+            profileCompletedAt: null,
             createdAt: user.created_at,
             lastLoginAt: user.last_login_at,
           }).onConflictDoUpdate({
             target: usersTable.userId,
             set: {
               nickname: user.nickname,
-              nicknameKey: user.nickname.normalize("NFKC").toLocaleLowerCase("und"),
               lastLoginAt: user.last_login_at,
             },
           }).run();

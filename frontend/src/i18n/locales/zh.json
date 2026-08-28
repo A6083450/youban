@@ -109,13 +109,17 @@
     "brand": "游伴",
     "subBrand": "游伴 · AI 旅行引擎",
     "badge": "AI 文旅智能体",
+    "navigation": {
+      "home": "返回首页"
+    },
     "preferences": {
       "label": "偏好设置"
     },
     "language": {
       "label": "语言",
       "zh": "中文",
-      "en": "English"
+      "en": "English",
+      "fr": "Français"
     },
     "skin": {
       "label": "外观",
@@ -127,12 +131,16 @@
     "footerTech": "Powered by HelloAgents + 高德 MCP"
   },
   "login": {
-    "subtitle": "输入昵称,开启你的专属旅程",
-    "placeholder": "你的昵称",
-    "enter": "进入游伴",
-    "hint": "无需密码,同一昵称即可找回你的行程与记忆",
-    "welcome": "欢迎回来,{name}!",
-    "failed": "登录失败,请重试"
+    "loading": "正在创建登录凭证",
+    "pending": "使用游伴小程序确认登录",
+    "approved": "微信登录已确认",
+    "failed": "登录凭证已失效",
+    "qrAlt": "微信小程序登录二维码",
+    "avatarAlt": "微信头像",
+    "shortCode": "短码",
+    "refresh": "刷新二维码",
+    "welcome": "欢迎，{name}",
+    "avatarHint": "Web 端使用你在小程序登录时选择的微信头像"
   },
   "user": {
     "myMemories": "我的记忆",
@@ -608,7 +616,11 @@
       "journeyTitle": "{days}天 · {cities}之旅",
       "journeyEnd": "旅程结束",
       "journeyStart": "出发",
-      "highlights": "行程主题灵感"
+      "highlights": "行程主题灵感",
+      "previousJourney": "上一段行程",
+      "nextJourney": "下一段行程",
+      "previousHighlight": "上一组灵感",
+      "nextHighlight": "下一组灵感"
     },
     "daily": {
       "daySelector": "选择日期",
@@ -740,7 +752,9 @@
       "enteredPerPerson": "按人均金额录入",
       "enteredGroupTotal": "按合计金额录入",
       "amap": "高德地图",
+      "fliggy": "飞猪",
       "sourceChecked": "{provider} · {date} 查询",
+      "priceProviderCheckedWithEntity": "参考价：{provider}，查询于 {date} · 酒店信息：{entity}",
       "userPrice": "金额由用户填写",
       "userPriceWithSource": "金额由用户填写 · 酒店来源 {provider}",
       "addAttraction": "新增行程景点",
@@ -765,7 +779,10 @@
     "hotelTitle": "住宿推荐",
     "hotelVerifiedByAmap": "高德已验证",
     "hotelReferencePrice": "参考价格 {price}/间夜",
-    "hotelPriceUnavailable": "暂无实时报价",
+    "hotelPriceUnavailable": "暂未取得酒店报价",
+    "hotelFliggyReferencePrice": "飞猪参考价 ¥{price}/晚",
+    "hotelFliggyView": "去飞猪查看",
+    "hotelFliggyDisclaimer": "房型、税费、库存及退改规则以飞猪页面为准",
     "mealsTitle": "餐饮安排",
     "weatherTitle": "天气信息",
     "weatherNight": "夜间",

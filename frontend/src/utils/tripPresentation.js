@@ -16,6 +16,34 @@ const MEAL_ANCHORS = {
   snack: (15 * 60) + 30,
 }
 
+export function projectResultAvailability(plan, readonly = false) {
+  const days = Array.isArray(plan?.days) ? plan.days : []
+  const sections = []
+  if (!readonly) sections.push('today')
+  sections.push('overview', 'days')
+  if (days.some((day) => Array.isArray(day?.attractions) && day.attractions.length > 0)) {
+    sections.push('map')
+  }
+  if (plan?.budget && typeof plan.budget === 'object') sections.push('budget')
+  if (Array.isArray(plan?.weather_info) && plan.weather_info.length > 0) sections.push('weather')
+  return {
+    sections,
+    actions: readonly ? [] : ['share', 'export', 'calendar'],
+  }
+}
+
+export function resolveInitialResultSection(plan, requested, readonly = false, hasToday = false) {
+  const normalized = String(requested ?? '').trim()
+  if (normalized === 'knowledge-graph') return 'overview'
+  const alwaysAvailable = new Set(['overview', 'days', 'map'])
+  const available = alwaysAvailable.has(normalized)
+    || (normalized === 'today' && !readonly)
+    || (normalized === 'budget' && plan?.budget && typeof plan.budget === 'object')
+    || (normalized === 'weather' && Array.isArray(plan?.weather_info) && plan.weather_info.length > 0)
+  if (available) return normalized
+  return hasToday && !readonly ? 'today' : 'overview'
+}
+
 function createLocalDate(year, month, day) {
   const date = new Date(year, month - 1, day)
   if (
@@ -45,6 +73,27 @@ export function normalizeTripCityNames(value, fallback = '') {
   if (names.length) return names
   const fallbackName = typeof fallback === 'string' ? fallback.trim() : ''
   return fallbackName ? [fallbackName] : []
+}
+
+export function resolveJourneyPinPhotos(days, attractionPhotos) {
+  const sourceDays = Array.isArray(days) ? days : []
+  const photos = attractionPhotos && typeof attractionPhotos === 'object' ? attractionPhotos : {}
+  const directPhotos = sourceDays.map((day) => {
+    for (const attraction of Array.isArray(day?.attractions) ? day.attractions : []) {
+      const photo = String(attraction?.image_url || photos[attraction?.name] || '').trim()
+      if (photo) return photo
+    }
+    return ''
+  })
+  const cityPhotos = new Map()
+  sourceDays.forEach((day, index) => {
+    const city = String(day?.city || '').trim()
+    const cityPhoto = String(photos[city] || directPhotos[index] || '').trim()
+    if (city && cityPhoto && !cityPhotos.has(city)) cityPhotos.set(city, cityPhoto)
+  })
+  return sourceDays.map((day, index) => (
+    directPhotos[index] || cityPhotos.get(String(day?.city || '').trim()) || ''
+  ))
 }
 
 export function parseTripDate(value) {

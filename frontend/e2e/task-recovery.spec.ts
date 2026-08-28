@@ -2,26 +2,67 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
 const taskId = 'recovering-plan'
-const user = { user_id: 'task-recovery-user', nickname: 'Recovery QA' }
+const user = {
+  user_id: 'task-recovery-user',
+  nickname: 'Recovery QA',
+  avatar_url: '/api/avatars/task-recovery.jpg',
+  profile_complete: true,
+}
+
+const processingPlanRecord = {
+  record_id: `plan:${taskId}`,
+  kind: 'plan',
+  session_id: null,
+  plan_id: taskId,
+  task_id: taskId,
+  title: '云南 5 日行程',
+  title_status: 'generated',
+  state: 'generating',
+  revision: 0,
+  status: 'processing',
+  user_id: user.user_id,
+  city: '云南',
+  cities: ['云南'],
+  start_date: '2026-08-10',
+  end_date: '2026-08-14',
+  travel_days: 5,
+  updated_at: '2026-08-04T21:00:00+08:00',
+  overall_suggestions: '',
+  user_deleted_at: null,
+} as const
+
+const conversationRecord = (sessionId: string) => ({
+  ...processingPlanRecord,
+  record_id: sessionId,
+  kind: 'conversation',
+  session_id: sessionId,
+  plan_id: null,
+  task_id: null,
+  title: '接着聊聊新疆',
+  state: 'chatting',
+  status: null,
+})
 
 const mockTaskApis = async (page: Page): Promise<void> => {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/trip/history') {
-      await route.fulfill({
-        json: {
-          items: [{
-            plan_id: taskId,
-            task_id: taskId,
-            status: 'processing',
-            city: '云南',
-            start_date: '2026-08-10',
-            end_date: '2026-08-14',
-            travel_days: 5,
-            updated_at: '2026-08-04T21:00:00+08:00',
-          }],
-        },
-      })
+    if (path === '/api/conversations' && route.request().method() === 'GET') {
+      await route.fulfill({ json: { items: [processingPlanRecord] } })
+      return
+    }
+    if (path === '/api/conversations' && route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as { session_id: string }
+      await route.fulfill({ json: conversationRecord(input.session_id) })
+      return
+    }
+    if (path.startsWith('/api/conversations/') && route.request().method() === 'GET') {
+      const sessionId = decodeURIComponent(path.split('/').at(-1) || '')
+      await route.fulfill({ json: { ...conversationRecord(sessionId), snapshot: { version: 1, items: [] } } })
+      return
+    }
+    if (path.startsWith('/api/conversations/') && route.request().method() === 'PUT') {
+      const sessionId = decodeURIComponent(path.split('/').at(-1) || '')
+      await route.fulfill({ json: { ...conversationRecord(sessionId), revision: 1 } })
       return
     }
     if (path === '/api/auth/me') {

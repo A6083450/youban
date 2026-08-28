@@ -4,7 +4,12 @@ import type { TripPlan } from '../src/types'
 
 const validCode = '0f321b259a867c4d1029384756abcdef'
 const ownedPlanId = 'owned-plan'
-const user = { user_id: 'share-code-user', nickname: 'Share QA' }
+const user = {
+  user_id: 'share-code-user',
+  nickname: 'Share QA',
+  avatar_url: '/api/avatars/share-code.jpg',
+  profile_complete: true,
+}
 
 const ownedPlan = {
   city: '杭州',
@@ -71,6 +76,10 @@ const prepareOwnedPlan = async (page: Page, planId: string): Promise<void> => {
   await expect(page.getByRole('button', { name: /分享$/ })).toBeVisible()
 }
 
+const useLoggedOutSession = async (page: Page): Promise<void> => {
+  await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }))
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     if (!localStorage.getItem('tripstar-locale')) {
@@ -81,9 +90,9 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('shows a prominent share-code entry on the logged-out login page', async ({ page }) => {
+  await useLoggedOutSession(page)
   await page.goto('/login')
   const input = page.getByRole('textbox', { name: '分享码' })
-  await expect(page.getByText('查看朋友分享的计划')).toBeVisible()
   await expect(input).toBeVisible()
 
   await input.fill('xyz')
@@ -97,6 +106,7 @@ test('shows a prominent share-code entry on the logged-out login page', async ({
 })
 
 test('preserves and rejects an overlength share code instead of opening another plan', async ({ page }) => {
+  await useLoggedOutSession(page)
   await page.goto('/login')
   const input = page.getByRole('textbox', { name: '分享码' })
   await input.fill(`${validCode}0`)
@@ -109,24 +119,22 @@ test('preserves and rejects an overlength share code instead of opening another 
 for (const locale of [
   {
     value: 'en-US',
-    title: 'View a shared trip',
     label: 'Share code',
     placeholder: '32-character code',
     submit: 'View',
   },
   {
-    value: 'ja-JP',
-    title: '友だちの共有プランを見る',
-    label: '共有コード',
-    placeholder: '32文字の共有コード',
-    submit: '表示',
+    value: 'fr-FR',
+    label: 'Code de partage',
+    placeholder: 'Code à 32 caractères',
+    submit: 'Voir',
   },
 ] as const) {
   test(`renders the ${locale.value} share-code entry at 375px without overflow`, async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.addInitScript((value) => localStorage.setItem('tripstar-locale', value), locale.value)
+    await useLoggedOutSession(page)
     await page.goto('/login')
-    await expect(page.getByText(locale.title)).toBeVisible()
     await expect(page.getByRole('textbox', { name: locale.label })).toHaveAttribute(
       'placeholder',
       locale.placeholder,
@@ -164,6 +172,28 @@ test('keeps share-code entry in a collapsible sidebar utility area', async ({ pa
   await mobileTrigger.click()
   await expect(input).toBeVisible()
   await expect(input).toBeFocused()
+})
+
+test('uses the clear skin palette throughout the expanded sidebar share utility', async ({ page }) => {
+  await page.addInitScript((storedUser) => {
+    localStorage.setItem('tripstar.user', JSON.stringify(storedUser))
+    localStorage.setItem('tripstar.skin', 'google')
+    sessionStorage.setItem('youban_splashed', '1')
+  }, user)
+  await page.goto('/')
+
+  const trigger = page.getByRole('button', { name: '查看朋友分享的计划' })
+  await trigger.click()
+  await expect(trigger).toHaveCSS('color', 'rgb(38, 122, 147)')
+  await expect(trigger).toHaveCSS('background-color', 'rgba(59, 155, 180, 0.08)')
+
+  const input = page.getByRole('textbox', { name: '分享码' })
+  await input.fill(validCode)
+  await expect(input).toBeFocused()
+  await expect(input).toHaveCSS('border-color', 'rgb(59, 155, 180)')
+
+  const submit = page.locator('.sidebar-share-tool__panel button[type="submit"]')
+  await expect(submit).toHaveCSS('background-color', 'rgb(59, 155, 180)')
 })
 
 test('publishes and copies a high-entropy code from the share modal', async ({ page, context }) => {

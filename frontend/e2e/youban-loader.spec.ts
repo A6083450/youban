@@ -45,7 +45,12 @@ test('shows the Youban loader before the Vue entry module is ready', async ({ pa
 })
 
 const taskId = 'loader-preview-task'
-const user = { user_id: 'loader-preview-user', nickname: 'Loader QA' } as const
+const user = {
+  user_id: 'loader-preview-user',
+  nickname: 'Loader QA',
+  avatar_url: '/api/avatars/loader-preview.jpg',
+  profile_complete: true,
+} as const
 
 const prepareActiveGeneration = async (page: Page): Promise<void> => {
   await page.addInitScript(({ activeTaskId, storedUser }) => {

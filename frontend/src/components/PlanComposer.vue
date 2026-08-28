@@ -20,7 +20,7 @@
           :loading="disabled"
           @click="handleSend"
         >
-          <ElIcon><Promotion /></ElIcon>
+          <ElIcon v-if="!disabled"><Promotion /></ElIcon>
         </ElButton>
       </template>
     </XSender>

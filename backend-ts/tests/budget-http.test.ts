@@ -46,13 +46,13 @@ function completedPlan() {
 
 const runtimes: HttpRuntime[] = [];
 const dirs: string[] = [];
-function runtime() {
+function runtime(result: Record<string, unknown> = completedPlan()) {
   const dataDir = mkdtempSync(join(tmpdir(), "youban-budget-"));
   dirs.push(dataDir);
   const value = createHttpRuntime({ dataDir, planner: new NoopPlanner() });
   value.tasks.save(createTaskState("plan-1", {
     user_id: "owner-1", status: "completed", stage: "completed", progress: 100,
-    result: completedPlan(),
+    result,
     request_payload: { traveler_count: 2, room_count: 1, budget_amount: 50, budget_basis: "group_total" },
   }), { immediate: true });
   runtimes.push(value);
@@ -88,6 +88,27 @@ describe("budget ledger HTTP", () => {
     expect(body.projected_total).toBe(body.quoted_total + body.pending_buffer);
   });
 
+  it("keeps AMap hotel identity separate from the Fliggy price provider", async () => {
+    const plan = completedPlan();
+    const hotel = (plan.data.days[0] as Record<string, any>).hotel;
+    Object.assign(hotel, {
+      estimated_cost: 420,
+      price_source: "fliggy",
+      price_status: "estimated",
+      source_url: "https://router.feizhu.com/h/1",
+      price_checked_at: "2026-08-26T03:00:00.000Z",
+    });
+    const value = runtime(plan);
+
+    const body = await (await call(value.app, "GET", "/api/trip/plan/plan-1/budget-items")).json() as Record<string, any>;
+    const item = body.items.find((entry: any) => entry.type === "hotel");
+
+    expect(item.entity_source).toBe("amap");
+    expect(item.price_provider).toBe("fliggy");
+    expect(item.price_source).toBe("estimated");
+    expect(item.amount).toBe(420);
+  });
+
   it("converts per-person custom input to a canonical group total", async () => {
     const value = runtime();
     const response = await call(value.app, "POST", "/api/trip/plan/plan-1/budget-items", {
@@ -97,6 +118,7 @@ describe("budget ledger HTTP", () => {
     const item = body.items.find((entry: any) => entry.name === "人均 DIY");
     expect(item.amount).toBe(250);
     expect(item.per_person_amount).toBe(125);
+    expect(item.price_provider).toBe("");
     expect(body.totals.total_other).toBe(250);
   });
 

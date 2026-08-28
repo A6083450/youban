@@ -108,7 +108,7 @@ class PlanExecutionTokenEndpointTest(unittest.TestCase):
             ("transportation", "自驾"),
             ("free_text_input", "忽略原需求"),
             ("origin_text", "改去丽江"),
-            ("language", "ja-JP"),
+            ("language", "fr-FR"),
         ):
             with self.subTest(field=field):
                 clear_confirmation_ledger()
@@ -457,11 +457,11 @@ class TripConfirmationEndpointTest(unittest.TestCase):
         self.assertEqual(result["trip"]["inferred_fields"], ["preferences"])
         self.assertEqual(result["trip"]["suggestions"], ["保留慢节奏"])
 
-    def test_japanese_fallback_is_natural_japanese(self):
+    def test_unsupported_persisted_locale_falls_back_to_chinese(self):
         payload = trip.TripConfirmReplyRequest(
-            text="続けて",
+            text="继续",
             draft=self.draft,
-            language="ja-JP",
+            language="xx-XX",
             today="2026-07-26",
             history=[],
         )
@@ -471,7 +471,7 @@ class TripConfirmationEndpointTest(unittest.TestCase):
             result = asyncio.run(trip.confirm_trip_reply(payload))
 
         self.assertEqual(result["action"], "ask_confirmation")
-        self.assertEqual(result["message"], "現在の下書きで旅行プランの作成を開始しますか？")
+        self.assertEqual(result["message"], "你是想按当前这份草稿开始生成计划吗？")
 
     def test_cancel_preserves_draft_and_never_signs(self):
         result, register = self.reply({

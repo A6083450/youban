@@ -53,12 +53,81 @@ export const usersTable = sqliteTable(
   {
     userId: text("user_id").primaryKey(),
     nickname: text("nickname").notNull(),
-    nicknameKey: text("nickname_key").notNull(),
+    avatarFile: text("avatar_file"),
+    profileCompletedAt: text("profile_completed_at"),
     createdAt: text("created_at").notNull(),
     lastLoginAt: text("last_login_at").notNull(),
   },
-  (table) => [uniqueIndex("users_nickname_key_idx").on(table.nicknameKey)],
 );
+
+export const wechatIdentitiesTable = sqliteTable(
+  "wechat_identities",
+  {
+    subjectDigest: text("subject_digest").primaryKey(),
+    userId: text("user_id").notNull().references(() => usersTable.userId, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+    lastLoginAt: text("last_login_at").notNull(),
+  },
+  (table) => [index("wechat_identities_user_idx").on(table.userId)],
+);
+
+export const authSessionsTable = sqliteTable(
+  "auth_sessions",
+  {
+    sessionId: text("session_id").notNull(),
+    tokenHash: text("token_hash").primaryKey(),
+    userId: text("user_id").notNull().references(() => usersTable.userId, { onDelete: "cascade" }),
+    clientType: text("client_type").notNull(),
+    createdAt: text("created_at").notNull(),
+    lastUsedAt: text("last_used_at").notNull(),
+    idleExpiresAt: text("idle_expires_at").notNull(),
+    absoluteExpiresAt: text("absolute_expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("auth_sessions_session_id_idx").on(table.sessionId),
+    index("auth_sessions_user_active_idx").on(table.userId, table.revokedAt, table.idleExpiresAt),
+  ],
+);
+
+export const webLoginChallengesTable = sqliteTable(
+  "web_login_challenges",
+  {
+    challengeId: text("challenge_id").primaryKey(),
+    verifierHash: text("verifier_hash").notNull(),
+    approvalTokenHash: text("approval_token_hash").notNull(),
+    shortCodeHash: text("short_code_hash").notNull(),
+    approvedUserId: text("approved_user_id").references(() => usersTable.userId, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    approvedAt: text("approved_at"),
+    exchangedAt: text("exchanged_at"),
+  },
+  (table) => [
+    uniqueIndex("web_login_challenges_short_code_idx").on(table.shortCodeHash),
+    index("web_login_challenges_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const authAuditEventsTable = sqliteTable(
+  "auth_audit_events",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => usersTable.userId, { onDelete: "set null" }),
+    operation: text("operation").notNull(),
+    result: text("result").notNull(),
+    subject: text("subject").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("auth_audit_events_user_created_idx").on(table.userId, table.createdAt)],
+);
+
+export const userPreferencesTable = sqliteTable("user_preferences", {
+  userId: text("user_id").primaryKey().references(() => usersTable.userId, { onDelete: "cascade" }),
+  skin: text("skin").notNull(),
+  locale: text("locale").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 
 export const managedSkillsTable = sqliteTable(
   "managed_skills",
@@ -134,6 +203,11 @@ export const schema = {
   conversations: conversationsTable,
   conversationSessions: conversationSessionsTable,
   users: usersTable,
+  wechatIdentities: wechatIdentitiesTable,
+  authSessions: authSessionsTable,
+  webLoginChallenges: webLoginChallengesTable,
+  authAuditEvents: authAuditEventsTable,
+  userPreferences: userPreferencesTable,
   managedSkills: managedSkillsTable,
   skillVersions: skillVersionsTable,
   skillAgentAssignments: skillAgentAssignmentsTable,
@@ -142,7 +216,7 @@ export const schema = {
 
 export type YoubanSchema = typeof schema;
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 // Referencing the drizzle schema here keeps migration DDL and typed queries aligned.
 export const INITIAL_SCHEMA_SQL = `
@@ -262,4 +336,72 @@ export const CONVERSATION_SESSIONS_SCHEMA_SQL = `
     ON conversation_sessions(plan_id) WHERE plan_id IS NOT NULL;
   CREATE INDEX IF NOT EXISTS conversation_sessions_user_deleted_updated_idx
     ON conversation_sessions(user_id, deleted_at, updated_at);
+`;
+
+export const AUTH_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS wechat_identities (
+    subject_digest TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    last_login_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS wechat_identities_user_idx ON wechat_identities(user_id);
+
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    session_id TEXT NOT NULL,
+    token_hash TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    client_type TEXT NOT NULL CHECK (client_type IN ('miniprogram', 'web')),
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    idle_expires_at TEXT NOT NULL,
+    absolute_expires_at TEXT NOT NULL,
+    revoked_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_session_id_idx ON auth_sessions(session_id);
+  CREATE INDEX IF NOT EXISTS auth_sessions_user_active_idx
+    ON auth_sessions(user_id, revoked_at, idle_expires_at);
+
+  CREATE TABLE IF NOT EXISTS web_login_challenges (
+    challenge_id TEXT PRIMARY KEY NOT NULL,
+    verifier_hash TEXT NOT NULL,
+    approval_token_hash TEXT NOT NULL,
+    short_code_hash TEXT NOT NULL,
+    approved_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    approved_at TEXT,
+    exchanged_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS web_login_challenges_short_code_idx
+    ON web_login_challenges(short_code_hash);
+  CREATE INDEX IF NOT EXISTS web_login_challenges_expiry_idx ON web_login_challenges(expires_at);
+
+  CREATE TABLE IF NOT EXISTS auth_audit_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+    operation TEXT NOT NULL,
+    result TEXT NOT NULL CHECK (result IN ('success', 'failure')),
+    subject TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS auth_audit_events_user_created_idx
+    ON auth_audit_events(user_id, created_at);
+`;
+
+export const USER_PREFERENCES_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    skin TEXT NOT NULL CHECK (skin IN ('default', 'google')),
+    locale TEXT NOT NULL CHECK (locale IN ('zh-CN', 'en-US', 'fr-FR')),
+    updated_at TEXT NOT NULL
+  );
+`;
+
+export const WECHAT_PROFILE_SCHEMA_SQL = `
+  DROP INDEX IF EXISTS users_nickname_key_idx;
+  ALTER TABLE users DROP COLUMN nickname_key;
+  ALTER TABLE users ADD COLUMN avatar_file TEXT;
+  ALTER TABLE users ADD COLUMN profile_completed_at TEXT;
+  DROP TABLE IF EXISTS legacy_migration_codes;
 `;

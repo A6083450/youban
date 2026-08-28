@@ -17,6 +17,7 @@ export interface BudgetLedgerItem {
   nights: number | null;
   origin: "itinerary" | "user";
   price_source: "unavailable" | "estimated" | "live" | "user";
+  price_provider: string;
   linked_item_id: string;
   entity_source: string;
   source_url: string;
@@ -81,6 +82,7 @@ function baseItem(values: Partial<BudgetLedgerItem> & Pick<BudgetLedgerItem, "id
     nights: values.nights ?? null,
     origin: values.origin ?? "itinerary",
     price_source: values.price_source ?? "unavailable",
+    price_provider: values.price_provider ?? "",
     linked_item_id: values.linked_item_id ?? "",
     entity_source: values.entity_source ?? "",
     source_url: values.source_url ?? "",
@@ -135,6 +137,7 @@ function deriveHotelItems(days: unknown[], travelers: number, rooms: number): Bu
       nights: current.nights,
       calculation_summary: "room_night",
       price_source: priceStatus === "live" || priceStatus === "estimated" ? priceStatus : "unavailable",
+      price_provider: String(current.hotel.price_source ?? ""),
       linked_item_id: String(current.hotel.source_hotel_id ?? ""),
       entity_source: String(current.hotel.source ?? ""),
       source_url: String(current.hotel.source_url ?? ""),
@@ -273,7 +276,10 @@ export function syncBudgetItems(
 ): BudgetLedgerItem[] {
   const plan = record(record(result)?.data);
   const travelers = count(travelerCount ?? plan?.traveler_count);
-  const saved = (savedItems ?? []).filter(validSavedItem).map((item) => structuredClone(item));
+  const saved = (savedItems ?? []).filter(validSavedItem).map((item) => ({
+    ...structuredClone(item),
+    price_provider: String(item.price_provider ?? ""),
+  }));
   const byId = new Map(saved.map((item) => [item.id, item]));
   const derived = deriveBudgetItems(result, travelers, roomCount);
   const derivedIds = new Set(derived.map((item) => item.id));

@@ -9,7 +9,9 @@ import {
   plannedRecords,
   records,
   removeRecord,
-  shouldShowConversationResume,
+  syncRecordsForAuthentication,
+  shouldClearActiveTripTask,
+  shouldShowActiveTripTaskFallback,
   upsertRecord,
   waitForConversationTitle,
 } from './conversation-records'
@@ -40,6 +42,18 @@ const record = (overrides: Record<string, unknown> = {}) => ({
 describe('conversation records store', () => {
   beforeEach(() => {
     records.value = []
+  })
+
+  test('does not request private records until authentication is ready', async () => {
+    const refresh = mock(async () => undefined)
+    const clear = mock(() => undefined)
+
+    await syncRecordsForAuthentication(false, { refresh, clear })
+    expect(refresh).not.toHaveBeenCalled()
+    expect(clear).toHaveBeenCalledTimes(1)
+
+    await syncRecordsForAuthentication(true, { refresh, clear })
+    expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   test('sorts records stably and separates conversation and plan sections', () => {
@@ -207,7 +221,7 @@ describe('conversation records store', () => {
     expect(records.value[0]?.title).toBe('New conversation')
   })
 
-  test('derives generating badge and session resume visibility from record lifecycle state', () => {
+  test('derives the generating badge from record lifecycle state', () => {
     const generatingSession = record({
       title_status: 'generated',
       state: 'generating',
@@ -220,8 +234,50 @@ describe('conversation records store', () => {
     expect(isGeneratingRecord(generatingSession)).toBe(true)
     expect(isGeneratingRecord(processingConversation)).toBe(true)
     expect(isGeneratingRecord(record())).toBe(false)
-    expect(shouldShowConversationResume(generatingSession)).toBe(true)
-    expect(shouldShowConversationResume(processingConversation)).toBe(false)
-    expect(shouldShowConversationResume(record({ kind: 'plan', state: 'planned', plan_id: 'plan-1' }))).toBe(false)
+  })
+
+  test('uses the record row as the only return entry when it already represents the active generation', () => {
+    const activeTask = { taskId: 'task-1', sessionId: 'session-1' }
+    const generatingSession = record({
+      state: 'generating',
+      status: 'processing',
+      plan_id: 'plan-1',
+      task_id: 'task-1',
+    })
+
+    expect(shouldShowActiveTripTaskFallback(activeTask, [generatingSession])).toBe(false)
+    expect(shouldShowActiveTripTaskFallback(activeTask, [
+      record({ record_id: 'other', session_id: 'other' }),
+    ])).toBe(true)
+    expect(shouldShowActiveTripTaskFallback({ taskId: 'task-1' }, [generatingSession])).toBe(false)
+    expect(shouldShowActiveTripTaskFallback(activeTask, [record({
+      kind: 'plan',
+      state: 'planned',
+      status: 'completed',
+      plan_id: 'task-1',
+      task_id: 'task-1',
+    })])).toBe(false)
+  })
+
+  test('clears a stale active task marker once the matching record is terminal', () => {
+    const activeTask = { taskId: 'task-1', sessionId: 'session-1' }
+
+    expect(shouldClearActiveTripTask(activeTask, [record({
+      state: 'generating',
+      status: 'processing',
+      task_id: 'task-1',
+    })])).toBe(false)
+    expect(shouldClearActiveTripTask(activeTask, [record({
+      kind: 'plan',
+      state: 'planned',
+      status: 'completed',
+      plan_id: 'task-1',
+      task_id: 'task-1',
+    })])).toBe(true)
+    expect(shouldClearActiveTripTask(activeTask, [record({
+      record_id: 'other',
+      session_id: 'other',
+      task_id: 'other',
+    })])).toBe(false)
   })
 })

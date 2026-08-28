@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { YoubanDatabase } from "./database.ts";
 
 export type ConversationSessionTitleStatus = "pending" | "generated" | "fallback";
@@ -170,6 +171,12 @@ export class ConversationSessionRepository {
     const normalizedSnapshot = normalizeSnapshot(snapshot);
     const revision = Number(expectedRevision);
     return this.transaction(() => {
+      const existing = this.getBySessionId(normalizedSessionId, true, normalizedUserId);
+      if (!existing || existing.revision !== revision) {
+        throw new SessionRevisionConflictError(normalizedSessionId);
+      }
+      if (isDeepStrictEqual(existing.snapshot, normalizedSnapshot)) return existing;
+
       const result = this.database.raw.query(`
         UPDATE conversation_sessions
         SET snapshot = ?, revision = revision + 1, updated_at = ?

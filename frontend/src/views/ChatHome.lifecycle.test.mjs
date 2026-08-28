@@ -76,6 +76,40 @@ describe('chat lifecycle persistence boundaries', () => {
     expect(watcherBody).toContain('busy.value = false')
   })
 
+  it('rebases the local snapshot onto the latest server revision after a conflict', () => {
+    const writerBody = chatHomeSource.match(
+      /const writeConversationPersistence = async[\s\S]*?\n\}/,
+    )?.[0] ?? ''
+    const conflictBody = writerBody.slice(
+      writerBody.indexOf('if (error instanceof ConversationSessionRevisionConflictError)'),
+    )
+
+    expect(conflictBody).not.toContain('applyConversationDetail(current)')
+    expect(conflictBody).toContain('revision: current.revision, snapshot')
+    expect(conflictBody.match(/updateConversationSession\(/g)?.length).toBe(1)
+  })
+
+  it('always settles the parse input lock when that parse still owns the busy lease', () => {
+    const parseBody = chatHomeSource.match(
+      /const runParseStream = async[\s\S]*?\n\}/,
+    )?.[0] ?? ''
+    const finallyBody = parseBody.slice(parseBody.indexOf('finally'))
+
+    expect(parseBody).toContain('const busyLease = acquireConversationBusyLease()')
+    expect(finallyBody).toMatch(/busy\.value = false|releaseConversationBusyLease\(busyLease\)/)
+    expect(finallyBody).not.toContain('if (ownsOperation(context))')
+  })
+
+  it('shows the friendly server message when the intake model is unavailable', () => {
+    const parseBody = chatHomeSource.match(
+      /const runParseStream = async[\s\S]*?\n\}/,
+    )?.[0] ?? ''
+
+    expect(parseBody).toContain("let streamError = ''")
+    expect(parseBody).toContain("onError: (message) => { streamError = message || t('composer.parseFailed') }")
+    expect(parseBody).toContain("throw new Error(streamError || t('composer.parseFailed'))")
+  })
+
   it('replaces an early failed confirmation stream and releases its busy lease', () => {
     const confirmBody = chatHomeSource.match(
       /const handlePendingReply = async[\s\S]*?\n\}/,
@@ -92,6 +126,6 @@ describe('chat lifecycle persistence boundaries', () => {
     expect(catchBody).toContain("text: error?.message || t('composer.parseFailed')")
     expect(catchBody).not.toContain("type: 'streaming'")
     expect(catchBody).not.toContain('thinking')
-    expect(finallyBody).toMatch(/busy\.value = false|releaseConversationBusyLease\(busyLease\)/)
+    expect(finallyBody).toContain('releaseConversationBusyLease(busyLease)')
   })
 })

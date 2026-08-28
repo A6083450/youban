@@ -6,6 +6,7 @@ import {
   duplicateAttractionIssues,
   mergeSegmentDays,
   normalizeCheckpoint,
+  rebalanceSparseAttractionDays,
   type DayPlan,
   type PlanningCheckpoint,
   type Segment,
@@ -14,6 +15,8 @@ import {
 import type { TrustedPoi, WeatherForecast } from "../services/amap-research-sources.ts";
 import { adjustGeneratedDaysToBudget } from "../domain/budget-guard.ts";
 import { recommendVisitTimes } from "../domain/itinerary-scheduler.ts";
+import { enrichHotelPrices } from "../services/hotel-price-enrichment.ts";
+import type { HotelPriceSource } from "../services/hotel-price-source.ts";
 import type { PlannerProgress, PlannerRunContext, TripPlanner } from "./trip-planner.ts";
 import { visibleThoughtSummary } from "./thought-summary-policy.ts";
 
@@ -45,6 +48,7 @@ interface PiTripPlannerOptions {
   duplicateRepairRounds?: number;
   finalizationTimeoutMs?: number;
   showThoughts?: boolean;
+  hotelPrices?: HotelPriceSource;
 }
 
 function researchSchema(candidates: TrustedPoi[]) {
@@ -61,8 +65,9 @@ function researchSchema(candidates: TrustedPoi[]) {
   };
 }
 
-function segmentSchema(candidates: TrustedPoi[], dayCount: number) {
+function segmentSchema(candidates: TrustedPoi[], hotelCandidates: TrustedPoi[], dayCount: number) {
   const poiIds = candidates.map((candidate) => candidate.poi_id);
+  const hotelPoiIds = hotelCandidates.map((candidate) => candidate.poi_id);
   return {
     type: "object",
     properties: {
@@ -79,17 +84,17 @@ function segmentSchema(candidates: TrustedPoi[], dayCount: number) {
             description: { type: "string" },
             transportation: { type: "string" },
             accommodation: { type: "string" },
-            hotel: {
+            hotel: hotelPoiIds.length === 0 ? { type: "null" } : {
               anyOf: [
                 { type: "null" },
                 {
                   type: "object",
                   properties: {
                     name: { type: "string" },
-                    poi_id: { type: "string" },
+                    poi_id: { type: "string", enum: hotelPoiIds },
                     estimated_cost: { type: "number" },
                   },
-                  required: ["name"],
+                  required: ["poi_id"],
                   additionalProperties: true,
                 },
               ],
@@ -266,9 +271,15 @@ function validateResearchSelection(raw: unknown, candidates: TrustedPoi[]): Trus
   return selected.length > 0 ? selected : structuredClone(candidates.slice(0, 12));
 }
 
-function validateSegmentOutput(raw: unknown, segment: Segment, trustedCandidates: TrustedPoi[]): DayPlan[] {
+function validateSegmentOutput(
+  raw: unknown,
+  segment: Segment,
+  trustedCandidates: TrustedPoi[],
+  trustedHotels: TrustedPoi[],
+): DayPlan[] {
   const days = record(raw) && Array.isArray(raw.days) ? raw.days as unknown[] : [];
   const trusted = new Map(trustedCandidates.map((candidate) => [candidate.poi_id, candidate]));
+  const hotels = new Map(trustedHotels.map((candidate) => [candidate.poi_id, candidate]));
   const used = new Set<string>();
   return segment.day_indices.map((dayIndex, offset): DayPlan => {
     const value = record(days[offset]) ? structuredClone(days[offset]) as Record<string, unknown> : {};
@@ -281,12 +292,26 @@ function validateSegmentOutput(raw: unknown, segment: Segment, trustedCandidates
       description: String(value.description ?? "").trim() || `${segment.city}自由活动与机动安排`,
       transportation: String(value.transportation ?? "").trim() || "待确认",
       accommodation: String(value.accommodation ?? "").trim() || "待确认",
-      hotel: record(value.hotel) ? structuredClone(value.hotel) as DayPlan["hotel"] : null,
+      hotel: null,
       attractions: [],
       meals: Array.isArray(value.meals)
         ? value.meals.filter(record).map((meal) => structuredClone(meal) as DayPlan["meals"][number])
         : [],
     };
+    if (record(value.hotel)) {
+      const candidate = hotels.get(String(value.hotel.poi_id ?? "").trim());
+      if (candidate) {
+        normalized.hotel = {
+          ...structuredClone(candidate),
+          name: candidate.name,
+          poi_id: candidate.poi_id,
+          source: "amap",
+          source_hotel_id: candidate.poi_id,
+          price_status: "unavailable",
+        };
+        delete normalized.hotel.estimated_cost;
+      }
+    }
     normalized.attractions = rawAttractions.flatMap((attraction) => {
       if (!record(attraction)) return [];
       const candidate = trusted.get(String(attraction.poi_id ?? "").trim());
@@ -336,9 +361,13 @@ export class PiTripPlanner implements TripPlanner {
     const plannedSegments = new Map<string, Segment>();
     const details: NonNullable<PlannerProgress["details"]> = [];
     const reportProgress = async (update: PlannerProgress, thought: string): Promise<void> => {
+      const stageSummary = visibleThoughtSummary(update.message, true);
+      if (stageSummary && details.at(-1)?.title !== stageSummary) {
+        details.push({ type: "info", title: stageSummary, timestamp: Date.now() });
+      }
       const summary = visibleThoughtSummary(thought, this.showThoughts);
       if (summary) details.push({ type: "thinking", title: summary, timestamp: Date.now() });
-      await context.onProgress(summary ? { ...update, details: structuredClone(details) } : update);
+      await context.onProgress({ ...update, details: structuredClone(details) });
     };
     ensureActive(context.signal);
     await reportProgress(
@@ -437,6 +466,8 @@ export class PiTripPlanner implements TripPlanner {
     }
     const unresolved = duplicateAttractionIssues(days, segments);
     if (Object.keys(unresolved).length > 0) throw new Error("跨分段景点重复修复失败");
+    days = rebalanceSparseAttractionDays(days);
+    days = days.map((day) => day.date === request.end_date ? { ...day, hotel: null } : day);
 
     await reportProgress(
       { stage: "reviewing", progress: 88, message: "正在汇总并审查行程" },
@@ -497,6 +528,8 @@ export class PiTripPlanner implements TripPlanner {
 
     const summary = record(checkpoint.summary.output) ? checkpoint.summary.output : {};
     const weatherInfo = buildWeatherInfo(request, checkpoint.search.weather);
+    days = await enrichHotelPrices(days, request, this.options.hotelPrices);
+    ensureActive(context.signal);
     const adjusted = adjustGeneratedDaysToBudget(request, days);
     days = recommendVisitTimes(adjusted.days, weatherInfo);
     return {
@@ -557,10 +590,10 @@ export class PiTripPlanner implements TripPlanner {
             weather: checkpoint.search.weather[segment.city] ?? [],
             repair_issues: repairIssues[segment.segment_id] ?? [],
           },
-          schema: segmentSchema(attractions, segment.day_indices.length),
+          schema: segmentSchema(attractions, hotels as TrustedPoi[], segment.day_indices.length),
           signal: context.signal,
         });
-        state.output = validateSegmentOutput(output, segment, attractions);
+        state.output = validateSegmentOutput(output, segment, attractions, hotels as TrustedPoi[]);
         state.status = "completed";
       } catch (error) {
         state.status = "failed";

@@ -71,6 +71,7 @@ const DEFAULT_RUNTIME_BACKEND_SETTINGS: BackendRuntimeSettings = {
 }
 
 export const RUNTIME_SETTINGS_UPDATED_EVENT = 'tripstar:runtime-settings-updated'
+export const AUTH_EXPIRED_EVENT = 'tripstar:auth-expired'
 const t = i18n.global.t
 
 export const getStoredUser = (): UserInfo | null => {
@@ -215,8 +216,17 @@ const emitRuntimeSettingsUpdated = () => {
   window.dispatchEvent(new CustomEvent(RUNTIME_SETTINGS_UPDATED_EVENT))
 }
 
+const emitAuthExpired = (path: unknown): void => {
+  if (typeof window === 'undefined') return
+  const url = String(path || '')
+  if (url.startsWith('/api/admin/')) return
+  if (url === '/api/auth/me' || url === '/api/auth/logout' || url.startsWith('/api/auth/web/challenges')) return
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT))
+}
+
 const apiClient = axios.create({
   timeout: 0, // 无超时限制，等待后端返回结果
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -228,10 +238,6 @@ apiClient.interceptors.request.use(
     config.baseURL = getRuntimeApiBaseUrl()
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
       config.headers.delete('Content-Type')
-    }
-    const user = getStoredUser()
-    if (user?.user_id && !config.headers.has('X-User-Id')) {
-      config.headers['X-User-Id'] = user.user_id
     }
     const adminToken = typeof window === 'undefined'
       ? ''
@@ -256,6 +262,7 @@ apiClient.interceptors.response.use(
   },
   (error) => {
     console.error('响应错误:', error.response?.status, error.message)
+    if (error.response?.status === 401) emitAuthExpired(error.config?.url)
     return Promise.reject(error)
   }
 )
@@ -645,6 +652,27 @@ export class TripShareCreationError extends Error {
   }
 }
 
+export type NativeActionType = 'share' | 'save_guide' | 'add_calendar'
+
+export interface NativeActionTicket {
+  action_id: string
+  expires_at: string
+}
+
+export type NativeActionRequest = {
+  type: NativeActionType
+  plan_id: string
+  title?: string
+  image_data_url?: string
+}
+
+export async function createMiniProgramNativeAction(
+  request: NativeActionRequest,
+): Promise<NativeActionTicket> {
+  const response = await apiClient.post<NativeActionTicket>('/api/miniprogram/actions', request)
+  return response.data
+}
+
 export async function createTripShare(planId: string): Promise<CreateTripShareResponse> {
   try {
     const response = await apiClient.post<CreateTripShareResponse>(
@@ -711,14 +739,12 @@ export async function createConversation(
 
 export async function getConversationSession(
   sessionId: string,
-  ownerId?: string,
   signal?: AbortSignal,
 ): Promise<ConversationSessionDetail> {
   try {
     const response = await apiClient.get<ConversationSessionDetail>(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
       {
-        ...(ownerId ? { headers: { 'X-User-Id': ownerId } } : {}),
         ...(signal ? { signal } : {}),
       },
     )
@@ -747,7 +773,6 @@ export class ConversationSessionNotFoundError extends Error {
 export async function updateConversationSession(
   sessionId: string,
   input: UpdateConversationRequest,
-  ownerId?: string,
   signal?: AbortSignal,
 ): Promise<ConversationSessionDetail> {
   try {
@@ -755,7 +780,6 @@ export async function updateConversationSession(
       `/api/conversations/${encodeURIComponent(sessionId)}`,
       input,
       {
-        ...(ownerId ? { headers: { 'X-User-Id': ownerId } } : {}),
         ...(signal ? { signal } : {}),
       },
     )
@@ -860,24 +884,24 @@ const todayString = (): string => {
 /**
  * 通用 SSE POST:用 fetch + ReadableStream 逐块读取后端的
  * `data: {"type":"thinking"|"delta"|"final"|"error",...}` 事件流,直到 `data: [DONE]`。
- * axios 不支持流,故用原生 fetch;手动带上 X-User-Id。
+ * axios 不支持流,故用原生 fetch;身份由同源 HttpOnly Cookie 提供。
  */
 async function postSSE<T>(
   path: string,
   body: unknown,
   cb: ChatStreamCallbacks<T>
 ): Promise<void> {
-  const user = getStoredUser()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (user?.user_id) headers['X-User-Id'] = user.user_id
 
   const res = await fetch(`${getRuntimeApiBaseUrl()}${path}`, {
     method: 'POST',
     headers,
+    credentials: 'include',
     body: JSON.stringify(body),
     signal: cb.signal,
   })
   if (!res.ok || !res.body) {
+    if (res.status === 401) emitAuthExpired(path)
     throw new Error(`HTTP ${res.status}`)
   }
 
@@ -1083,11 +1107,6 @@ export function watchTripTask(
   const wsUrl = new URL(baseWsUrl, window.location.href)
   if (wsUrl.protocol === 'http:') wsUrl.protocol = 'ws:'
   if (wsUrl.protocol === 'https:') wsUrl.protocol = 'wss:'
-  const userId = getStoredUser()?.user_id
-  if (userId) wsUrl.searchParams.set('user_id', userId)
-  const adminToken = getAdminToken()
-  if (adminToken) wsUrl.searchParams.set('admin_token', adminToken)
-
   return new Promise((resolve, reject) => {
     let settled = false
     const socket = new WebSocket(wsUrl.toString())
@@ -1188,17 +1207,48 @@ export async function chatEditPlan(
   }
 }
 
-// ===== 用户身份(昵称即登录) =====
+// ===== 用户身份(小程序扫码确认) =====
 
-export async function authLogin(nickname: string): Promise<UserInfo> {
-  try {
-    const response = await apiClient.post<{ success: boolean; user: UserInfo }>(
-      '/api/auth/login', { nickname },
-    )
-    return response.data.user
-  } catch (error: any) {
-    throw new Error(error.response?.data?.detail || error.message || t('login.failed'))
-  }
+export interface WebLoginChallenge {
+  challenge_id: string
+  challenge_token: string
+  verifier: string
+  short_code: string
+  expires_at: string
+}
+
+export interface AuthPreferences {
+  skin: 'default' | 'google'
+  locale: 'zh-CN' | 'en-US' | 'fr-FR'
+  initialized: boolean
+  updated_at: string | null
+}
+
+export type AuthPreferencesPatch = Partial<Pick<AuthPreferences, 'skin' | 'locale'>>
+
+export async function createWebLoginChallenge(): Promise<WebLoginChallenge> {
+  const response = await apiClient.post<WebLoginChallenge>('/api/auth/web/challenges', {})
+  return response.data
+}
+
+export async function getWebLoginChallengeStatus(challengeId: string, verifier: string): Promise<string> {
+  const response = await apiClient.get<{ status: string }>(
+    `/api/auth/web/challenges/${encodeURIComponent(challengeId)}/status`,
+    { params: { verifier } },
+  )
+  return response.data.status
+}
+
+export async function exchangeWebLoginChallenge(challengeId: string, verifier: string): Promise<UserInfo> {
+  const response = await apiClient.post<{ success: boolean; user: UserInfo }>(
+    `/api/auth/web/challenges/${encodeURIComponent(challengeId)}/exchange`,
+    { verifier },
+  )
+  return response.data.user
+}
+
+export async function authLogout(): Promise<void> {
+  await apiClient.post('/api/auth/logout', {})
 }
 
 export async function authMe(): Promise<UserInfo | null> {
@@ -1206,10 +1256,19 @@ export async function authMe(): Promise<UserInfo | null> {
     const response = await apiClient.get<{ success: boolean; user: UserInfo }>('/api/auth/me')
     return response.data.user
   } catch (error: any) {
-    if (error.response?.status === 404) return null
-    // 网络异常时不强制登出,保留本地会话
-    return getStoredUser()
+    if (error.response?.status === 401 || error.response?.status === 404) return null
+    return null
   }
+}
+
+export async function getAuthPreferences(): Promise<AuthPreferences> {
+  const response = await apiClient.get<AuthPreferences>('/api/auth/preferences')
+  return response.data
+}
+
+export async function patchAuthPreferences(patch: AuthPreferencesPatch): Promise<AuthPreferences> {
+  const response = await apiClient.patch<AuthPreferences>('/api/auth/preferences', patch)
+  return response.data
 }
 
 export async function getUserMemories(): Promise<UserMemoryItem[]> {

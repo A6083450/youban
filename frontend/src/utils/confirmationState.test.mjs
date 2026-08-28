@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { reduceConfirmationDecision } from './confirmationState.js'
+import { reduceConfirmationDecision, reduceTripParseDecision } from './confirmationState.js'
 
 const draft = {
   city: '成都',
@@ -131,6 +131,27 @@ test('ask_confirmation can refresh readiness without granting execution', () => 
   )
 })
 
+test('a recommendation for a ready draft asks the view to show generation actions again', () => {
+  assert.deepEqual(
+    reduceConfirmationDecision(state, {
+      action: 'chat',
+      message: '| 方案 | 特点 | 建议天数 |',
+      next_step: 'offer_generation',
+      ready_to_generate: true,
+      readiness_token: 'ready-token',
+      execution_token: '',
+    }),
+    {
+      type: 'message',
+      message: '| 方案 | 特点 | 建议天数 |',
+      readyToGenerate: true,
+      readinessToken: 'ready-token',
+      offerGeneration: true,
+      keepDraft: true,
+    }
+  )
+})
+
 test('update replaces the draft without generating', () => {
   const updatedDraft = {
     ...draft,
@@ -222,4 +243,48 @@ test('confirm with an execution token returns one generate payload', () => {
       keepDraft: false,
     }
   )
+})
+
+test('parse result only auto-generates when the Agent decision is signed', () => {
+  assert.deepEqual(
+    reduceTripParseDecision({
+      action: 'plan',
+      next_step: 'generate_now',
+      auto_generate: true,
+      trip: draft,
+      execution_token: 'agent-execution-token',
+    }),
+    {
+      type: 'generate',
+      draft,
+      token: 'agent-execution-token',
+    }
+  )
+
+  assert.deepEqual(
+    reduceTripParseDecision({
+      action: 'plan',
+      next_step: 'offer_generation',
+      auto_generate: false,
+      ready_to_generate: true,
+      trip: draft,
+      readiness_token: 'ready-token',
+    }),
+    {
+      type: 'draft',
+      draft,
+      readyToGenerate: true,
+      readinessToken: 'ready-token',
+    }
+  )
+})
+
+test('parse result never auto-generates without both the Agent flag and execution token', () => {
+  for (const response of [
+    { action: 'plan', auto_generate: true, trip: draft, execution_token: '' },
+    { action: 'plan', auto_generate: false, trip: draft, execution_token: 'unexpected-token' },
+    { action: 'clarify', auto_generate: true, trip: draft, execution_token: 'unexpected-token' },
+  ]) {
+    assert.notEqual(reduceTripParseDecision(response).type, 'generate')
+  }
 })

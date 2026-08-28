@@ -57,7 +57,7 @@ const expanded = ref(false)
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #6b5d52;
+  color: var(--text-secondary);
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 14px;
   align-items: center;
@@ -72,13 +72,13 @@ const expanded = ref(false)
 
 .sidebar-share-tool__trigger:hover,
 .sidebar-share-tool__trigger--expanded {
-  border-color: rgba(217, 119, 87, 0.2);
-  background: rgba(217, 119, 87, 0.08);
-  color: #c4603d;
+  border-color: var(--accent-focus);
+  background: var(--accent-hover);
+  color: var(--accent-strong);
 }
 
 .sidebar-share-tool__trigger:focus-visible {
-  outline: 2px solid #d97757;
+  outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
 }
 
@@ -93,7 +93,8 @@ const expanded = ref(false)
 
 .sidebar-share-tool__chevron {
   justify-self: end;
-  color: rgba(61, 50, 41, 0.45);
+  color: var(--text-secondary);
+  opacity: 0.65;
   font-size: 11px;
   transition: transform 0.15s ease;
 }

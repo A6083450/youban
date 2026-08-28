@@ -68,7 +68,7 @@ class TripRequest(BaseModel):
     free_text_input: Optional[str] = Field(default="", description="额外要求", example="希望多安排一些博物馆")
     origin_text: Optional[str] = Field(default="", description="用户自然语言原始输入")
     execution_token: Optional[str] = Field(default="", description="Agent 确认决策签发的一次性执行凭证")
-    language: Optional[str] = Field(default="zh", description="输出语言(zh/en/ja)", example="en")
+    language: Optional[str] = Field(default="zh", description="输出语言(zh/en/fr)", example="en")
     conversation: List[ChatMessage] = Field(default_factory=list, max_length=100, description="创建计划前的完整稳定对话")
 
     @model_validator(mode='after')

@@ -87,7 +87,7 @@ const submit = () => {
 .share-code-entry__label {
   display: block;
   margin-bottom: 8px;
-  color: #6b5d52;
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.5;
@@ -103,36 +103,37 @@ const submit = () => {
 .share-code-entry__row :deep(.ant-input) {
   min-width: 0;
   height: 40px;
-  border-color: rgba(61, 50, 41, 0.16);
+  border-color: var(--border-subtle);
   border-radius: 8px;
-  color: #3d3229;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   font-size: 14px;
 }
 
 .share-code-entry__row :deep(.ant-input:hover),
 .share-code-entry__row :deep(.ant-input:focus) {
-  border-color: #d97757;
-  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.14);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .share-code-entry__row :deep(.ant-btn) {
   flex: 0 0 auto;
   min-width: 76px;
   height: 40px;
-  border-color: #d97757;
+  border-color: var(--accent-primary);
   border-radius: 8px;
-  background: #d97757;
+  background: var(--accent-primary);
   font-weight: 600;
 }
 
 .share-code-entry__row :deep(.ant-btn:not(:disabled):hover) {
-  border-color: #c4603d;
-  background: #c4603d;
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
 }
 
 .share-code-entry__error {
   margin: 8px 0 0;
-  color: #c43c32;
+  color: var(--status-danger);
   font-size: 12px;
   line-height: 1.4;
 }

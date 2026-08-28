@@ -39,6 +39,10 @@ export interface AppSettings extends RuntimeSettings {
   port: number; // env PORT，默认 8000（生产部署用 7860）
   cors_origins: string[]; // env CORS_ORIGINS 逗号分隔，默认 ["http://localhost:5173","http://localhost:3000","http://127.0.0.1:5173"]
   llm_timeout: number; // env LLM_TIMEOUT，默认 60
+  fliggy_proxy_token: string;
+  fliggy_proxy_url: string;
+  fliggy_price_timeout_ms: number;
+  fliggy_price_cache_ttl_seconds: number;
 }
 
 type RuntimeKey = keyof RuntimeSettings;
@@ -78,6 +82,13 @@ const RUNTIME_ENUM_VALUES = {
   llm_api_style: ["responses", "completions"],
   chat_edit_agent: ["pi", "simple"],
 } as const;
+
+const RUNTIME_KEYS = [
+  ...RUNTIME_STRING_KEYS,
+  ...RUNTIME_NUMBER_KEYS,
+  ...RUNTIME_BOOLEAN_KEYS,
+  ...Object.keys(RUNTIME_ENUM_VALUES),
+] as RuntimeKey[];
 
 const DEFAULT_CORS_ORIGINS = [
   "http://localhost:5173",
@@ -286,6 +297,20 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
     llm_api_style: readEnvEnum("LLM_API_STYLE", RUNTIME_ENUM_VALUES.llm_api_style, "responses"),
     chat_edit_agent: readEnvEnum("CHAT_EDIT_AGENT", RUNTIME_ENUM_VALUES.chat_edit_agent, "pi"),
     llm_timeout: readEnvInt(60, "LLM_TIMEOUT"),
+    // 酒店参考价仅允许通过服务端环境变量配置，不进入运行时配置面。
+    fliggy_proxy_token: readEnv("FLIGGY_PROXY_TOKEN") ?? "",
+    fliggy_proxy_url: readEnv("FLIGGY_PROXY_URL")
+      ?? "https://1439498936-6sysdjjt99.ap-guangzhou.tencentscf.com",
+    fliggy_price_timeout_ms: readEnvBoundedInt("FLIGGY_PRICE_TIMEOUT_MS", {
+      min: 500,
+      max: 5_000,
+      fallback: 3_000,
+    }),
+    fliggy_price_cache_ttl_seconds: readEnvBoundedInt("FLIGGY_PRICE_CACHE_TTL_SECONDS", {
+      min: 0,
+      max: 1_800,
+      fallback: 300,
+    }),
   };
 
   // runtime 覆盖（非空值）在 env 之上
@@ -318,6 +343,14 @@ export function getSettings(): AppSettings {
   ensureLoaded();
   settingsCache = buildSettings(runtimeOverrides);
   return settingsCache;
+}
+
+export function runtimeSettingsSnapshot(settings: AppSettings): RuntimeSettings {
+  const snapshot: Partial<RuntimeSettings> = {};
+  for (const key of RUNTIME_KEYS) {
+    (snapshot as Record<string, unknown>)[key] = settings[key];
+  }
+  return snapshot as RuntimeSettings;
 }
 
 export function effectiveThinkingVisible(

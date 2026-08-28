@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
+    "dev:wechat": "HOST=0.0.0.0 PORT=7860 YOUBAN_DEV_WECHAT_AUTH=1 bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "test": "bun run test:parallel",
     "test:serial": "bun test",
@@ -18,8 +19,7 @@
     "profile:cpu": "bun --cpu-prof-md --cpu-prof-dir=profiles scripts/benchmark-pi-subagents.ts",
     "profile:heap": "bun --heap-prof-md --heap-prof-dir=profiles scripts/benchmark-pi-subagents.ts",
     "smoke:deployment": "bun run scripts/smoke-deployment.ts",
-    "migrate:sqlite": "bun run scripts/migrate-json-to-sqlite.ts",
-    "export:json": "bun run scripts/export-sqlite-to-json.ts"
+    "purge:business-data": "bun run scripts/prepare-production-cutover.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",

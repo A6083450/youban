@@ -14,6 +14,8 @@ import { join } from "node:path";
 import { exportSqliteToJson } from "../scripts/export-sqlite-to-json.ts";
 import { migrateJsonToSqlite } from "../scripts/migrate-json-to-sqlite.ts";
 import { ConversationRepository } from "../src/domain/conversations.ts";
+import { YoubanDatabase } from "../src/domain/database.ts";
+import { CURRENT_SCHEMA_VERSION } from "../src/domain/db-schema.ts";
 
 const tempDirs: string[] = [];
 
@@ -68,7 +70,7 @@ describe("JSON to SQLite migration", () => {
     const result = migrateJsonToSqlite({ dataDir, dryRun: true });
 
     expect(existsSync(join(dataDir, "youban.db"))).toBe(false);
-    expect(result.schemaVersion).toBe(3);
+    expect(result.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(result.source.tasks).toEqual(expect.objectContaining({ valid: 1, invalid: 1 }));
     expect(result.source.users.valid).toBe(1);
     expect(result.source.conversations.valid).toBe(1);
@@ -210,5 +212,98 @@ describe("JSON to SQLite migration", () => {
       const payload = JSON.parse(readFileSync(join(outputDir, "conversations", name), "utf8"));
       return payload.plan_id;
     }).sort()).toEqual([...conversationIds, "task-1"].sort());
+  });
+
+  it("accepts legacy schema version 3 as a first-class compatibility target", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "youban-migration-compat-"));
+    tempDirs.push(dataDir);
+    const databasePath = join(dataDir, "legacy-v3.db");
+    const db = new Database(databasePath);
+    db.exec(`PRAGMA user_version = 3`);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        task_id TEXT PRIMARY KEY NOT NULL,
+        plan_id TEXT NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        share_token TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        user_deleted_at TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        plan_id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY NOT NULL,
+        nickname TEXT NOT NULL,
+        nickname_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT NOT NULL
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS managed_skills (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source TEXT NOT NULL,
+        repository_url TEXT,
+        source_ref TEXT,
+        source_subdirectory TEXT,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        active_version_id TEXT,
+        candidate_version_id TEXT,
+        generation INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_versions (
+        id TEXT PRIMARY KEY NOT NULL,
+        skill_id TEXT NOT NULL,
+        version_number INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        content TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        package_relative_path TEXT NOT NULL,
+        source_commit TEXT,
+        created_at TEXT NOT NULL,
+        activated_at TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_agent_assignments (
+        skill_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL
+      );
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_audit_events (
+        id TEXT PRIMARY KEY NOT NULL,
+        operation TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        version_id TEXT,
+        sanitized_source TEXT,
+        result TEXT NOT NULL,
+        error_code TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+    expect(() => new YoubanDatabase(databasePath)).not.toThrow();
+    db.close();
   });
 });

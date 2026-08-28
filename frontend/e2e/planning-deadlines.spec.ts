@@ -5,7 +5,12 @@ import { createInterface } from 'node:readline'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const user = { user_id: 'planning-acceptance-user', nickname: 'Planning QA' } as const
+const user = {
+  user_id: 'planning-acceptance-user',
+  nickname: 'Planning QA',
+  avatar_url: '/api/avatars/planning-acceptance.jpg',
+  profile_complete: true,
+} as const
 const attemptedIntakeThought = '正在梳理你的旅行偏好与行程条件'
 const EXPECTED_DEADLINE_CASES = [
   { days: 7, limit_ms: 6_000 },
@@ -220,7 +225,7 @@ test('renders no thought summary for a visibility-off intake stream', async ({ p
           method,
           headers: {
             ...(requestHeaders['content-type'] ? { 'content-type': requestHeaders['content-type'] } : {}),
-            ...(requestHeaders['x-user-id'] ? { 'x-user-id': requestHeaders['x-user-id'] } : {}),
+            'x-user-id': user.user_id,
           },
           body: method === 'GET' || method === 'HEAD' ? undefined : route.request().postData(),
         })
@@ -234,7 +239,7 @@ test('renders no thought summary for a visibility-off intake stream', async ({ p
       if (path === '/api/trip/parse/stream') {
         const response = await fetch(`${fixture.apiUrl}${path}`, {
           method: route.request().method(),
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-user-id': user.user_id },
           body: route.request().postData(),
         })
         intakeStream = await response.text()

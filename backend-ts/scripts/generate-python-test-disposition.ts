@@ -80,7 +80,7 @@ for await (const absolutePath of new Bun.Glob("app/**/*_test.py").scan({ cwd: ba
   });
 }
 cases.sort((left, right) => left.path.localeCompare(right.path) || left.line - right.line);
-if (cases.length !== 242) throw new Error(`Python 测试基线应为 242，实际为 ${cases.length}`);
+if (cases.length !== 243) throw new Error(`Python 测试基线应为 243，实际为 ${cases.length}`);
 
 const counts = cases.reduce((result, item) => {
   result[item.rule.disposition] += 1;
@@ -90,9 +90,9 @@ const table = cases.map((item, index) => {
   const source = `${item.path}:${item.line}::${item.name}`;
   return `| ${index + 1} | \`${source}\` | \`${item.rule.disposition}\` | ${item.rule.evidence} | ${item.rule.rationale} |`;
 }).join("\n");
-const document = `# Python 242-Test Disposition\n\n`
+const document = `# Python 243-Test Disposition\n\n`
   + `> 由 \`bun run scripts/generate-python-test-disposition.ts\` 生成。不要手工编辑。\n\n`
-  + `基线：242/242 已处置；\`port=${counts.port}\`，\`replace=${counts.replace}\`，\`retire=${counts.retire}\`。\n\n`
+  + `基线：243/243 已处置；\`port=${counts.port}\`，\`replace=${counts.replace}\`，\`retire=${counts.retire}\`。\n\n`
   + `- \`port\`：业务行为与契约直接迁入 TypeScript 测试。\n`
   + `- \`replace\`：旧实现被新架构替代，等价风险由所列 TS 测试承担。\n`
   + `- \`retire\`：能力按已确认决策删除；必须给出删除理由。\n\n`

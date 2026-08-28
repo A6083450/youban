@@ -1,0 +1,28 @@
+.web-state {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 64rpx 48rpx 160rpx;
+  background: #faf7f2;
+  color: #3d3229;
+  text-align: center;
+}
+.web-state__title { font-size: 36rpx; font-weight: 700; }
+.web-state__detail { margin-top: 22rpx; color: #6b5d52; font-size: 26rpx; line-height: 1.6; }
+.web-state__retry {
+  width: 280rpx;
+  min-height: 88rpx;
+  margin-top: 44rpx;
+  border-radius: 16rpx;
+  background: #d97757;
+  color: #fff;
+}
+.web-state__spinner {
+  width: 50rpx;
+  height: 50rpx;
+  margin: 0 auto 28rpx;
+  border: 5rpx solid #eadfd5;
+  border-top-color: #d97757;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
