@@ -39,9 +39,9 @@
   },
   "scripts": {
     "openapi": "openapi-ts",
-    "init-husky": "git init && husky",
+    "init-husky": "husky",
     "init-baseFiles": "node ./scripts/create-base-files.js",
-    "prepare": "pnpm init-husky & pnpm init-baseFiles",
+    "prepare": "pnpm init-baseFiles",
     "predev": "pnpm init-baseFiles",
     "predev:app": "pnpm init-baseFiles",
     "predev:mp": "pnpm init-baseFiles",
