@@ -1,5 +1,6 @@
 data/
 .env
+!frontend-unibest/env/.env
 .omc/
 .omo/
 backend/.omc/
