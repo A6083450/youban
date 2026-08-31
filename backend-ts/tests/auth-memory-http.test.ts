@@ -36,10 +36,16 @@ describe("auth memory HTTP", () => {
       memory,
       authentication: {
         pepper: "auth-memory-test-pepper-with-at-least-32-bytes",
-        exchangeWechatCode: async (code) => code,
+        exchangeWechatCode: async (code) => ({
+          openid: `openid-for-${code}`,
+          unionid: `unionid-for-${code}`,
+        }),
       },
     });
-    const login = runtime.authentication!.loginWechat("memory-user");
+    const login = runtime.authentication!.loginMiniProgramIdentity({
+      openid: "openid-for-memory-user",
+      unionid: "unionid-for-memory-user",
+    });
     runtime.authentication!.completeProfile(login.token, "66666666666666666666666666666666.png");
     const user = login.user;
     memory.entries.set(user.user_id, [
@@ -83,7 +89,10 @@ describe("auth memory HTTP", () => {
       memory: new FakeMemory(),
       authentication: {
         pepper: "auth-memory-test-pepper-with-at-least-32-bytes",
-        exchangeWechatCode: async (code) => code,
+        exchangeWechatCode: async (code) => ({
+          openid: `openid-for-${code}`,
+          unionid: `unionid-for-${code}`,
+        }),
       },
     });
     const response = await runtime.app.handle(new Request("http://localhost/api/auth/memories", {

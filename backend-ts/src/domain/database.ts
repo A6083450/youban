@@ -10,6 +10,7 @@ import {
   SKILL_CATALOG_SCHEMA_SQL,
   USER_PREFERENCES_SCHEMA_SQL,
   WECHAT_PROFILE_SCHEMA_SQL,
+  WECHAT_WEB_OAUTH_SCHEMA_SQL,
   schema,
   type YoubanSchema,
 } from "./db-schema.ts";
@@ -53,6 +54,7 @@ export class YoubanDatabase {
       4: () => this.migrateVersionFour(),
       5: () => this.migrateVersionFive(),
       6: () => this.migrateVersionSix(),
+      7: () => this.migrateVersionSeven(),
     };
     const migrate = this.raw.transaction(() => {
       for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {
@@ -111,6 +113,10 @@ export class YoubanDatabase {
 
   private migrateVersionSix(): void {
     this.raw.exec(WECHAT_PROFILE_SCHEMA_SQL);
+  }
+
+  private migrateVersionSeven(): void {
+    this.raw.exec(WECHAT_WEB_OAUTH_SCHEMA_SQL);
   }
 
   quickCheck(): string {

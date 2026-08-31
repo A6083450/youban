@@ -43,6 +43,9 @@ export interface AppSettings extends RuntimeSettings {
   fliggy_proxy_url: string;
   fliggy_price_timeout_ms: number;
   fliggy_price_cache_ttl_seconds: number;
+  wechat_web_app_id: string;
+  wechat_web_app_secret: string;
+  wechat_web_redirect_uri: string;
 }
 
 type RuntimeKey = keyof RuntimeSettings;
@@ -91,6 +94,8 @@ const RUNTIME_KEYS = [
 ] as RuntimeKey[];
 
 const DEFAULT_CORS_ORIGINS = [
+  "http://localhost:9000",
+  "http://127.0.0.1:9000",
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
@@ -311,6 +316,11 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
       max: 1_800,
       fallback: 300,
     }),
+    // 微信开放平台网站应用配置仅来自服务端环境变量，不进入运行时配置面。
+    wechat_web_app_id: readEnv("WECHAT_WEB_APP_ID") ?? "",
+    wechat_web_app_secret: readEnv("WECHAT_WEB_APP_SECRET") ?? "",
+    wechat_web_redirect_uri: readEnv("WECHAT_WEB_REDIRECT_URI")
+      ?? "https://youban.me/api/v2/auth/wechat-web/callback",
   };
 
   // runtime 覆盖（非空值）在 env 之上

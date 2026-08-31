@@ -3,29 +3,21 @@
 # ================================
 FROM docker.m.daocloud.io/library/node:20-slim AS frontend-builder
 
-# 使用国内镜像源
-RUN npm config set registry https://registry.npmmirror.com
-
-WORKDIR /build
-
-# 复制前端依赖文件并安装
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --registry=https://registry.npmmirror.com
-
-# 复制前端代码并构建
-COPY frontend/ ./
-
-# 接收构建参数
-ARG VITE_AMAP_WEB_JS_KEY
-ARG VITE_AMAP_WEB_KEY
-
-# 设置构建时环境变量：API 使用相对路径(同源部署)
-ENV VITE_API_BASE_URL=""
-ENV VITE_AMAP_WEB_JS_KEY=${VITE_AMAP_WEB_JS_KEY:-your_amap_web_js_api_key_here}
-ENV VITE_AMAP_WEB_KEY=${VITE_AMAP_WEB_KEY:-your_amap_web_api_key_here}
-
-# 跳过 vue-tsc 类型检查，直接构建（类型错误不影响运行）
-RUN npx vite build
+RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
+WORKDIR /app
+COPY shared/contracts ./shared/contracts
+WORKDIR /app/shared/contracts
+RUN pnpm install --frozen-lockfile --ignore-scripts
+WORKDIR /app
+COPY frontend-unibest/package.json frontend-unibest/pnpm-lock.yaml ./frontend-unibest/
+WORKDIR /app/frontend-unibest
+RUN pnpm install --frozen-lockfile --ignore-scripts
+COPY frontend-unibest/ ./
+ENV CI=true \
+    SKIP_OPEN_DEVTOOLS=true \
+    VITE_API_BASE_URL="" \
+    VITE_SERVER_BASEURL=""
+RUN pnpm build:h5
 
 
 # ================================
@@ -66,7 +58,7 @@ COPY backend/ ./backend/
 RUN cd backend && npm install --registry=https://registry.npmmirror.com
 
 # 从阶段一复制前端构建产物
-COPY --from=frontend-builder /build/dist ./frontend/dist
+COPY --from=frontend-builder /app/frontend-unibest/dist/build/h5 ./frontend/dist
 
 # 复制启动脚本
 COPY start.sh ./start.sh

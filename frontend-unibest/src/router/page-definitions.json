@@ -1,0 +1,51 @@
+[
+  {
+    "path": "pages/index/index",
+    "type": "home",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "游伴"
+    }
+  },
+  {
+    "path": "pages/login/index",
+    "type": "page",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "登录游伴"
+    }
+  },
+  {
+    "path": "pages/plan/index",
+    "type": "page",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "行程详情",
+      "enablePullDownRefresh": false
+    }
+  },
+  {
+    "path": "pages/privacy/index",
+    "type": "page",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "隐私说明与用户协议"
+    }
+  },
+  {
+    "path": "pages/share/index",
+    "type": "page",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "分享行程"
+    }
+  },
+  {
+    "path": "pages/admin/index",
+    "type": "page",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "后台管理"
+    }
+  }
+]

@@ -13,7 +13,21 @@ function createRuntime(): HttpRuntime {
     dataDir,
     authentication: {
       pepper: "preference-test-pepper-with-at-least-32-bytes",
-      exchangeWechatCode: async (code) => `openid-for-${code}`,
+      exchangeWechatCode: async (code) => ({
+        openid: `openid-for-${code}`,
+        unionid: `unionid-for-${code}`,
+      }),
+      website: {
+        appId: "wx-web-app",
+        redirectUri: "https://youban.me/api/v2/auth/wechat-web/callback",
+        exchangeCode: async (code) => ({
+          openid: `web-openid-for-${code}`,
+          unionid: `unionid-for-${code}`,
+          nickname: "网页用户",
+          avatarUrl: "",
+        }),
+        importAvatar: async () => null,
+      },
     },
   });
   return runtime;
@@ -128,19 +142,24 @@ describe("authenticated user preferences", () => {
       body: { skin: "google", locale: "fr-FR" },
     });
 
-    const challenge = (await requestJson(app, "/api/auth/web/challenges", { method: "POST", body: {} })).body;
-    const approved = await requestJson(app, `/api/auth/web/challenges/${challenge.challenge_id}/approve`, {
+    const started = await requestJson(app, "/api/v2/auth/wechat-web/start", {
       method: "POST",
-      token: mini.token,
-      body: { credential: challenge.challenge_token },
+      body: {},
     });
-    expect(approved.response.status).toBe(200);
-    const exchanged = await requestJson(app, `/api/auth/web/challenges/${challenge.challenge_id}/exchange`, {
-      method: "POST",
-      body: { verifier: challenge.verifier },
-    });
-    expect(exchanged.response.status).toBe(200);
-    const cookie = String(exchanged.response.headers.get("set-cookie") || "").split(";")[0];
+    expect(started.response.status).toBe(200);
+    const verifierCookie = started.response.headers.getSetCookie()
+      .find(value => value.startsWith("youban_wechat_oauth="))
+      ?.split(";", 1)[0];
+    expect(verifierCookie).toEqual(expect.any(String));
+    const exchanged = await app.handle(new Request(
+      `http://localhost/api/v2/auth/wechat-web/callback?code=cross-client-user&state=${encodeURIComponent(started.body.state)}`,
+      { headers: { cookie: verifierCookie! } },
+    ));
+    expect(exchanged.status).toBe(200);
+    const cookie = exchanged.headers.getSetCookie()
+      .find(value => value.startsWith("youban_session="))
+      ?.split(";", 1)[0];
+    expect(cookie).toEqual(expect.any(String));
 
     const webRead = await requestJson(app, "/api/auth/preferences", { cookie });
     expect(webRead.body).toMatchObject({ skin: "google", locale: "fr-FR", initialized: true });

@@ -13,6 +13,7 @@
         "@elysiajs/static": "^1.4.10",
         "@elysiajs/swagger": "^1.3.1",
         "@sinclair/typebox": "^0.34.52",
+        "@youban/contracts": "file:../shared/contracts",
         "drizzle-orm": "^0.45.2",
         "elysia": "^1.4.29",
         "pi-hermes-memory": "0.9.6",
@@ -249,6 +250,8 @@
     "@types/yazl": ["@types/yazl@3.3.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-DIWfCKpsTp6hE5BDBHV3+fIL/bLUF9Bv13iDrWnMlmhQpH67buNvI291ZauQ1xcccxK3FqQ9honnXpq4R8NMuQ=="],
 
     "@unhead/schema": ["@unhead/schema@1.11.20", "", { "dependencies": { "hookable": "^5.5.3", "zhead": "^2.2.4" } }, "sha512-0zWykKAaJdm+/Y7yi/Yds20PrUK7XabLe9c3IRcjnwYmSWY6z0Cr19VIs3ozCj8P+GhR+/TI2mwtGlueCEYouA=="],
+
+    "@youban/contracts": ["@youban/contracts@file:../shared/contracts", { "dependencies": { "@sinclair/typebox": "0.34.52" } }],
 
     "acorn": ["acorn@8.18.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ=="],
 

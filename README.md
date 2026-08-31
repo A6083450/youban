@@ -1,7 +1,7 @@
 # 游伴 AI 旅行助手
 
 <p align="center">
-  <img src="frontend/public/favicon.svg" alt="游伴 Logo" width="120">
+  <img src="frontend-unibest/src/static/brand-logo.svg" alt="游伴 Logo" width="120">
 </p>
 
 <p align="center">
@@ -39,8 +39,8 @@
 | 🗓️ **自适应日程** | 按行程长度自动选择日/周/月分组，完整展示每日时间线 |
 | 🗺️ **地图可视化** | 高德/Google Maps 双引擎，行程路线一目了然 |
 | 🌤️ **天气智能** | 实时天气集成，自动优化行程安排 |
-| 📲 **微信小程序** | 原生 TypeScript 登录入口承接头像选择、网页登录确认和系统级分享/保存/日历动作 |
-| 🔑 **统一账号** | 微信身份显式登录，Web 端扫码或短码确认，会话可查看和撤销 |
+| 📲 **微信小程序** | 与 PC Web、H5 共用 unibest/uni-app 工程，登录、行程、地图、分享和系统动作均为原生页面能力 |
+| 🔑 **统一账号** | Web 端使用微信开放平台扫码登录，小程序通过 `wx.login` 登录，并以 UnionID 关联同一账号 |
 | 🌐 **三语界面** | Web 与小程序支持中文、English、Français，并同步账号显示偏好 |
 | 🏨 **酒店参考价** | 可选接入飞猪预估参考价，明确展示来源和估价属性，不冒充实时可订价格 |
 | 📱 **安全分享** | 显式发布高熵分享码，支持只读链接、二维码与图片导出 |
@@ -50,8 +50,9 @@
 
 ## 🆕 本次更新
 
-- **微信小程序**：新增独立原生 TypeScript 客户端入口，覆盖显式头像登录、WebView 会话和原生分享/保存/日历动作。
-- **统一认证**：Web 端通过小程序扫码或短码确认登录，支持设备会话查看、撤销与退出。
+- **统一前端**：PC Web、移动 H5 和微信小程序已迁移到同一个 unibest/uni-app 工程，共用业务模型、接口契约和多语言资源。
+- **微信小程序**：行程、地图、今日、预算、天气和分享均由 uni-app 原生页面承载，不再以 WebView 作为主流程。
+- **统一认证**：Web 端使用微信开放平台官方二维码扫码登录，小程序通过 `wx.login` 登录；同一开放平台下使用 UnionID 关联账号。
 - **账号偏好**：语言、主题和显示偏好按账号保存，Web 与小程序支持中文、英文和法文。
 - **酒店参考价**：可选展示飞猪提供的预估每晚参考价、来源链接和查询时间；无可靠报价时保持待填写。
 - **规划首页**：进行中旅程可以直接回到今日行程。
@@ -66,19 +67,13 @@
 
 ### PC 端
 
-#### 1. 开始使用 - 使用小程序确认微信登录
-
-<p align="center">
-  <img src="imgs/pc/login.png" alt="开始使用" width="800">
-</p>
-
-#### 2. 规划首页 - 描述旅程，继续进行中的行程
+#### 1. 规划首页 - 描述旅程，继续进行中的行程
 
 <p align="center">
   <img src="imgs/pc/planning-home.png" alt="规划首页" width="800">
 </p>
 
-#### 3. 对话确认 - 游伴理解需求并与你确认
+#### 2. 对话确认 - 游伴理解需求并与你确认
 
 <p align="center">
   <img src="imgs/pc/requirements-confirmation.png" alt="对话确认" width="800">
@@ -137,10 +132,11 @@
 
 ### 📲 微信小程序与统一账号
 - **显式头像登录** - 用户主动选择微信头像并完成上传后才进入账号，不按昵称静默合并身份
-- **Web 安全登录** - 电脑端生成一次性二维码和短码，由已登录小程序显式确认
+- **Web 官方扫码登录** - 网站加载微信开放平台 `WxLogin` 组件，回调使用五分钟单次 state 和浏览器 HttpOnly 校验凭据
+- **UnionID 统一身份** - 网站首次授权可直接注册，小程序下次登录会把旧 openid 身份升级并关联到同一 UnionID
 - **会话管理** - 小程序和 Web 会话分别签发，可查看并撤销其他设备会话
 - **公开路由** - 隐私说明与只读分享保持公开，其余个人行程、对话和偏好均要求认证
-- **原生能力桥接** - 使用短时单次票据承接系统分享、攻略保存和日历导出，不在 WebView 暴露长期凭据
+- **原生系统能力** - 小程序直接使用原生地图、分享、相册和日历能力；H5 使用浏览器下载、剪贴板与打印能力
 
 ### 🌤️ 天气集成
 - **实时天气** - 展示目的地天气预报
@@ -196,7 +192,7 @@
 需要复现 Skills 页面验收环境时，先构建前端，再启动任务自有夹具：
 
 ```bash
-cd frontend && bun run build
+cd frontend-unibest && pnpm build:h5
 cd ../backend-ts && bun run browser:skills-fixture
 ```
 
@@ -210,13 +206,13 @@ cd ../backend-ts && bun run browser:skills-fixture
 
 | 技术 | 版本 | 说明 |
 |------|------|------|
-| [Vue 3](https://vuejs.org/) | 3.5+ | 渐进式 JavaScript 框架 |
-| [TypeScript](https://www.typescriptlang.org/) | 5.7+ | 类型安全的 JavaScript 超集 |
-| [Vite](https://vitejs.dev/) | 6.0+ | 下一代前端构建工具 |
-| [Ant Design Vue](https://antdv.com/) | 4.2+ | 企业级 UI 组件库 |
-| [Vue Router](https://router.vuejs.org/) | 4.5+ | 官方路由管理器 |
-| [Pinia](https://pinia.vuejs.org/) | - | 状态管理库 |
-| [Axios](https://axios-http.com/) | 1.7+ | HTTP 客户端 |
+| [unibest](https://github.com/feige996/unibest) | 1.x | PC Web、H5 与小程序的统一工程骨架 |
+| [uni-app](https://uniapp.dcloud.net.cn/) | Vue 3 | 跨端页面、生命周期与平台 API |
+| [Vue 3](https://vuejs.org/) | 3.4+ | 页面与组件运行时 |
+| [TypeScript](https://www.typescriptlang.org/) | 5.8+ | 跨端业务与接口契约 |
+| [Vite](https://vitejs.dev/) | 5.2+ | H5 与小程序构建工具 |
+| [Wot UI](https://wot-ui.cn/) / UnoCSS | - | 跨端组件与样式体系 |
+| [Pinia](https://pinia.vuejs.org/) | 3.x | 跨端状态管理 |
 | [高德地图 JS API](https://lbs.amap.com/) | - | 国内地图服务 |
 | [Google Maps](https://developers.google.com/maps) | - | 海外地图服务 |
 | [vue-i18n](https://vue-i18n.intlify.dev/) | 9.14+ | 国际化插件 |
@@ -237,9 +233,9 @@ cd ../backend-ts && bun run browser:skills-fixture
 
 | 技术 | 说明 |
 |------|------|
-| 微信原生 TypeScript | 登录、账号设置、WebView 宿主和系统级动作页 |
+| unibest / uni-app | 与 PC Web、H5 共用页面、状态、接口契约和多语言资源 |
 | `wx.login` | 仅把临时代码发送到服务端换取微信身份，客户端不接触 AppSecret 或 `session_key` |
-| WebView 桥接 | 一次性短时票据建立 Web 会话，并对白名单路由和动作做服务端校验 |
+| 原生 `<map>` 与 `wx.*` API | 地图、导航、分享、相册和日历动作在小程序内完成 |
 
 酒店和景点链路以高德可信 POI 为身份和坐标基础。Agent 只能选择服务端分配的候选 ID；身份、坐标和价格不能由 LLM 生成。飞猪报价是可选的预估参考价，不代表实时库存、最终成交价或预订保证；没有可靠报价时保留待填写状态。
 
@@ -252,7 +248,7 @@ cd ../backend-ts && bun run browser:skills-fixture
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    前端 (Vue 3 + Vite)                       │
+│              统一前端 (unibest + uni-app + Vue 3)           │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
 │  │ 对话界面 │  │ 行程展示 │  │ 地图组件 │  │ 管理后台 │       │
 │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
@@ -295,6 +291,7 @@ cd ../backend-ts && bun run browser:skills-fixture
 ### 环境要求
 
 - Bun 1.4+
+- Node.js 20+ 与 pnpm 10+
 - LLM API Key（OpenAI 或兼容 API）
 - 高德地图 API Key（可选，国内地图服务）
 
@@ -337,28 +334,31 @@ bun run dev
 ### 4. 启动前端
 
 ```bash
-cd frontend
+cd frontend-unibest
 
 # 安装依赖
-bun install --frozen-lockfile
+pnpm install --frozen-lockfile
 
-# 启动开发服务器
-bun run dev
+# 启动 PC Web / H5 开发服务器
+VITE_SERVER_BASEURL=http://127.0.0.1:7860 pnpm dev:h5
 ```
 
-访问 http://localhost:5173 即可使用。
+访问 http://localhost:9000 即可使用。
 
 ### 5. 启动微信小程序
 
-需要在微信开发者工具中调试小程序时，先启动专用本地后端，再导入仓库中的
-`miniprogram/` 目录：
+需要在微信开发者工具中调试小程序时，先启动专用本地后端，再从同一工程构建微信目标：
 
 ```bash
 cd backend-ts
 bun run dev:wechat
+
+cd ../frontend-unibest
+VITE_SERVER_BASEURL__WEIXIN_DEVELOP=http://127.0.0.1:7860 pnpm dev:mp-weixin
 ```
 
-该模式把本地 `wx.login` 临时代码映射到固定测试身份，便于模拟器联调；
+微信开发者工具导入 `frontend-unibest/dist/dev/mp-weixin`。该模式把本地 `wx.login`
+临时代码映射到固定测试身份，便于模拟器联调；
 `production` 环境会拒绝 `YOUBAN_DEV_WECHAT_AUTH=1`。
 
 ### 6. 运行验证
@@ -370,27 +370,23 @@ bun run test
 bun run typecheck
 bun run audit:python-tests
 
-# 前端类型检查、构建、工具测试与端到端测试
-cd ../frontend
-bun run test
-bun run build
-bun run test:e2e
-
-# 微信小程序逻辑测试（在仓库根目录运行）
-cd ..
-bun test miniprogram/tests
+# 统一前端类型、代码质量、逻辑测试与双端构建
+cd ../frontend-unibest
+pnpm type-check
+pnpm lint
+pnpm test:run
+VITE_SERVER_BASEURL= pnpm build:h5:prod
+pnpm build:mp-weixin
 ```
 
 ---
 
 ## 🐳 Docker 部署
 
-TypeScript 镜像使用并行保留的 `Dockerfile.ts`；本地开发和测试直接运行 Bun，无需容器。
+`Dockerfile.ts` 是当前生产镜像，构建同源 H5 产物并由 Bun/Elysia 托管。
 
 ```bash
-docker build -f Dockerfile.ts -t youban-trip-planner-ts \
-  --build-arg VITE_AMAP_WEB_JS_KEY=your_key \
-  --build-arg VITE_AMAP_WEB_KEY=your_key .
+docker build -f Dockerfile.ts -t youban-trip-planner-ts .
 
 docker run -p 7860:7860 \
   -e OPENAI_API_KEY=your_key \
@@ -400,8 +396,10 @@ docker run -p 7860:7860 \
   youban-trip-planner-ts
 ```
 
-微信小程序与统一认证生产环境还必须设置 `WECHAT_APP_SECRET` 和至少 32 字节的
-`AUTH_PEPPER`。AppID 固定为 `wx42ddc076b365bf0d`。完整切换和回滚步骤见
+微信小程序与统一认证生产环境还必须设置 `WECHAT_APP_SECRET`、网站应用的
+`WECHAT_WEB_APP_ID` / `WECHAT_WEB_APP_SECRET`，以及至少 32 字节的 `AUTH_PEPPER`。
+网站应用回调必须配置为 `https://youban.me/api/v2/auth/wechat-web/callback`；小程序 AppID
+固定为 `wx42ddc076b365bf0d`。完整切换和回滚步骤见
 [`PRODUCTION_CUTOVER.md`](PRODUCTION_CUTOVER.md)。
 
 本地微信小程序开发不需要 AppSecret；开发者工具的启动方式见上方“快速开始”。
@@ -414,27 +412,18 @@ docker run -p 7860:7860 \
 youban/
 ├── .agents/skills/              # 仓库级开发与验收 Skills
 │   └── wechatide-skill/         # 微信开发者工具工作流
-├── frontend/                    # 前端项目
+├── frontend-unibest/            # PC Web、H5、微信小程序统一工程
 │   ├── src/
-│   │   ├── components/         # Vue 组件
-│   │   │   ├── PlanChatPanel.vue      # 聊天面板
-│   │   │   ├── TripFlow.vue           # 旅行蓝图
-│   │   │   ├── DailyItinerary.vue     # 自适应每日行程
-│   │   │   ├── ShareCodeEntry.vue     # 分享码输入
-│   │   │   ├── WeatherDayCard.vue     # 天气卡片
-│   │   │   ├── SharePlanModal.vue     # 分享弹窗
-│   │   │   └── ...
-│   │   ├── views/              # 页面视图
-│   │   │   ├── ChatHome.vue           # 主聊天界面
-│   │   │   ├── Result.vue             # 行程结果页
-│   │   │   ├── ShareView.vue          # 只读分享页
-│   │   │   ├── AdminView.vue          # 管理后台
-│   │   │   └── LoginView.vue          # 登录页
-│   │   ├── stores/             # Pinia 状态管理
-│   │   ├── services/           # API 服务
-│   │   ├── utils/              # 工具函数
-│   │   └── i18n/               # 国际化配置
-│   └── package.json
+│   │   ├── pages/               # 首页、登录、行程、分享、隐私与管理后台
+│   │   ├── components/          # 跨端布局、行程、地图与管理组件
+│   │   ├── features/            # 纯业务模型和平台无关展示逻辑
+│   │   ├── platform/            # H5 / 微信原生能力适配
+│   │   ├── services/            # v2 API、流式会话与后台 API
+│   │   ├── locale/              # 中文、English、Français
+│   │   └── store/               # 认证与账号偏好
+│   ├── dist/build/h5/           # H5 生产产物（不入库）
+│   └── dist/build/mp-weixin/    # 微信小程序生产产物（不入库）
+├── shared/contracts/            # 前后端共享的 TypeBox API 契约
 ├── backend-ts/                  # Bun 1.4 / Elysia 后端
 │   ├── src/
 │   │   ├── agents/             # Pi 父 Agent、真实子 Agent 与白名单 Skills
@@ -446,10 +435,8 @@ youban/
 │   ├── scripts/                # JSON/SQLite 迁移、回滚导出、基准与冒烟
 │   ├── tests/                  # Bun 单元、契约和真实 Pi 插件测试
 │   └── package.json
-├── miniprogram/                 # 微信原生 TypeScript 小程序
-│   ├── src/                    # 登录、WebView、原生动作与账号设置
-│   ├── tests/                  # 认证存储与 WebView 宿主测试
-│   └── project.config.json     # 可提交的开发者工具项目配置
+├── frontend/                    # 旧 Web 客户端，仅在切换观察期保留，不参与 Bun 镜像
+├── miniprogram/                 # 旧原生客户端，仅在切换观察期保留，不再作为发布入口
 ├── backend/                     # Python 旧后端，切换观察期内仅作回滚参考
 ├── data/                        # SQLite、头像、图片缓存与用户记忆（不入库）
 ├── imgs/                        # 截图资源
@@ -457,7 +444,7 @@ youban/
 │   └── mobile/                 # 移动端截图
 ├── PRODUCTION_CUTOVER.md        # 生产切换、数据清理、验证与回滚清单
 ├── docker-compose.bun.yaml      # TypeScript/Bun 生产编排示例
-├── Dockerfile.ts               # Bun/TypeScript 候选生产镜像
+├── Dockerfile.ts               # Bun + unibest 当前生产镜像
 └── Dockerfile                  # Python 回滚镜像（观察期保留）
 ```
 
@@ -497,6 +484,9 @@ youban/
 |---------|------|--------|
 | `WECHAT_APP_ID` | 微信小程序 AppID | `wx42ddc076b365bf0d` |
 | `WECHAT_APP_SECRET` | 服务端换取微信身份的 AppSecret；生产必填，不能下发客户端 | - |
+| `WECHAT_WEB_APP_ID` | 微信开放平台已审核的网站应用 AppID；仅用于生成官方扫码组件配置 | - |
+| `WECHAT_WEB_APP_SECRET` | 网站应用 AppSecret；仅服务端换取授权身份，不能下发客户端 | - |
+| `WECHAT_WEB_REDIRECT_URI` | 微信开放平台网站应用授权回调，必须与平台配置完全一致 | `https://youban.me/api/v2/auth/wechat-web/callback` |
 | `AUTH_PEPPER` | 身份摘要与认证凭据使用的服务端 pepper；生产至少 32 字节 | - |
 | `YOUBAN_DEV_WECHAT_AUTH` | 本地固定测试身份开关；生产环境禁止启用 | `0` |
 

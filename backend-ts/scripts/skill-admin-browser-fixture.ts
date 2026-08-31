@@ -91,9 +91,9 @@ export async function startSkillAdminBrowserFixture(
   options: StartSkillAdminBrowserFixtureOptions = {},
 ): Promise<SkillAdminBrowserFixture> {
   const repoRoot = resolve(options.repoRoot ?? join(import.meta.dir, "..", ".."));
-  const frontendDist = join(repoRoot, "frontend", "dist");
+  const frontendDist = join(repoRoot, "frontend-unibest", "dist", "build", "h5");
   if (!existsSync(join(frontendDist, "index.html"))) {
-    throw new Error("built frontend is missing; run `cd frontend && bun run build`");
+    throw new Error("built frontend is missing; run `cd frontend-unibest && pnpm build:h5`");
   }
 
   const { dataDir, cleanupToken } = createSkillAdminFixtureDataDirectory();
@@ -147,7 +147,7 @@ export async function startSkillAdminBrowserFixture(
     const info: SkillAdminBrowserFixtureInfo = {
       type: "youban-skill-admin-browser-fixture",
       api_url: apiUrl,
-      frontend_url: `${apiUrl}/admin`,
+      frontend_url: `${apiUrl}/#/pages/admin/index`,
       zip_path: zipPath,
       cleanup_token: cleanupToken,
     };

@@ -177,7 +177,10 @@ describe("trip task websocket contract", () => {
       dataDir,
       authentication: {
         pepper: "websocket-test-pepper-with-at-least-32-bytes",
-        exchangeWechatCode: async () => "secure-openid",
+        exchangeWechatCode: async () => ({
+          openid: "secure-openid",
+          unionid: "secure-unionid",
+        }),
       },
     });
     runtimes.push(runtime);
@@ -199,9 +202,11 @@ describe("trip task websocket contract", () => {
       result: { success: true },
     }), { immediate: true });
     const url = `ws://127.0.0.1:${port}/api/trip/ws/secure-task`;
+    const v2Url = `ws://127.0.0.1:${port}/api/v2/trip/ws/secure-task`;
 
     expect(await handshakeStatus(`${url}?user_id=${login.user.user_id}`)).toBe(401);
     expect(await handshakeStatus(url, { Authorization: `Bearer ${login.token}` })).toBe(101);
+    expect(await handshakeStatus(v2Url, { Authorization: `Bearer ${login.token}` })).toBe(101);
   });
 
   it("publishes a slow seven-day request through the existing terminal frame at 5.5 seconds", async () => {

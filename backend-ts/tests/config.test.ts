@@ -14,6 +14,7 @@ import {
   getSettings,
   onSettingsReset,
   prepareRuntimeSettings,
+  runtimeSettingsSnapshot,
   updateRuntimeSettings,
   validateConfig,
   type RuntimeSettings,
@@ -62,6 +63,9 @@ const ENV_KEYS = [
   "FLIGGY_PROXY_URL",
   "FLIGGY_PRICE_TIMEOUT_MS",
   "FLIGGY_PRICE_CACHE_TTL_SECONDS",
+  "WECHAT_WEB_APP_ID",
+  "WECHAT_WEB_APP_SECRET",
+  "WECHAT_WEB_REDIRECT_URI",
 ];
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -150,6 +154,8 @@ describe("settings: env 读取", () => {
     expect(settings.host).toBe("0.0.0.0");
     expect(settings.port).toBe(8000);
     expect(settings.cors_origins).toEqual([
+      "http://localhost:9000",
+      "http://127.0.0.1:9000",
       "http://localhost:5173",
       "http://localhost:3000",
       "http://127.0.0.1:5173",
@@ -191,6 +197,26 @@ describe("settings: env 读取", () => {
     _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
     expect(getSettings().fliggy_price_timeout_ms).toBe(3000);
     expect(getSettings().fliggy_price_cache_ttl_seconds).toBe(300);
+  });
+
+  it("reads website-only WeChat OAuth settings without exposing runtime overrides", () => {
+    process.env.WECHAT_WEB_APP_ID = "wx-web-app";
+    process.env.WECHAT_WEB_APP_SECRET = "web-secret";
+    process.env.WECHAT_WEB_REDIRECT_URI =
+      "https://youban.me/api/v2/auth/wechat-web/callback";
+    _resetSettingsForTest({ legacyRuntimeSettingsFile: null });
+
+    const settings = getSettings();
+
+    expect(settings.wechat_web_app_id).toBe("wx-web-app");
+    expect(settings.wechat_web_app_secret).toBe("web-secret");
+    expect(settings.wechat_web_redirect_uri).toBe(
+      "https://youban.me/api/v2/auth/wechat-web/callback",
+    );
+    const runtime = runtimeSettingsSnapshot(settings);
+    expect(runtime).not.toHaveProperty("wechat_web_app_id");
+    expect(runtime).not.toHaveProperty("wechat_web_app_secret");
+    expect(runtime).not.toHaveProperty("wechat_web_redirect_uri");
   });
 
   it("reads valid model thinking environment overrides", () => {

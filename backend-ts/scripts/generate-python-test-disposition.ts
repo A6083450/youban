@@ -40,7 +40,7 @@ const rules: Record<string, Rule> = {
   "app/api/routes/trip_item_status_endpoint_test.py": port("tests/trip-task-mutations-http.test.ts", "执行状态、所有权和持久化在统一 mutation 端点测试覆盖"),
   "app/api/routes/trip_retry_endpoint_test.py": port("tests/trip-planning-http.test.ts, tests/task-store.test.ts", "同 task_id 重试、状态限制和 checkpoint 恢复已迁移"),
   "app/api/routes/trip_stream_endpoint_test.py": port("tests/trip-assistant-http.test.ts", "parse/confirm SSE delta、final 和 DONE 契约已迁移"),
-  "app/models/schemas_test.py": replace("tests/domain-schemas.test.ts, ../frontend/src/utils/tripPresentation.test.mjs", "DTO 严格性与展示蓝图兼容分别在后端和前端边界验证"),
+  "app/models/schemas_test.py": replace("tests/domain-schemas.test.ts, ../frontend-unibest/src/features/result/model.test.ts", "DTO 严格性与展示蓝图兼容分别在后端和统一前端边界验证"),
   "app/services/amap_service_test.py": port("tests/amap-research-sources.test.ts", "可信 POI、酒店、无 key 和上游故障降级已迁移"),
   "app/services/budget_guard_test.py": port("tests/budget-guard.test.ts", "预算上限、待报价缓冲和餐饮调整逐例迁移"),
   "app/services/budget_ledger_test.py": port("tests/budget-http.test.ts", "人数、房间、晚数、待报价和用户覆盖口径已迁移"),

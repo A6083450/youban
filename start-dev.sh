@@ -7,15 +7,13 @@ BIND_PORT=${PORT:-7860}
 
 echo "🚀 启动游伴 [开发模式]..."
 echo "   后端地址: http://0.0.0.0:${BIND_PORT}"
-echo "   前端地址: http://0.0.0.0:5173"
+echo "   前端地址: http://0.0.0.0:9000"
 
 # 后台启动前端 Vite dev server（带 HMR）
 # VITE_DEV_PROXY_TARGET 让 vite 代理 /api 请求到后端
-cd /app/frontend
-VITE_DEV_PROXY_TARGET="http://localhost:${BIND_PORT}" \
-  VITE_AMAP_WEB_JS_KEY="${VITE_AMAP_WEB_JS_KEY:-}" \
-  VITE_AMAP_WEB_KEY="${VITE_AMAP_WEB_KEY:-}" \
-  npx vite --host 0.0.0.0 --port 5173 &
+cd /app/frontend-unibest
+VITE_SERVER_BASEURL="http://localhost:${BIND_PORT}" \
+  pnpm dev:h5 &
 FRONTEND_PID=$!
 
 cd /app

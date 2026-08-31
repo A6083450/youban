@@ -88,6 +88,11 @@ import { SqliteUserRepository } from "../domain/users.ts";
 import { UserPreferencesRepository } from "../domain/user-preferences.ts";
 import { projectNativeCalendarEvents } from "../domain/trip-calendar-projection.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
+import type { MiniWechatIdentity } from "../services/wechat-code-exchange.ts";
+import {
+  WechatWebOAuthError,
+  type WechatWebsiteProfile,
+} from "../services/wechat-web-oauth.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
 import { RemoteImageCache } from "../services/remote-image-cache.ts";
 import {
@@ -162,7 +167,13 @@ export interface HttpRuntimeOptions {
   imageFetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   authentication?: {
     pepper: string;
-    exchangeWechatCode: (code: string) => Promise<string>;
+    exchangeWechatCode: (code: string) => Promise<MiniWechatIdentity>;
+    website?: {
+      appId: string;
+      redirectUri: string;
+      exchangeCode: (code: string) => Promise<WechatWebsiteProfile>;
+      importAvatar: (avatarUrl: string) => Promise<string | null>;
+    };
   };
   planningClock?: {
     now?: () => number;
@@ -216,6 +227,48 @@ function isContained(parent: string, child: string): boolean {
 }
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const WECHAT_OAUTH_COOKIE = "youban_wechat_oauth";
+const WECHAT_OAUTH_COOKIE_PATH = "/api/v2/auth/wechat-web";
+
+type WechatOauthCompletion = "success" | "denied" | "expired" | "provider" | "identity";
+
+function oauthCookie(value: string, maxAge: number): string {
+  return `${WECHAT_OAUTH_COOKIE}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=${WECHAT_OAUTH_COOKIE_PATH}; Max-Age=${maxAge}`;
+}
+
+function webSessionCookie(token: string): string {
+  return `youban_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
+}
+
+function oauthCompletionHtml(result: WechatOauthCompletion): string {
+  const target = result === "success"
+    ? "/#/pages/index/index"
+    : `/#/pages/login/index?wechat_error=${result}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>微信登录</title></head><body><script>window.top.location.replace(${JSON.stringify(target)});</script></body></html>`;
+}
+
+function oauthCompletionResponse(
+  result: WechatOauthCompletion,
+  sessionToken?: string,
+): Response {
+  const headers = new Headers({
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'",
+    "Content-Type": "text/html; charset=utf-8",
+  });
+  headers.append("Set-Cookie", oauthCookie("", 0));
+  if (sessionToken) headers.append("Set-Cookie", webSessionCookie(sessionToken));
+  return new Response(oauthCompletionHtml(result), { status: 200, headers });
+}
+
+function rewriteV2ApiPayload(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/\/api\/(?!v2\/)/g, "/api/v2/");
+  if (Array.isArray(value)) return value.map(rewriteV2ApiPayload);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, rewriteV2ApiPayload(entry)]),
+  );
+}
 
 function avatarMedia(bytes: Uint8Array): { extension: "jpg" | "png" | "webp"; contentType: string } | null {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
@@ -262,6 +315,9 @@ function publicTripResult(value: unknown): unknown {
 
 const NO_CACHE_FRONTEND_FILES = new Set([
   "index.html",
+]);
+
+const RETIRED_FRONTEND_FILES = new Set([
   "sw.js",
   "registerSW.js",
   "manifest.webmanifest",
@@ -276,11 +332,38 @@ function frontendResponse(frontendDist: string | undefined, pathname: string): R
     return null;
   }
   if (!relative) relative = "index.html";
+  if (RETIRED_FRONTEND_FILES.has(relative)) return null;
   const path = join(frontendDist, relative);
   if (!isContained(frontendDist, path) || !existsSync(path)) return null;
   const headers = new Headers();
   if (NO_CACHE_FRONTEND_FILES.has(relative)) headers.set("Cache-Control", "no-cache");
   return new Response(Bun.file(path), { headers });
+}
+
+function legacyFrontendRedirect(url: URL): Response | null {
+  const query = new URLSearchParams(url.searchParams);
+  let launchPath = "";
+  if (url.pathname === "/login") launchPath = "/pages/login/index";
+  else if (url.pathname === "/admin") launchPath = "/pages/admin/index";
+  else if (url.pathname === "/privacy") launchPath = "/pages/privacy/index";
+  else {
+    const match = url.pathname.match(/^\/(plan|share)\/([A-Za-z0-9_-]{1,128})$/);
+    if (!match) return null;
+    const [, kind, id] = match;
+    launchPath = kind === "plan" ? "/pages/plan/index" : "/pages/share/index";
+    query.delete(kind === "plan" ? "id" : "code");
+    const identifier = `${kind === "plan" ? "id" : "code"}=${encodeURIComponent(id!)}`;
+    const suffix = query.toString();
+    return new Response(null, {
+      status: 308,
+      headers: { Location: `/#${launchPath}?${identifier}${suffix ? `&${suffix}` : ""}` },
+    });
+  }
+  const suffix = query.toString();
+  return new Response(null, {
+    status: 308,
+    headers: { Location: `/#${launchPath}${suffix ? `?${suffix}` : ""}` },
+  });
 }
 
 export function createHttpRuntime(options: HttpRuntimeOptions) {
@@ -481,6 +564,22 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       if (separator < 0) continue;
       if (part.slice(0, separator).trim() === "youban_session") {
         return decodeURIComponent(part.slice(separator + 1).trim());
+      }
+    }
+    return "";
+  };
+
+  const oauthVerifier = (headers: Record<string, string | undefined>): string => {
+    const cookieHeader = headers.cookie ?? "";
+    for (const part of cookieHeader.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 0) continue;
+      if (part.slice(0, separator).trim() === WECHAT_OAUTH_COOKIE) {
+        try {
+          return decodeURIComponent(part.slice(separator + 1).trim());
+        } catch {
+          return "";
+        }
       }
     }
     return "";
@@ -1039,7 +1138,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
   };
 
   const publicApiRequest = (request: Request): boolean => {
-    const pathname = new URL(request.url).pathname;
+    const pathname = new URL(request.url).pathname.replace(/^\/api\/v2(?=\/)/, "/api");
     if (request.method === "OPTIONS" || !pathname.startsWith("/api/")) return true;
     if (pathname.startsWith("/api/admin/")) return true;
     if (request.method === "GET" && [
@@ -1052,7 +1151,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     if (request.method === "GET" && pathname.startsWith("/api/trip/share/")) return true;
     if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/exchange") return true;
     if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/public") return true;
-    if (request.method === "GET" && /^\/api\/auth\/web\/challenges\/[^/]+\/status$/.test(pathname)) return true;
+    if (request.method === "GET" && pathname === "/api/auth/wechat-web/callback") return true;
     if (request.method !== "POST") return false;
     if ([
       "/api/admin/login",
@@ -1060,16 +1159,81 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       "/api/account/profile/skip-avatar",
       "/api/auth/logout",
       "/api/auth/wechat/login",
-      "/api/auth/web/challenges",
+      "/api/auth/wechat-web/start",
     ].includes(pathname)) return true;
-    return /^\/api\/auth\/web\/challenges\/[^/]+\/(?:approve|exchange)$/.test(pathname);
+    return false;
+  };
+
+  const tripTaskWebSocketHandlers = {
+    beforeHandle({ params, query, headers, status }: any) {
+      const task = tasks.get(String(params.taskId));
+      if (!task) return;
+      const userId = authentication
+        ? authenticatedUserId(headers)
+        : String(query.user_id ?? "").trim();
+      const adminToken = authentication
+        ? String(headers["x-admin-token"] ?? "").trim()
+        : String(query.admin_token ?? "").trim();
+      if (authentication && !userId && !validAdminToken(headers)) {
+        return status(401, { detail: "登录已失效" });
+      }
+      const ownerError = requireOwner(task, userId, adminToken);
+      if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
+    },
+    open(ws: any) {
+      if (closed) {
+        ws.close(1012, "服务正在关闭");
+        return;
+      }
+      const taskId = String(ws.data.params.taskId);
+      const task = tasks.get(taskId);
+      if (!task) {
+        ws.cork(() => {
+          ws.send(JSON.stringify(failedEvent(taskId, "任务不存在")));
+          ws.close(1008, "任务不存在");
+        });
+        return;
+      }
+      const userId = authentication
+        ? authenticatedUserId(ws.data.headers)
+        : String(ws.data.query.user_id ?? "").trim();
+      const adminToken = authentication
+        ? String(ws.data.headers["x-admin-token"] ?? "").trim()
+        : String(ws.data.query.admin_token ?? "").trim();
+      const ownerError = requireOwner(task, userId, adminToken);
+      if (ownerError) {
+        ws.cork(() => {
+          ws.send(JSON.stringify(failedEvent(taskId, ownerError.detail)));
+          ws.close(1008, ownerError.detail);
+        });
+        return;
+      }
+      ws.send(JSON.stringify(buildTaskEvent(task, true)));
+      if (task.status === "completed" || task.status === "failed") {
+        ws.close(1000, "任务已结束");
+        return;
+      }
+      const unsubscribe = tasks.subscribe(taskId, (event) => {
+        ws.send(JSON.stringify(event));
+        if (event.status === "completed" || event.status === "failed") {
+          ws.close(1000, "任务已结束");
+        }
+      });
+      unsubscribers.set(ws.id, unsubscribe);
+      webSockets.set(ws.id, ws);
+    },
+    close(ws: any) {
+      unsubscribers.get(ws.id)?.();
+      unsubscribers.delete(ws.id);
+      webSockets.delete(ws.id);
+    },
   };
 
   const app = new Elysia({ name: "youban-http" })
     .use(cors({
       origin: options.corsOrigins ?? settings.cors_origins,
       credentials: true,
-      methods: "*",
+      methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: true,
     }))
     .use(swagger({
@@ -1100,7 +1264,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       const detail = error instanceof Error ? error.message : String(error);
       return { detail: detail || "服务异常" };
     })
-    .onBeforeHandle(({ request, headers, status }) => {
+    .onBeforeHandle(({ request, headers, status, route }) => {
+      if (route === "/*" || route === "/api/v2" || route === "/api/v2/*") return;
       if (!authentication || publicApiRequest(request) || validAdminToken(headers)) return;
       if (!authenticatedUserId(headers)) return status(401, { detail: "登录已失效" });
     })
@@ -1261,8 +1426,8 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         return status(503, { detail: "微信登录尚未配置" });
       }
       try {
-        const subject = await options.authentication.exchangeWechatCode(body.code);
-        const result = authentication.loginWechat(subject);
+        const identity = await options.authentication.exchangeWechatCode(body.code);
+        const result = authentication.loginMiniProgramIdentity(identity);
         return { success: true as const, ...result };
       } catch (error) {
         if (error instanceof AuthenticationError) return status(401, { detail: error.message });
@@ -1270,6 +1435,65 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       }
     }, {
       body: t.Object({ code: t.String({ minLength: 1, maxLength: 256 }) }),
+    })
+    .post("/api/auth/wechat-web/start", ({ set, status }) => {
+      const website = options.authentication?.website;
+      if (!authentication || !website) {
+        return status(503, { detail: "微信扫码登录尚未配置" });
+      }
+      const challenge = authentication.createWechatWebOauthState();
+      set.headers["Cache-Control"] = "no-store";
+      set.headers["Set-Cookie"] = oauthCookie(challenge.browserVerifier, 300);
+      return {
+        app_id: website.appId,
+        scope: "snsapi_login" as const,
+        redirect_uri: website.redirectUri,
+        state: challenge.state,
+      };
+    }, {
+      body: t.Object({}, { additionalProperties: false }),
+    })
+    .get("/api/auth/wechat-web/callback", async ({ query, headers }) => {
+      const website = options.authentication?.website;
+      if (!authentication || !website) return oauthCompletionResponse("provider");
+      const code = typeof query.code === "string" ? query.code.trim() : "";
+      const state = typeof query.state === "string" ? query.state.trim() : "";
+      if (!code) return oauthCompletionResponse("denied");
+      try {
+        authentication.consumeWechatWebOauthState(state, oauthVerifier(headers));
+      } catch {
+        return oauthCompletionResponse("expired");
+      }
+
+      let profile: WechatWebsiteProfile;
+      try {
+        profile = await website.exchangeCode(code);
+      } catch (error) {
+        return oauthCompletionResponse(
+          error instanceof WechatWebOAuthError && error.kind === "identity"
+            ? "identity"
+            : "provider",
+        );
+      }
+
+      let avatarFile: string | null = null;
+      if (profile.avatarUrl.startsWith("https://")) {
+        try {
+          avatarFile = await website.importAvatar(profile.avatarUrl);
+        } catch {
+          avatarFile = null;
+        }
+      }
+      try {
+        const result = authentication.loginWebsiteIdentity({
+          unionid: profile.unionid,
+          nickname: profile.nickname,
+          avatarFile,
+        });
+        return oauthCompletionResponse("success", result.token);
+      } catch {
+        return oauthCompletionResponse("identity");
+      }
     })
     .post("/api/auth/miniprogram/web-session", ({ body, headers, status }) => {
       if (!authentication) return status(503, { detail: "认证服务尚未配置" });
@@ -1397,46 +1621,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         if (error instanceof AuthenticationError) return status(401, { detail: error.message });
         throw error;
       }
-    })
-    .post("/api/auth/web/challenges", ({ status }) => {
-      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
-      return authentication.createWebChallenge();
-    })
-    .post("/api/auth/web/challenges/:id/approve", ({ params, body, headers, status }) => {
-      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
-      try {
-        authentication.approveWebChallenge(sessionToken(headers), params.id, body.credential);
-        return { success: true as const };
-      } catch (error) {
-        if (error instanceof AuthenticationError) return status(422, { detail: error.message });
-        throw error;
-      }
-    }, {
-      body: t.Object({ credential: t.String({ minLength: 1, maxLength: 128 }) }),
-    })
-    .get("/api/auth/web/challenges/:id/status", ({ params, query, status }) => {
-      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
-      try {
-        return authentication.getWebChallengeStatus(params.id, query.verifier);
-      } catch (error) {
-        if (error instanceof AuthenticationError) return status(401, { detail: error.message });
-        throw error;
-      }
-    }, {
-      query: t.Object({ verifier: t.String({ minLength: 1, maxLength: 128 }) }),
-    })
-    .post("/api/auth/web/challenges/:id/exchange", ({ params, body, status, set }) => {
-      if (!authentication) return status(503, { detail: "认证服务尚未配置" });
-      try {
-        const result = authentication.exchangeWebChallenge(params.id, body.verifier);
-        set.headers["Set-Cookie"] = `youban_session=${encodeURIComponent(result.token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
-        return { success: true as const, user: result.user };
-      } catch (error) {
-        if (error instanceof AuthenticationError) return status(422, { detail: error.message });
-        throw error;
-      }
-    }, {
-      body: t.Object({ verifier: t.String({ minLength: 1, maxLength: 128 }) }),
     })
     .get("/api/auth/me", ({ headers, status }) => {
       const user = users.get(authenticatedUserId(headers));
@@ -2309,73 +2493,22 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         },
       });
     })
-    .ws("/api/trip/ws/:taskId", {
-      beforeHandle({ params, query, headers, status }) {
-        const task = tasks.get(String(params.taskId));
-        if (!task) return;
-        const userId = authentication
-          ? authenticatedUserId(headers)
-          : String(query.user_id ?? "").trim();
-        const adminToken = authentication
-          ? String(headers["x-admin-token"] ?? "").trim()
-          : String(query.admin_token ?? "").trim();
-        if (authentication && !userId && !validAdminToken(headers)) {
-          return status(401, { detail: "登录已失效" });
-        }
-        const ownerError = requireOwner(
-          task,
-          userId,
-          adminToken,
-        );
-        if (ownerError?.status === 404) return status(404, { detail: ownerError.detail });
-      },
-      open(ws) {
-        if (closed) {
-          ws.close(1012, "服务正在关闭");
-          return;
-        }
-        const taskId = String(ws.data.params.taskId);
-        const task = tasks.get(taskId);
-        if (!task) {
-          ws.cork(() => {
-            ws.send(JSON.stringify(failedEvent(taskId, "任务不存在")));
-            ws.close(1008, "任务不存在");
-          });
-          return;
-        }
-        const userId = authentication
-          ? authenticatedUserId(ws.data.headers)
-          : String(ws.data.query.user_id ?? "").trim();
-        const adminToken = authentication
-          ? String(ws.data.headers["x-admin-token"] ?? "").trim()
-          : String(ws.data.query.admin_token ?? "").trim();
-        const ownerError = requireOwner(task, userId, adminToken);
-        if (ownerError) {
-          ws.cork(() => {
-            ws.send(JSON.stringify(failedEvent(taskId, ownerError.detail)));
-            ws.close(1008, ownerError.detail);
-          });
-          return;
-        }
-        ws.send(JSON.stringify(buildTaskEvent(task, true)));
-        if (task.status === "completed" || task.status === "failed") {
-          ws.close(1000, "任务已结束");
-          return;
-        }
-        const unsubscribe = tasks.subscribe(taskId, (event) => {
-          ws.send(JSON.stringify(event));
-          if (event.status === "completed" || event.status === "failed") {
-            ws.close(1000, "任务已结束");
-          }
-        });
-        unsubscribers.set(ws.id, unsubscribe);
-        webSockets.set(ws.id, ws);
-      },
-      close(ws) {
-        unsubscribers.get(ws.id)?.();
-        unsubscribers.delete(ws.id);
-        webSockets.delete(ws.id);
-      },
+    .ws("/api/trip/ws/:taskId", tripTaskWebSocketHandlers as any)
+    .ws("/api/v2/trip/ws/:taskId", tripTaskWebSocketHandlers as any)
+    .mount("/api/v2", async (request) => {
+      const url = new URL(request.url);
+      url.pathname = `/api${url.pathname === "/" ? "" : url.pathname}`;
+      const response = await dispatchRewritten(new Request(url.toString(), request));
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) return response;
+      const payload = await response.json() as unknown;
+      const headers = new Headers(response.headers);
+      headers.delete("content-length");
+      return new Response(JSON.stringify(rewriteV2ApiPayload(payload)), {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
     })
     .get("/", () => {
       const frontend = frontendResponse(frontendDist, "/index.html");
@@ -2401,6 +2534,10 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         }));
       }
       if (url.pathname.startsWith("/api/")) return status(404, { detail: "Not Found" });
+      if (request.method === "GET" || request.method === "HEAD") {
+        const redirect = legacyFrontendRedirect(url);
+        if (redirect) return redirect;
+      }
       const asset = frontendResponse(frontendDist, url.pathname);
       if (asset) return asset;
       const fallback = frontendResponse(frontendDist, "/index.html");

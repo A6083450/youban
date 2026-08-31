@@ -7,6 +7,11 @@ interface WechatCodeExchangeOptions {
   timeoutMs?: number;
 }
 
+export interface MiniWechatIdentity {
+  openid: string;
+  unionid: string;
+}
+
 export class WechatCodeExchangeError extends Error {}
 
 export class WechatCodeExchange {
@@ -21,7 +26,7 @@ export class WechatCodeExchange {
     this.timeoutMs = options.timeoutMs ?? 8_000;
   }
 
-  async exchange(code: string): Promise<string> {
+  async exchange(code: string): Promise<MiniWechatIdentity> {
     if (!code.trim()) throw new WechatCodeExchangeError("微信登录凭证无效");
     const url = new URL("https://api.weixin.qq.com/sns/jscode2session");
     url.searchParams.set("appid", this.options.appId);
@@ -31,11 +36,21 @@ export class WechatCodeExchange {
     try {
       const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs) });
       if (!response.ok) throw new WechatCodeExchangeError("微信登录服务暂不可用");
-      const payload = await response.json() as { openid?: unknown; errcode?: unknown };
+      const payload = await response.json() as {
+        openid?: unknown;
+        unionid?: unknown;
+        errcode?: unknown;
+      };
       if (typeof payload.openid !== "string" || !payload.openid.trim() || payload.errcode) {
         throw new WechatCodeExchangeError("微信登录凭证无效");
       }
-      return payload.openid.trim();
+      if (typeof payload.unionid !== "string" || !payload.unionid.trim()) {
+        throw new WechatCodeExchangeError("微信账号统一标识不可用");
+      }
+      return {
+        openid: payload.openid.trim(),
+        unionid: payload.unionid.trim(),
+      };
     } catch (error) {
       if (error instanceof WechatCodeExchangeError) throw error;
       throw new WechatCodeExchangeError("微信登录服务暂不可用");

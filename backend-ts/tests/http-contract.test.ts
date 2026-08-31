@@ -54,12 +54,12 @@ describe("HTTP compatibility contract", () => {
     diagnostics.recordSuccess("persistent-parent-agent", 12);
     diagnostics.recordFailure("pi-subagent-runner", 13, "structured_host_rotation_failed");
     const { app } = runtime({ skillRuntimeDiagnostics: diagnostics });
-    for (const path of ["/health", "/api/trip/health"]) {
+    for (const path of ["/health", "/api/trip/health", "/api/v2/trip/health"]) {
       const health = await app.handle(new Request(`http://localhost${path}`));
       expect(health.status).toBe(200);
       const body = await json(health);
       expect(body).toEqual(expect.objectContaining({ status: "healthy" }));
-      if (path === "/api/trip/health") {
+      if (path === "/api/trip/health" || path === "/api/v2/trip/health") {
         expect(body.skills).toEqual({
           catalog_generation: expect.any(Number),
           runtime_components: [
@@ -117,6 +117,9 @@ describe("HTTP compatibility contract", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
     expect(preflight.headers.get("access-control-allow-credentials")).toBe("true");
+    const allowedMethods = preflight.headers.get("access-control-allow-methods") ?? "";
+    expect(allowedMethods).not.toBe("*");
+    expect(allowedMethods.split(/,\s*/)).toContain("PATCH");
 
     const image = await value.app.handle(new Request("http://localhost/api/images/spot.txt"));
     expect(image.status).toBe(200);
@@ -199,12 +202,13 @@ describe("HTTP compatibility contract", () => {
     });
   });
 
-  it("serves SPA assets and applies no-cache only to mutable shell files", async () => {
+  it("serves the uni-app shell and refuses retired PWA entry files", async () => {
     const { app } = runtime({ frontend: true });
-    for (const path of ["/", "/sw.js", "/registerSW.js", "/manifest.webmanifest"]) {
-      const response = await app.handle(new Request(`http://localhost${path}`));
-      expect(response.status).toBe(200);
-      expect(response.headers.get("cache-control")).toBe("no-cache");
+    const root = await app.handle(new Request("http://localhost/"));
+    expect(root.status).toBe(200);
+    expect(root.headers.get("cache-control")).toBe("no-cache");
+    for (const path of ["/sw.js", "/registerSW.js", "/manifest.webmanifest"]) {
+      expect((await app.handle(new Request(`http://localhost${path}`))).status).toBe(404);
     }
     const asset = await app.handle(new Request("http://localhost/assets/app.js"));
     expect(await asset.text()).toBe("app-bundle");
@@ -212,5 +216,29 @@ describe("HTTP compatibility contract", () => {
     const fallback = await app.handle(new Request("http://localhost/result/task-1"));
     expect(await fallback.text()).toContain("youban-spa");
     expect(fallback.headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("redirects legacy browser routes to their uni-app hash equivalents", async () => {
+    const { app } = runtime({ frontend: true });
+    const shareCode = "a".repeat(32);
+    const cases = [
+      ["/login", "/#/pages/login/index"],
+      ["/admin", "/#/pages/admin/index"],
+      ["/privacy?host=miniprogram", "/#/pages/privacy/index?host=miniprogram"],
+      [
+        "/plan/plan-123?host=miniprogram&section=weather",
+        "/#/pages/plan/index?id=plan-123&host=miniprogram&section=weather",
+      ],
+      [
+        `/share/${shareCode}?host=miniprogram`,
+        `/#/pages/share/index?code=${shareCode}&host=miniprogram`,
+      ],
+    ] as const;
+
+    for (const [path, location] of cases) {
+      const response = await app.handle(new Request(`http://localhost${path}`));
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe(location);
+    }
   });
 });

@@ -1,0 +1,3 @@
+<template>
+  <KuRootView />
+</template>

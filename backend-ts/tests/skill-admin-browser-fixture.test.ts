@@ -173,7 +173,7 @@ describe("Skill Admin browser fixture", () => {
     expect(info).toEqual({
       type: "youban-skill-admin-browser-fixture",
       api_url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
-      frontend_url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/admin$/),
+      frontend_url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/#\/pages\/admin\/index$/),
       zip_path: expect.stringMatching(/museum-guide\.zip$/),
       cleanup_token: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });

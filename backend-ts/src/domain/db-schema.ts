@@ -109,6 +109,18 @@ export const webLoginChallengesTable = sqliteTable(
   ],
 );
 
+export const wechatWebOauthStatesTable = sqliteTable(
+  "wechat_web_oauth_states",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    browserVerifierHash: text("browser_verifier_hash").notNull(),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    consumedAt: text("consumed_at"),
+  },
+  (table) => [index("wechat_web_oauth_states_expiry_idx").on(table.expiresAt)],
+);
+
 export const authAuditEventsTable = sqliteTable(
   "auth_audit_events",
   {
@@ -206,6 +218,7 @@ export const schema = {
   wechatIdentities: wechatIdentitiesTable,
   authSessions: authSessionsTable,
   webLoginChallenges: webLoginChallengesTable,
+  wechatWebOauthStates: wechatWebOauthStatesTable,
   authAuditEvents: authAuditEventsTable,
   userPreferences: userPreferencesTable,
   managedSkills: managedSkillsTable,
@@ -216,7 +229,7 @@ export const schema = {
 
 export type YoubanSchema = typeof schema;
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 // Referencing the drizzle schema here keeps migration DDL and typed queries aligned.
 export const INITIAL_SCHEMA_SQL = `
@@ -404,4 +417,16 @@ export const WECHAT_PROFILE_SCHEMA_SQL = `
   ALTER TABLE users ADD COLUMN avatar_file TEXT;
   ALTER TABLE users ADD COLUMN profile_completed_at TEXT;
   DROP TABLE IF EXISTS legacy_migration_codes;
+`;
+
+export const WECHAT_WEB_OAUTH_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS wechat_web_oauth_states (
+    state_hash TEXT PRIMARY KEY NOT NULL,
+    browser_verifier_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS wechat_web_oauth_states_expiry_idx
+    ON wechat_web_oauth_states(expires_at);
 `;
