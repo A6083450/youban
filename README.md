@@ -326,10 +326,16 @@ VITE_AMAP_WEB_KEY=your_amap_web_key
 ### 3. 启动后端
 
 ```bash
-cd backend-ts
+cd shared/contracts
+pnpm install --frozen-lockfile --ignore-scripts
+
+cd ../../backend-ts
 bun install --frozen-lockfile
 bun run dev
 ```
+
+共享契约以本地包方式同时供前后端使用，因此首次检出或清理依赖后，必须先安装
+`shared/contracts` 自身的运行时依赖。
 
 ### 4. 启动前端
 

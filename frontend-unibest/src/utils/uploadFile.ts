@@ -13,6 +13,8 @@
  *   },
  * )
  */
+import type { Ref } from 'vue'
+import { ref } from 'vue'
 
 /**
  * 上传文件的URL配置

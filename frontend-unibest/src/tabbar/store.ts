@@ -1,4 +1,4 @@
-import type { CustomTabBarItem, CustomTabBarItemBadge, NativeTabBarItem } from './types'
+import type { AppLocationUrl, CustomTabBarItem, CustomTabBarItemBadge, NativeTabBarItem } from './types'
 import { computed, reactive } from 'vue'
 
 import { tabbarList as _tabbarList, selectedTabbarStrategy, TABBAR_STRATEGY_MAP } from './config'
@@ -9,7 +9,7 @@ function isCustomTabbarItem(item: CustomTabBarItem | NativeTabBarItem): item is 
 }
 
 function normalizeTabbarItem(item: CustomTabBarItem | NativeTabBarItem): CustomTabBarItem {
-  const pagePath = (item.pagePath.startsWith('/') ? item.pagePath : `/${item.pagePath}`) as _LocationUrl
+  const pagePath = (item.pagePath.startsWith('/') ? item.pagePath : `/${item.pagePath}`) as AppLocationUrl
   if (isCustomTabbarItem(item)) {
     return { ...item, pagePath }
   }

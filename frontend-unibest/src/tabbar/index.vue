@@ -1,5 +1,8 @@
 <script setup lang="ts">
 // i-carbon-code
+import { onLoad, onShow } from '@dcloudio/uni-app'
+import { onMounted } from 'vue'
+
 import { customTabbarEnable, needHideNativeTabbar, tabbarCacheEnable } from './config'
 import { setTabbarItem } from './i18n'
 import { tabbarList, tabbarStore } from './store'
