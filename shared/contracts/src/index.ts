@@ -6,6 +6,7 @@ export const ApiV2Routes = {
   runtimeSettings: '/api/v2/settings',
   authMe: '/api/v2/auth/me',
   authLogout: '/api/v2/auth/logout',
+  authNicknameLogin: '/api/v2/auth/nickname',
   authWechatLogin: '/api/v2/auth/wechat/login',
   authWechatWebStart: '/api/v2/auth/wechat-web/start',
   authWechatWebCallback: '/api/v2/auth/wechat-web/callback',
@@ -42,8 +43,6 @@ export const ApiV2Routes = {
 export const PublicRuntimeSettingsSchema = Type.Object({
   vite_amap_web_key: Type.String(),
   vite_amap_web_js_key: Type.String(),
-  google_maps_api_key: Type.String(),
-  google_maps_proxy: Type.String(),
   llm_thinking_enabled: Type.Boolean(),
   llm_thinking_visible: Type.Boolean(),
 }, { additionalProperties: false })
@@ -69,6 +68,10 @@ export const UserInfoSchema = Type.Object({
 export const AuthResponseSchema = Type.Object({
   success: Type.Literal(true),
   user: UserInfoSchema,
+}, { additionalProperties: false })
+
+export const NicknameLoginBodySchema = Type.Object({
+  nickname: Type.String({ maxLength: 128 }),
 }, { additionalProperties: false })
 
 export const WechatLoginResponseSchema = Type.Object({
@@ -584,6 +587,7 @@ export type UserInfoDto = Static<typeof UserInfoSchema>
 export type PublicRuntimeSettingsDto = Static<typeof PublicRuntimeSettingsSchema>
 export type PublicRuntimeSettingsResponseDto = Static<typeof PublicRuntimeSettingsResponseSchema>
 export type AuthResponseDto = Static<typeof AuthResponseSchema>
+export type NicknameLoginBodyDto = Static<typeof NicknameLoginBodySchema>
 export type WechatLoginResponseDto = Static<typeof WechatLoginResponseSchema>
 export type WechatWebLoginStartDto = Static<typeof WechatWebLoginStartSchema>
 export type UserSkinDto = Static<typeof UserSkinSchema>
@@ -600,6 +604,8 @@ export type TripConfirmReplyResponseDto = Static<typeof TripConfirmReplyResponse
 export type TripPlanRequestDto = Static<typeof TripPlanRequestSchema>
 export type SubmitTripPlanResponseDto = Static<typeof SubmitTripPlanResponseSchema>
 export type RetryTripPlanBodyDto = Static<typeof RetryTripPlanBodySchema>
+export type TripTaskStageDto = Static<typeof TripTaskStageSchema>
+export type TripTaskDetailDto = Static<typeof TripTaskDetailSchema>
 export type TripTaskEventDto = Static<typeof TripTaskEventSchema>
 export type TripTaskStatusResponseDto = Static<typeof TripTaskStatusResponseSchema>
 export type ItemExecutionStatusDto = Static<typeof ItemExecutionStatusSchema>

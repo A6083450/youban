@@ -6,7 +6,7 @@ services:
     container_name: helloagents-trip-planner-dev
     ports:
       - "7860:7860"   # 后端 API
-      - "9000:9000"   # unibest H5 HMR
+      - "9000:9000"   # H5 HMR
     environment:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
@@ -15,15 +15,18 @@ services:
       - DATA_DIR=/app/data
       - HOST=0.0.0.0
       - PORT=7860
-      - LOG_LEVEL=INFO
+      - NODE_ENV=development
+      - YOUBAN_DEV_WECHAT_AUTH=1
     volumes:
       # 挂载本地代码，支持热加载
       - ./backend:/app/backend
-      - ./frontend-unibest:/app/frontend-unibest
+      - ./frontend:/app/frontend
       - ./shared/contracts:/app/shared/contracts
-      - unibest-node-modules:/app/frontend-unibest/node_modules
+      - backend-node-modules:/app/backend/node_modules
+      - frontend-node-modules:/app/frontend/node_modules
       - ./data:/app/data
     restart: unless-stopped
 
 volumes:
-  unibest-node-modules:
+  backend-node-modules:
+  frontend-node-modules:

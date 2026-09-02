@@ -5,7 +5,9 @@ __pycache__
 .git
 .gitignore
 .env
-!frontend-unibest/env/.env
+!frontend/env/.env
+backend.bak
+frontend.bak
 backend/.env
 frontend/.env
 frontend/.env.local

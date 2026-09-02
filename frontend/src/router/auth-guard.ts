@@ -1,26 +1,36 @@
-interface RouteIdentity {
-  name?: unknown
-  path: string
+import type { UserInfoDto } from '@youban/contracts'
+
+export const LOGIN_ROUTE = '/pages/login/index'
+export const HOME_ROUTE = '/pages/index/index'
+
+const PUBLIC_ROUTES = [
+  LOGIN_ROUTE,
+  '/pages/privacy/index',
+  '/pages/share/index',
+  '/pages/admin/index',
+] as const
+
+function pathname(route: string): string {
+  const path = route.split(/[?#]/, 1)[0] || '/'
+  return path === '/' ? HOME_ROUTE : path
+}
+
+export function isPublicRoute(route: string): boolean {
+  const path = pathname(route)
+  return PUBLIC_ROUTES.some(publicPath => path === publicPath || path.startsWith(`${publicPath}/`))
+}
+
+export function isLoginReady(user: UserInfoDto | null | undefined): user is UserInfoDto {
+  return Boolean(user?.user_id && user.profile_complete)
 }
 
 export type AuthRouteDecision = 'allow' | 'home' | 'login'
 
-export function shouldRestoreAuthentication(route: RouteIdentity): boolean {
-  return !(
-    route.path.startsWith('/admin')
-    || route.name === 'Share'
-    || route.name === 'Privacy'
-  )
-}
-
-export function authRouteDecision(
-  route: RouteIdentity,
-  authenticated: boolean,
-  hasAdminSession: boolean,
-): AuthRouteDecision {
-  const adminViewingPlan = route.path.startsWith('/plan/') && hasAdminSession
-  if (!shouldRestoreAuthentication(route) || adminViewingPlan) return 'allow'
-  if (!authenticated && route.path !== '/login') return 'login'
-  if (authenticated && route.path === '/login') return 'home'
-  return 'allow'
+export function authRouteDecision(route: string, authenticated: boolean): AuthRouteDecision {
+  const path = pathname(route)
+  if (path === LOGIN_ROUTE && authenticated)
+    return 'home'
+  if (isPublicRoute(path))
+    return 'allow'
+  return authenticated ? 'allow' : 'login'
 }

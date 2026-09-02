@@ -1,27 +1,14 @@
 #!/bin/bash
 set -e
 
-cd /app
-
 BIND_PORT=${PORT:-7860}
 
-echo "🚀 启动游伴 [开发模式]..."
-echo "   后端地址: http://0.0.0.0:${BIND_PORT}"
-echo "   前端地址: http://0.0.0.0:9000"
+echo "启动游伴开发环境"
+echo "后端地址: http://0.0.0.0:${BIND_PORT}"
+echo "前端地址: http://0.0.0.0:9000"
 
-# 后台启动前端 Vite dev server（带 HMR）
-# VITE_DEV_PROXY_TARGET 让 vite 代理 /api 请求到后端
-cd /app/frontend-unibest
-VITE_SERVER_BASEURL="http://localhost:${BIND_PORT}" \
-  pnpm dev:h5 &
-FRONTEND_PID=$!
+cd /app/frontend
+VITE_SERVER_BASEURL="http://localhost:${BIND_PORT}" pnpm dev:h5 --host 0.0.0.0 &
 
-cd /app
-
-# 前台启动后端 uvicorn（--reload 监听代码变化自动重启）
-exec uvicorn backend.app.api.main:app \
-  --host 0.0.0.0 \
-  --port ${BIND_PORT} \
-  --reload \
-  --reload-dir /app/backend \
-  --log-level info
+cd /app/backend
+exec bun run dev

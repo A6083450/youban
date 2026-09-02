@@ -1,7 +1,7 @@
 # 游伴 AI 旅行助手
 
 <p align="center">
-  <img src="frontend-unibest/src/static/brand-logo.svg" alt="游伴 Logo" width="120">
+  <img src="frontend/src/static/brand-logo.svg" alt="游伴 Logo" width="120">
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@
 | 💬 **自然语言交互** | 像聊天一样描述行程，AI 实时响应调整 |
 | 🧭 **旅行蓝图** | 按阶段呈现路线主题、规划逻辑、节奏与代表体验 |
 | 🗓️ **自适应日程** | 按行程长度自动选择日/周/月分组，完整展示每日时间线 |
-| 🗺️ **地图可视化** | 高德/Google Maps 双引擎，行程路线一目了然 |
+| 🗺️ **地图可视化** | 高德地图统一提供地点、路线与导航数据 |
 | 🌤️ **天气智能** | 实时天气集成，自动优化行程安排 |
 | 📲 **微信小程序** | 与 PC Web、H5 共用 unibest/uni-app 工程，登录、行程、地图、分享和系统动作均为原生页面能力 |
 | 🔑 **统一账号** | Web 端使用微信开放平台扫码登录，小程序通过 `wx.login` 登录，并以 UnionID 关联同一账号 |
@@ -144,7 +144,7 @@
 - **穿衣提示** - 提供出行穿衣建议
 
 ### 📍 地图可视化
-- **双地图引擎** - 高德地图（国内）+ Google Maps（海外）
+- **统一高德地图** - Web、H5 与小程序统一使用高德地点与路线数据
 - **路线展示** - 直观展示行程路线
 - **POI 搜索** - 景点、餐厅、酒店搜索
 - **距离计算** - 自动计算景点间距离和交通时间
@@ -192,8 +192,8 @@
 需要复现 Skills 页面验收环境时，先构建前端，再启动任务自有夹具：
 
 ```bash
-cd frontend-unibest && pnpm build:h5
-cd ../backend-ts && bun run browser:skills-fixture
+cd frontend && pnpm build:h5
+cd ../backend && bun run browser:skills-fixture
 ```
 
 脚本会输出一行 JSON，其中包含 Admin URL、API URL、有效 ZIP 路径和清理标识；使用 `Ctrl+C` 停止后，只会删除该次运行创建的临时数据目录。
@@ -214,7 +214,6 @@ cd ../backend-ts && bun run browser:skills-fixture
 | [Wot UI](https://wot-ui.cn/) / UnoCSS | - | 跨端组件与样式体系 |
 | [Pinia](https://pinia.vuejs.org/) | 3.x | 跨端状态管理 |
 | [高德地图 JS API](https://lbs.amap.com/) | - | 国内地图服务 |
-| [Google Maps](https://developers.google.com/maps) | - | 海外地图服务 |
 | [vue-i18n](https://vue-i18n.intlify.dev/) | 9.14+ | 国际化插件 |
 | [Playwright](https://playwright.dev/) | 1.62+ | 端到端与响应式布局测试 |
 
@@ -329,7 +328,7 @@ VITE_AMAP_WEB_KEY=your_amap_web_key
 cd shared/contracts
 pnpm install --frozen-lockfile --ignore-scripts
 
-cd ../../backend-ts
+cd ../../backend
 bun install --frozen-lockfile
 bun run dev
 ```
@@ -340,7 +339,7 @@ bun run dev
 ### 4. 启动前端
 
 ```bash
-cd frontend-unibest
+cd frontend
 
 # 安装依赖
 pnpm install --frozen-lockfile
@@ -356,14 +355,14 @@ VITE_SERVER_BASEURL=http://127.0.0.1:7860 pnpm dev:h5
 需要在微信开发者工具中调试小程序时，先启动专用本地后端，再从同一工程构建微信目标：
 
 ```bash
-cd backend-ts
+cd backend
 bun run dev:wechat
 
-cd ../frontend-unibest
+cd ../frontend
 VITE_SERVER_BASEURL__WEIXIN_DEVELOP=http://127.0.0.1:7860 pnpm dev:mp-weixin
 ```
 
-微信开发者工具导入 `frontend-unibest/dist/dev/mp-weixin`。该模式把本地 `wx.login`
+微信开发者工具导入 `frontend/dist/dev/mp-weixin`。该模式把本地 `wx.login`
 临时代码映射到固定测试身份，便于模拟器联调；
 `production` 环境会拒绝 `YOUBAN_DEV_WECHAT_AUTH=1`。
 
@@ -371,13 +370,13 @@ VITE_SERVER_BASEURL__WEIXIN_DEVELOP=http://127.0.0.1:7860 pnpm dev:mp-weixin
 
 ```bash
 # 后端模型、真实子 Agent、HTTP/WS 与迁移回归测试
-cd backend-ts
+cd backend
 bun run test
 bun run typecheck
 bun run audit:python-tests
 
 # 统一前端类型、代码质量、逻辑测试与双端构建
-cd ../frontend-unibest
+cd ../frontend
 pnpm type-check
 pnpm lint
 pnpm test:run
@@ -418,7 +417,7 @@ docker run -p 7860:7860 \
 youban/
 ├── .agents/skills/              # 仓库级开发与验收 Skills
 │   └── wechatide-skill/         # 微信开发者工具工作流
-├── frontend-unibest/            # PC Web、H5、微信小程序统一工程
+├── frontend/                    # PC Web、H5、微信小程序统一工程
 │   ├── src/
 │   │   ├── pages/               # 首页、登录、行程、分享、隐私与管理后台
 │   │   ├── components/          # 跨端布局、行程、地图与管理组件
@@ -430,7 +429,7 @@ youban/
 │   ├── dist/build/h5/           # H5 生产产物（不入库）
 │   └── dist/build/mp-weixin/    # 微信小程序生产产物（不入库）
 ├── shared/contracts/            # 前后端共享的 TypeBox API 契约
-├── backend-ts/                  # Bun 1.4 / Elysia 后端
+├── backend/                     # Bun 1.4 / Elysia 后端
 │   ├── src/
 │   │   ├── agents/             # Pi 父 Agent、真实子 Agent 与白名单 Skills
 │   │   ├── config/             # 环境变量与原子运行时配置
@@ -441,9 +440,9 @@ youban/
 │   ├── scripts/                # JSON/SQLite 迁移、回滚导出、基准与冒烟
 │   ├── tests/                  # Bun 单元、契约和真实 Pi 插件测试
 │   └── package.json
-├── frontend/                    # 旧 Web 客户端，仅在切换观察期保留，不参与 Bun 镜像
+├── frontend.bak/                # 旧 Web 客户端，仅作回滚参考
 ├── miniprogram/                 # 旧原生客户端，仅在切换观察期保留，不再作为发布入口
-├── backend/                     # Python 旧后端，切换观察期内仅作回滚参考
+├── backend.bak/                 # Python 旧后端，仅作回滚参考
 ├── data/                        # SQLite、头像、图片缓存与用户记忆（不入库）
 ├── imgs/                        # 截图资源
 │   ├── pc/                     # PC 端截图
@@ -473,7 +472,6 @@ youban/
 |---------|------|
 | `VITE_AMAP_WEB_JS_KEY` | 高德地图 Web JS API Key |
 | `VITE_AMAP_WEB_KEY` | 高德地图 Web 服务 Key |
-| `GOOGLE_MAPS_API_KEY` | Google Maps API Key（可选） |
 
 ### 服务配置
 

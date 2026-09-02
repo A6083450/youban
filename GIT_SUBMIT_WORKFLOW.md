@@ -25,7 +25,7 @@
 - `.env`、API Key、Token、密码和其他凭据
 - `.DS_Store`
 - `data/` 运行数据
-- `frontend-unibest/dist/`、测试报告等生成产物
+- `frontend/dist/`、测试报告等生成产物
 - 与本次功能无关或来源不明的锁文件、临时文件
 
 ## 异常处理

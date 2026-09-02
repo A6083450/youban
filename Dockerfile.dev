@@ -1,60 +1,39 @@
-# ================================
-# 开发模式 Dockerfile
-# 支持热加载 (HMR + uvicorn --reload)
-# ================================
 ARG NODE_IMAGE_PREFIX=docker.m.daocloud.io/library
+ARG BUN_IMAGE_PREFIX=docker.m.daocloud.io/oven
 FROM ${NODE_IMAGE_PREFIX}/node:20-slim AS node-runtime
 
-FROM python:3.10-slim
-
+FROM ${BUN_IMAGE_PREFIX}/bun:1.4
 WORKDIR /app
 
-# 安装系统依赖及 Node.js
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc curl \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=node-runtime /usr/local /usr/local
-RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
+    && corepack prepare pnpm@10.10.0 --activate
 
-# 安装 uv 包管理器
-RUN pip install --no-cache-dir uv -i https://mirrors.aliyun.com/pypi/simple/
+COPY shared/contracts ./shared/contracts
+WORKDIR /app/shared/contracts
+RUN bun install
 
-# 使用 uv 管理后端依赖
-# venv 建在 /opt/venv（代码目录之外），dev 模式卷挂载 ./backend 时不会覆盖依赖
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_PYTHON_DOWNLOADS=0 \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+WORKDIR /app
+COPY backend/package.json backend/bun.lock ./backend/
+WORKDIR /app/backend
+RUN bun install --frozen-lockfile
 
-# 先仅复制依赖清单以最大化层缓存（dev 用 uvicorn --reload，无需 gunicorn）
-COPY backend/pyproject.toml backend/uv.lock ./backend/
-RUN cd backend && uv sync --locked --python 3.10
+WORKDIR /app
+COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
+WORKDIR /app/frontend
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
-# FlyAI CLI is a controlled backend tool used for hotel inventory search.
-COPY backend/package.json ./backend/
-RUN cd backend && npm install --registry=https://registry.npmmirror.com
-
-# 将 venv 加入 PATH，后续 uvx / uvicorn 均使用它
-ENV PATH="/opt/venv/bin:$PATH"
-
-# 预下载 amap-mcp-server
-RUN uvx amap-mcp-server --help || true
-
-# 安装统一前端依赖
-COPY shared/contracts /app/shared/contracts
-RUN cd /app/shared/contracts && pnpm install --frozen-lockfile --ignore-scripts
-COPY frontend-unibest/package.json frontend-unibest/pnpm-lock.yaml /app/frontend-unibest/
-RUN cd /app/frontend-unibest && pnpm install --frozen-lockfile --ignore-scripts
-
-# 复制启动脚本
+WORKDIR /app
 COPY start-dev.sh ./start-dev.sh
-RUN chmod +x ./start-dev.sh
+RUN chmod +x ./start-dev.sh && mkdir -p /app/data
 
-ENV DATA_DIR=/app/data
-RUN mkdir -p /app/data
+ENV DATA_DIR=/app/data \
+    HOST=0.0.0.0 \
+    PORT=7860 \
+    YOUBAN_DEV_WECHAT_AUTH=1
 
-# 暴露端口：后端 API + 前端 HMR
 EXPOSE 7860 9000
-
 CMD ["./start-dev.sh"]

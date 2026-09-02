@@ -1,6 +1,6 @@
 data/
 .env
-!frontend-unibest/env/.env
+!frontend/env/.env
 .omc/
 .omo/
 backend/.omc/
@@ -27,8 +27,11 @@ output
 .debug-journal.md
 *.png
 !imgs/**/*.png
+!frontend/src/static/brand-logo.png
 youban-spec
 /docs/superpowers
-backend-ts/node_modules/
-backend-ts/profiles/
+backend/node_modules/
+backend/profiles/
+backend.bak/**
+frontend.bak/**
 miniprogram/project.private.config.json

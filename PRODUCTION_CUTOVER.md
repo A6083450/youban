@@ -1,6 +1,6 @@
 # Bun + unibest 生产切换与全新微信账号启用
 
-本文用于 `youban.me` 从 Python/Uvicorn 与旧 Vue/PWA 前端切换到 Bun/Elysia + unibest，并按已确认范围删除本地及生产业务数据。PC Web、移动 H5 和微信小程序由 `frontend-unibest/` 同一工程构建；新服务只接受微信身份，不导入旧用户、任务、对话、图片或记忆。
+本文用于 `youban.me` 从 `backend.bak/` 的 Python/Uvicorn 与 `frontend.bak/` 的旧 Vue/PWA 前端切换到 `backend/` 的 Bun/Elysia 和 `frontend/` 的统一客户端。默认保留生产业务数据并通过 SQLite 迁移升级；只有用户另行明确批准时才执行本文的数据清理步骤。
 
 ## 1. 切换前验收
 
@@ -16,7 +16,7 @@
 先只预览，不删除：
 
 ```bash
-cd backend-ts
+cd backend
 bun run purge:business-data --data-dir=/生产数据绝对路径
 ```
 
@@ -43,7 +43,7 @@ Caddy 配置、证书和服务器密钥环境不在数据目录清理范围内�
 3. 使用上一步输出的规范化路径进行双重确认：
 
 ```bash
-cd backend-ts
+cd backend
 bun run purge:business-data \
   --data-dir=/生产数据真实绝对路径 \
   --execute \
@@ -58,7 +58,7 @@ bun run purge:business-data \
 export YOUBAN_DATA_DIR=/生产数据真实绝对路径
 export BUN_CANDIDATE_PORT=7861
 docker compose -f docker-compose.bun.yaml up -d --build
-cd backend-ts
+cd backend
 bun run smoke:deployment --base-url=http://127.0.0.1:7861 --health-only
 ```
 
