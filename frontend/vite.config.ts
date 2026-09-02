@@ -14,7 +14,11 @@ import { WotResolver } from './wot-ui-resolver'
 // @see https://github.com/uni-helper/vite-plugin-uni-platform
 // 需要与 @uni-helper/vite-plugin-uni-pages 插件一起使用
 import UniPlatform from '@uni-helper/vite-plugin-uni-platform'
-import { sortPageDefinitions } from './src/router/page-definitions'
+import {
+  PAGE_DEFINITIONS,
+  pageDefinitionsForPlatform,
+  sortPageDefinitions,
+} from './src/router/page-definitions'
 
 /**
  * 分包优化、模块异步跨包调用、组件异步跨包引用
@@ -69,10 +73,13 @@ export default defineConfig(({ command, mode }) => {
   } = env
   const { WECHAT_DEVTOOLS_CLI_PATH } = localEnv
   console.log('环境变量 env -> ', env)
+  const includedPagePaths = new Set(pageDefinitionsForPlatform(UNI_PLATFORM).map(page => page.path))
   const excludedPages = [
     '**/components/**/**.*',
     '**/sections/**/**.*',
-    ...(UNI_PLATFORM === 'h5' ? [] : ['**/admin/**']),
+    ...PAGE_DEFINITIONS
+      .filter(page => !includedPagePaths.has(page.path))
+      .map(page => `**/${page.path.split('/')[1]}/**`),
   ]
 
   return defineConfig({

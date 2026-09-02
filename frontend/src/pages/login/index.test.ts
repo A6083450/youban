@@ -1,27 +1,35 @@
 import type { VueWrapper } from '@vue/test-utils'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { Component } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
+import type { Component } from 'vue'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+const challengeId = 'a'.repeat(32)
+function challenge(image = 'AAAA') {
+  return {
+    challenge_id: challengeId,
+    expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    qr_code_data_url: `data:image/png;base64,${image}`,
+  }
+}
 const mocks = vi.hoisted(() => ({
-  startWechatWebLogin: vi.fn(),
-  loginNickname: vi.fn(),
-  mountWechatLoginWidget: vi.fn(),
-  acceptWebsiteSession: vi.fn(),
+  approve: vi.fn(),
+  create: vi.fn(),
+  exchange: vi.fn(),
+  loginMiniProgramWithAvatar: vi.fn(),
+  restore: vi.fn(),
+  status: vi.fn(),
 }))
 
 vi.mock('@/services/v2', () => ({
-  loginNickname: mocks.loginNickname,
-  startWechatWebLogin: mocks.startWechatWebLogin,
-}))
-vi.mock('@/features/auth/wechat-login-widget', () => ({
-  mountWechatLoginWidget: mocks.mountWechatLoginWidget,
+  createWebLoginChallenge: mocks.create,
+  exchangeWebLoginChallenge: mocks.exchange,
+  getWebLoginChallengeStatus: mocks.status,
 }))
 vi.mock('@/store/auth', () => ({
   useAuthStore: () => ({
     ready: false,
-    acceptWebsiteSession: mocks.acceptWebsiteSession,
-    loginMiniProgramWithAvatar: vi.fn(),
+    loginMiniProgramWithAvatar: mocks.loginMiniProgramWithAvatar,
+    restore: mocks.restore,
   }),
 }))
 vi.mock('@/store/preferences', () => ({
@@ -36,26 +44,12 @@ vi.mock('vue-i18n', () => ({
       'login.pending': '使用微信扫码登录',
       'login.failed': '微信扫码登录暂时不可用',
       'login.retry': '重新加载二维码',
-      'login.denied': '你已取消微信登录',
-      'login.nicknameLabel': '昵称登录',
-      'login.nicknamePlaceholder': '请输入昵称',
-      'login.nicknameButton': '登录',
-      'login.nicknameRequired': '请输入昵称',
-      'login.nicknameTooLong': '昵称不能超过 20 个字符',
-      'login.nicknameDivider': '或使用微信扫码登录',
-      'shareCode.label': '分享码',
-      'shareCode.placeholder': '32 位分享码',
-      'shareCode.submit': '查看',
+      'login.expired': '二维码已失效，请重新加载',
+      'login.webSuccess': '登录成功，正在进入',
+      'login.loggingIn': '正在登录',
     } as Record<string, string>)[key] ?? key,
   }),
 }))
-
-const configuration = {
-  app_id: 'wx-web-app',
-  scope: 'snsapi_login' as const,
-  redirect_uri: 'https://youban.me/api/v2/auth/wechat-web/callback',
-  state: 'opaque-state-with-at-least-32-bytes',
-}
 
 let LoginPage: Component
 let wrapper: VueWrapper | undefined
@@ -71,68 +65,39 @@ beforeAll(async () => {
 afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
-  window.location.hash = ''
-  vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
-describe('h5 login page', () => {
-  it('logs in with a nickname and navigates home without hiding WeChat login', async () => {
-    mocks.startWechatWebLogin.mockRejectedValue(new Error('not configured'))
-    const user = {
-      user_id: 'nickname-user',
-      nickname: '旅行者',
-      avatar_url: null,
-      profile_complete: true,
-    }
-    mocks.loginNickname.mockResolvedValue({ success: true, user })
+describe('login page', () => {
+  it('renders the server mini-program code and exchanges an approved challenge', async () => {
+    vi.useFakeTimers()
+    mocks.create.mockResolvedValue(challenge())
+    mocks.status.mockResolvedValue({ status: 'approved' })
+    mocks.exchange.mockResolvedValue({ success: true, user: { user_id: 'user-1' } })
+    mocks.restore.mockResolvedValue(undefined)
 
     wrapper = mount(LoginPage)
     await flushPromises()
 
-    expect(wrapper.get('.nickname-label').text()).toBe('昵称登录')
-    expect(wrapper.find('#wechat-login-container').exists()).toBe(true)
-    await wrapper.get('.nickname-input').trigger('input', { detail: { value: '旅行者' } })
-    await wrapper.get('.nickname-login-button').trigger('click')
+    expect(wrapper.get('.wechat-login-code').attributes('src')).toBe('data:image/png;base64,AAAA')
+    expect(wrapper.text()).toContain('使用微信扫码登录')
+    expect(wrapper.find('#wechat-login-container').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('分享码')
+    expect(wrapper.text()).not.toContain(challengeId)
+
+    await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
 
-    expect(mocks.loginNickname).toHaveBeenCalledWith('旅行者')
-    expect(mocks.acceptWebsiteSession).toHaveBeenCalledWith(user)
+    expect(mocks.status).toHaveBeenCalledWith(challengeId)
+    expect(mocks.exchange).toHaveBeenCalledWith(challengeId)
+    expect(mocks.restore).toHaveBeenCalledWith(true)
     expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/index/index' })
   })
 
-  it('rejects an empty website nickname before requesting login', async () => {
-    mocks.startWechatWebLogin.mockRejectedValue(new Error('not configured'))
-
-    wrapper = mount(LoginPage)
-    await flushPromises()
-    await wrapper.get('.nickname-login-button').trigger('click')
-
-    expect(wrapper.text()).toContain('请输入昵称')
-    expect(mocks.loginNickname).not.toHaveBeenCalled()
-  })
-
-  it('starts official website login and renders its widget container', async () => {
-    mocks.startWechatWebLogin.mockResolvedValue(configuration)
-    mocks.mountWechatLoginWidget.mockResolvedValue(undefined)
-
-    wrapper = mount(LoginPage)
-    await flushPromises()
-
-    expect(wrapper.get('#wechat-login-container').isVisible()).toBe(true)
-    expect(wrapper.text()).toContain('使用微信扫码登录')
-    expect(mocks.startWechatWebLogin).toHaveBeenCalledTimes(1)
-    expect(mocks.mountWechatLoginWidget).toHaveBeenCalledWith(
-      'wechat-login-container',
-      configuration,
-    )
-    expect(wrapper.text()).not.toContain('短码')
-  })
-
-  it('shows a stable failure and retries with a fresh start request', async () => {
-    mocks.startWechatWebLogin
+  it('shows a stable failure and retries with a fresh challenge', async () => {
+    mocks.create
       .mockRejectedValueOnce(new Error('raw network detail'))
-      .mockResolvedValueOnce(configuration)
-    mocks.mountWechatLoginWidget.mockResolvedValue(undefined)
+      .mockResolvedValueOnce(challenge('BBBB'))
 
     wrapper = mount(LoginPage)
     await flushPromises()
@@ -141,16 +106,45 @@ describe('h5 login page', () => {
     expect(wrapper.text()).not.toContain('raw network detail')
     await wrapper.get('.refresh-button').trigger('click')
     await flushPromises()
-    expect(mocks.startWechatWebLogin).toHaveBeenCalledTimes(2)
+    expect(mocks.create).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.wechat-login-code').attributes('src')).toBe('data:image/png;base64,BBBB')
   })
 
-  it('maps an allowlisted callback error without starting another flow', async () => {
-    window.location.hash = '#/pages/login/index?wechat_error=denied'
+  it('retries a temporary polling failure until expiry and labels an expired code', async () => {
+    vi.useFakeTimers()
+    mocks.create.mockResolvedValue(challenge())
+    mocks.status
+      .mockRejectedValueOnce(new Error('temporary network failure'))
+      .mockResolvedValueOnce({ status: 'expired' })
 
     wrapper = mount(LoginPage)
     await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('使用微信扫码登录')
 
-    expect(wrapper.text()).toContain('你已取消微信登录')
-    expect(mocks.startWechatWebLogin).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    expect(mocks.status).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('二维码已失效，请重新加载')
+  })
+
+  it('returns to a pending confirmation after avatar login', async () => {
+    mocks.create.mockRejectedValue(new Error('unused on mini program'))
+    mocks.loginMiniProgramWithAvatar.mockResolvedValue({ user_id: 'user-1' })
+    vi.mocked(uni.getStorageSync).mockImplementation(key => (
+      key === 'youban.v2.pending-web-login-challenge' ? challengeId : null
+    ))
+
+    wrapper = mount(LoginPage)
+    await wrapper.get('.mini-login-button').trigger('chooseavatar', {
+      detail: { avatarUrl: '/tmp/avatar.png' },
+    })
+    await flushPromises()
+
+    expect(uni.removeStorageSync).toHaveBeenCalledWith('youban.v2.pending-web-login-challenge')
+    expect(uni.reLaunch).toHaveBeenCalledWith({
+      url: `/pages/web-login/index?scene=${challengeId}`,
+    })
   })
 })

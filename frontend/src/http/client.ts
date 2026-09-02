@@ -1,4 +1,4 @@
-import { authHeaders, currentPlatform } from '@/platform/auth'
+import { authHeaders, currentPlatform, expireAuthSession } from '@/platform/auth'
 import { getStoredValue, setStoredValue, StorageKeys } from '@/platform/storage'
 import { selectRuntimeBaseUrl } from './runtime-base-url'
 
@@ -26,30 +26,51 @@ function trimTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, '')
 }
 
-export function getApiBaseUrl(): string {
-  const stored = getStoredValue<string>(StorageKeys.apiBaseUrl)
+function wechatRuntime(): {
+  envVersion?: 'develop' | 'trial' | 'release'
+  hostPlatform?: string
+} {
   let envVersion: 'develop' | 'trial' | 'release' | undefined
-  if (currentPlatform() === 'mp-weixin') {
-    try {
-      envVersion = uni.getAccountInfoSync().miniProgram.envVersion
-    }
-    catch {
-      envVersion = undefined
-    }
+  let hostPlatform: string | undefined
+  try {
+    envVersion = uni.getAccountInfoSync().miniProgram.envVersion
   }
-  const configured = selectRuntimeBaseUrl(currentPlatform(), envVersion, {
+  catch {
+    envVersion = undefined
+  }
+  try {
+    hostPlatform = String(uni.getSystemInfoSync().platform || '').toLowerCase()
+  }
+  catch {
+    hostPlatform = undefined
+  }
+  return { envVersion, hostPlatform }
+}
+
+export function getApiBaseUrl(): string {
+  const platform = currentPlatform()
+  const runtime = platform === 'mp-weixin' ? wechatRuntime() : {}
+  const selected = selectRuntimeBaseUrl({
+    platform,
+    storedBaseUrl: getStoredValue<string>(StorageKeys.apiBaseUrl),
+    ...runtime,
+  }, {
     fallback: import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_SERVER_BASEURL || '',
-    develop: import.meta.env.VITE_SERVER_BASEURL__WEIXIN_DEVELOP,
     trial: import.meta.env.VITE_SERVER_BASEURL__WEIXIN_TRIAL,
     release: import.meta.env.VITE_SERVER_BASEURL__WEIXIN_RELEASE,
   })
-  return trimTrailingSlash(stored || configured)
+  return trimTrailingSlash(selected)
 }
 
 export function setApiBaseUrl(value: string): string {
   const normalized = trimTrailingSlash(value)
   setStoredValue(StorageKeys.apiBaseUrl, normalized || null)
   return normalized
+}
+
+export function handleUnauthorizedResponse(status: number, isPublic = false): void {
+  if (status === 401 && !isPublic)
+    expireAuthSession()
 }
 
 function errorMessage(data: unknown, fallback: string): string {
@@ -90,6 +111,7 @@ export function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Pr
           resolve(response.data as T)
           return
         }
+        handleUnauthorizedResponse(status, Boolean(options.public))
         reject(new ApiError(errorMessage(response.data, `请求失败（${status}）`), status, response.data))
       },
       fail(error) {

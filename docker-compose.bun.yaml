@@ -18,9 +18,6 @@ services:
       VITE_AMAP_WEB_KEY: ${VITE_AMAP_WEB_KEY:?required}
       WECHAT_APP_ID: wx42ddc076b365bf0d
       WECHAT_APP_SECRET: ${WECHAT_APP_SECRET:?required}
-      WECHAT_WEB_APP_ID: ${WECHAT_WEB_APP_ID:-}
-      WECHAT_WEB_APP_SECRET: ${WECHAT_WEB_APP_SECRET:-}
-      WECHAT_WEB_REDIRECT_URI: ${WECHAT_WEB_REDIRECT_URI:-https://youban.me/api/v2/auth/wechat-web/callback}
     volumes:
       - ${YOUBAN_DATA_DIR:?required}:/app/data
     restart: unless-stopped

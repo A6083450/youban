@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  approveWebLoginChallenge,
   authMemoryPath,
+  createWebLoginChallenge,
+  exchangeWebLoginChallenge,
+  getWebLoginChallengeStatus,
   miniProgramActionPath,
-  startWechatWebLogin,
   taskEventsPath,
   taskStatusPath,
   tripAttractionPath,
@@ -13,11 +16,10 @@ import {
   tripRetryPath,
 } from './v2'
 
-const websiteConfiguration = {
-  app_id: 'wx-web-app',
-  scope: 'snsapi_login' as const,
-  redirect_uri: 'https://youban.me/api/v2/auth/wechat-web/callback',
-  state: 'opaque-state-with-at-least-32-bytes',
+const challenge = {
+  challenge_id: 'a'.repeat(32),
+  expires_at: '2026-09-02T13:30:00.000Z',
+  qr_code_data_url: 'data:image/png;base64,AAAA',
 }
 
 describe('v2 service paths', () => {
@@ -34,12 +36,12 @@ describe('v2 service paths', () => {
     expect(tripItemStatusPath('plan 1', 'item/2')).toBe('/api/v2/trip/plan/plan%201/items/item%2F2/status')
   })
 
-  it('starts official website login through the credentialed public endpoint', async () => {
-    let requestOptions: UniNamespace.RequestOptions | undefined
+  it('uses the browser-bound Web challenge endpoints', async () => {
+    const requests: UniNamespace.RequestOptions[] = []
     vi.mocked(uni.request).mockImplementation((options) => {
-      requestOptions = options
+      requests.push(options)
       options.success?.({
-        data: websiteConfiguration,
+        data: requests.length === 1 ? challenge : { status: 'pending' },
         statusCode: 200,
         header: {},
         cookies: [],
@@ -48,13 +50,18 @@ describe('v2 service paths', () => {
       return {} as UniApp.RequestTask
     })
 
-    await expect(startWechatWebLogin()).resolves.toEqual(websiteConfiguration)
-    expect(requestOptions).toEqual(expect.objectContaining({
-      url: '/api/v2/auth/wechat-web/start',
-      method: 'POST',
-      data: {},
-      withCredentials: true,
-    }))
+    await expect(createWebLoginChallenge()).resolves.toEqual(challenge)
+    await getWebLoginChallengeStatus(challenge.challenge_id)
+    await approveWebLoginChallenge(challenge.challenge_id)
+    await exchangeWebLoginChallenge(challenge.challenge_id)
+
+    expect(requests.map(request => [request.url, request.method])).toEqual([
+      ['/api/v2/auth/web/challenges', 'POST'],
+      [`/api/v2/auth/web/challenges/${challenge.challenge_id}/status`, 'GET'],
+      [`/api/v2/auth/web/challenges/${challenge.challenge_id}/approve`, 'POST'],
+      [`/api/v2/auth/web/challenges/${challenge.challenge_id}/exchange`, 'POST'],
+    ])
+    expect(requests.every(request => request.withCredentials)).toBe(true)
   })
 
   it('logs a website nickname in through the credentialed public endpoint', async () => {

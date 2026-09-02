@@ -11,27 +11,9 @@ let dataDir = "";
 
 function createRuntime(
   memory?: UserMemoryService,
-  options: { website?: boolean } = {},
+  options: { miniProgramCode?: boolean } = {},
 ) {
   dataDir = mkdtempSync(join(tmpdir(), "youban-auth-http-"));
-  const website = options.website === false
-    ? undefined
-    : {
-        appId: "wx-web-app",
-        redirectUri: "https://youban.me/api/v2/auth/wechat-web/callback",
-        exchangeCode: async (code: string) => {
-          if (code === "provider-failure") {
-            throw new Error("provider-secret temporary-code must not leak");
-          }
-          return {
-            openid: `web-openid-for-${code}`,
-            unionid: code === "identity-failure" ? "" : `unionid-for-${code}`,
-            nickname: "网页用户",
-            avatarUrl: "",
-          };
-        },
-        importAvatar: async () => null,
-      };
   runtime = createHttpRuntime({
     dataDir,
     authentication: {
@@ -40,10 +22,12 @@ function createRuntime(
         if (code === "bad") throw new Error("invalid code");
         return {
           openid: `openid-for-${code}`,
-          unionid: `unionid-for-${code}`,
+          ...(code === "openid-only" ? {} : { unionid: `unionid-for-${code}` }),
         };
       },
-      website,
+      createMiniProgramCode: options.miniProgramCode === false
+        ? undefined
+        : async scene => `data:image/png;base64,${Buffer.from(scene).toString("base64")}`,
     },
     memory,
   });
@@ -131,6 +115,20 @@ describe("unified authentication HTTP", () => {
     expect(revoked.status).toBe(401);
   });
 
+  it("logs in repeatedly when WeChat returns only openid", async () => {
+    const { app } = createRuntime();
+
+    const firstResponse = await post(app, "/api/v2/auth/wechat/login", { code: "openid-only" });
+    const secondResponse = await post(app, "/api/v2/auth/wechat/login", { code: "openid-only" });
+    const first = await json(firstResponse);
+    const second = await json(secondResponse);
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.token).not.toBe(first.token);
+  });
+
   it("logs the website into one historical nickname account with an HttpOnly cookie", async () => {
     const instance = createRuntime();
     const { app } = instance;
@@ -193,7 +191,7 @@ describe("unified authentication HTTP", () => {
 
     expect((await app.handle(new Request("http://localhost/health"))).status).toBe(200);
     expect((await app.handle(new Request("http://localhost/api/settings"))).status).toBe(200);
-    expect((await post(app, "/api/v2/auth/wechat-web/start", {})).status).toBe(200);
+    expect((await post(app, "/api/v2/auth/web/challenges", {})).status).toBe(200);
   });
 
   it("does not grant private API access to an avatar-incomplete mini-program session", async () => {
@@ -235,133 +233,145 @@ describe("unified authentication HTTP", () => {
     expect(skipped.status).toBe(404);
   });
 
-  it("starts and completes browser-bound official WeChat website login", async () => {
+  it("creates, approves, and exchanges a browser-bound mini-program Web login", async () => {
     const { app } = createRuntime();
-    const start = await post(app, "/api/v2/auth/wechat-web/start", {});
-    const configuration = await json(start);
+    const createdResponse = await post(app, "/api/v2/auth/web/challenges", {});
+    const created = await json(createdResponse);
 
-    expect(start.status).toBe(200);
-    expect(configuration).toMatchObject({
-      app_id: "wx-web-app",
-      scope: "snsapi_login",
-      redirect_uri: "https://youban.me/api/v2/auth/wechat-web/callback",
-    });
-    expect(configuration.state).toMatch(/^[A-Za-z0-9_-]{32,}$/);
-    expect(JSON.stringify(configuration)).not.toContain("secret");
-    const verifierCookie = cookiePair(start, "youban_wechat_oauth");
-    expect(start.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=Lax");
-    expect(start.headers.get("set-cookie")).toContain("Path=/api/v2/auth/wechat-web");
+    expect(createdResponse.status).toBe(200);
+    expect(created.challenge_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(created.expires_at).toEqual(expect.any(String));
+    expect(created.qr_code_data_url).toMatch(/^data:image\/png;base64,/);
+    expect(JSON.stringify(created)).not.toContain("verifier");
+    const verifierCookie = cookiePair(createdResponse, "youban_web_login");
+    expect(createdResponse.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=Lax");
+    expect(createdResponse.headers.get("set-cookie")).toContain("Path=/api/v2/auth/web/challenges");
 
-    const callback = await app.handle(new Request(
-      `http://localhost/api/v2/auth/wechat-web/callback?code=web-user&state=${encodeURIComponent(configuration.state)}`,
+    const mini = await json(await post(app, "/api/auth/wechat/login", { code: "web-user" }));
+    expect((await uploadAvatar(app, mini.token)).status).toBe(200);
+    const approved = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
+      {},
+      { authorization: `Bearer ${mini.token}` },
+    );
+    expect(approved.status).toBe(200);
+    expect(await json(approved)).toEqual({ success: true });
+
+    const statusResponse = await app.handle(new Request(
+      `http://localhost/api/v2/auth/web/challenges/${created.challenge_id}/status`,
       { headers: { cookie: verifierCookie } },
     ));
-    const html = await callback.text();
-    const setCookies = callback.headers.getSetCookie().join("\n");
-    expect(callback.status).toBe(200);
-    expect(callback.headers.get("content-type")).toContain("text/html");
-    expect(setCookies).toContain("youban_session=");
-    expect(setCookies).toContain("youban_wechat_oauth=; HttpOnly; Secure; SameSite=Lax");
-    expect(setCookies).toContain("Max-Age=0");
-    expect(html).toContain("window.top.location.replace");
-    expect(html).toContain("/#/pages/index/index");
+    expect(statusResponse.status).toBe(200);
+    expect(await json(statusResponse)).toEqual({ status: "approved" });
 
-    const sessionCookie = cookiePair(callback, "youban_session");
+    const exchanged = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/exchange`,
+      {},
+      { cookie: verifierCookie },
+    );
+    const exchangeBody = await json(exchanged);
+    const setCookies = exchanged.headers.getSetCookie().join("\n");
+    expect(exchanged.status).toBe(200);
+    expect(setCookies).toContain("youban_session=");
+    expect(setCookies).toContain("youban_web_login=; HttpOnly; Secure; SameSite=Lax");
+    expect(setCookies).toContain("Max-Age=0");
+    expect(exchangeBody).toMatchObject({ success: true, user: { user_id: mini.user.user_id } });
+    expect(exchangeBody.token).toBeUndefined();
+
+    const sessionCookie = cookiePair(exchanged, "youban_session");
     const me = await app.handle(new Request("http://localhost/api/v2/auth/me", {
       headers: { cookie: sessionCookie },
     }));
     expect(me.status).toBe(200);
-    expect((await json(me)).user).toMatchObject({
-      nickname: "网页用户",
-      avatar_url: null,
-      profile_complete: true,
-    });
+    expect((await json(me)).user.user_id).toBe(mini.user.user_id);
+
+    const nextChallenge = await json(await post(app, "/api/v2/auth/web/challenges", {}));
+    const webApproval = await post(
+      app,
+      `/api/v2/auth/web/challenges/${nextChallenge.challenge_id}/approve`,
+      {},
+      { cookie: sessionCookie },
+    );
+    expect(webApproval.status).toBe(401);
+    expect(await json(webApproval)).toEqual({ detail: "请先选择微信头像完成登录" });
+
+    const replayed = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/exchange`,
+      {},
+      { cookie: verifierCookie },
+    );
+    expect(replayed.status).toBe(422);
   });
 
-  it("rejects cross-browser, expired, and replayed website OAuth state", async () => {
+  it("rejects wrong browsers, incomplete users, conflicting approvers, and expired challenges", async () => {
     const instance = createRuntime();
     const { app } = instance;
-    const start = await post(app, "/api/v2/auth/wechat-web/start", {});
-    const configuration = await json(start);
-    const verifierCookie = cookiePair(start, "youban_wechat_oauth");
-    const callbackUrl =
-      `http://localhost/api/v2/auth/wechat-web/callback?code=state-user&state=${encodeURIComponent(configuration.state)}`;
-
-    const forged = await app.handle(new Request(callbackUrl, {
-      headers: { cookie: "youban_wechat_oauth=wrong-browser" },
+    const createdResponse = await post(app, "/api/v2/auth/web/challenges", {});
+    const created = await json(createdResponse);
+    const statusUrl = `http://localhost/api/v2/auth/web/challenges/${created.challenge_id}/status`;
+    const forged = await app.handle(new Request(statusUrl, {
+      headers: { cookie: "youban_web_login=wrong-browser" },
     }));
-    expect(await forged.text()).toContain("wechat_error=expired");
-    expect(forged.headers.getSetCookie().join("\n")).not.toContain("youban_session=");
+    expect(forged.status).toBe(422);
+    expect(await json(forged)).toEqual({ detail: "网页登录凭证无效或已过期" });
 
-    const accepted = await app.handle(new Request(callbackUrl, {
-      headers: { cookie: verifierCookie },
-    }));
-    expect(await accepted.text()).toContain("/#/pages/index/index");
+    const incomplete = await json(await post(app, "/api/auth/wechat/login", { code: "incomplete-web" }));
+    const rejectedApproval = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
+      {},
+      { authorization: `Bearer ${incomplete.token}` },
+    );
+    expect(rejectedApproval.status).toBe(401);
+    expect(await json(rejectedApproval)).toEqual({ detail: "请先选择微信头像完成登录" });
 
-    const replayed = await app.handle(new Request(callbackUrl, {
-      headers: { cookie: verifierCookie },
-    }));
-    expect(await replayed.text()).toContain("wechat_error=expired");
-    expect(replayed.headers.getSetCookie().join("\n")).not.toContain("youban_session=");
+    const first = await json(await post(app, "/api/auth/wechat/login", { code: "first-approver" }));
+    const second = await json(await post(app, "/api/auth/wechat/login", { code: "second-approver" }));
+    expect((await uploadAvatar(app, first.token)).status).toBe(200);
+    expect((await uploadAvatar(app, second.token)).status).toBe(200);
+    expect((await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
+      {},
+      { authorization: `Bearer ${first.token}` },
+    )).status).toBe(200);
+    const conflict = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
+      {},
+      { authorization: `Bearer ${second.token}` },
+    );
+    expect(conflict.status).toBe(409);
+    expect(await json(conflict)).toEqual({ detail: "登录挑战已由其他账号确认" });
 
-    const expiringStart = await post(app, "/api/v2/auth/wechat-web/start", {});
-    const expiring = await json(expiringStart);
     instance.authentication!.database.raw.query(
-      "UPDATE wechat_web_oauth_states SET expires_at = ? WHERE consumed_at IS NULL",
-    ).run("2000-01-01T00:00:00.000Z");
-    const expired = await app.handle(new Request(
-      `http://localhost/api/v2/auth/wechat-web/callback?code=expired-user&state=${encodeURIComponent(expiring.state)}`,
-      { headers: { cookie: cookiePair(expiringStart, "youban_wechat_oauth") } },
-    ));
-    expect(await expired.text()).toContain("wechat_error=expired");
+      "UPDATE web_login_challenges SET expires_at = ? WHERE challenge_id = ?",
+    ).run("2000-01-01T00:00:00.000Z", created.challenge_id);
+    const verifierCookie = cookiePair(createdResponse, "youban_web_login");
+    const expired = await app.handle(new Request(statusUrl, { headers: { cookie: verifierCookie } }));
+    expect(expired.status).toBe(200);
+    expect(await json(expired)).toEqual({ status: "expired" });
+    const expiredExchange = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/exchange`,
+      {},
+      { cookie: verifierCookie },
+    );
+    expect(expiredExchange.status).toBe(422);
   });
 
-  it("maps callback failures to fixed non-sensitive completion pages", async () => {
-    const { app } = createRuntime();
-    const start = await post(app, "/api/v2/auth/wechat-web/start", {});
-    const configuration = await json(start);
-    const verifierCookie = cookiePair(start, "youban_wechat_oauth");
-    const provider = await app.handle(new Request(
-      `http://localhost/api/v2/auth/wechat-web/callback?code=provider-failure&state=${encodeURIComponent(configuration.state)}`,
-      { headers: { cookie: verifierCookie } },
-    ));
-    const providerHtml = await provider.text();
-    expect(providerHtml).toContain("wechat_error=provider");
-    expect(providerHtml).not.toContain("provider-secret");
-    expect(providerHtml).not.toContain("temporary-code");
-
-    const denied = await app.handle(new Request(
-      "http://localhost/api/v2/auth/wechat-web/callback?state=%3Cscript%3Eraw%3C%2Fscript%3E",
-    ));
-    const deniedHtml = await denied.text();
-    expect(deniedHtml).toContain("wechat_error=denied");
-    expect(deniedHtml).not.toContain("<script>raw</script>");
-
-    const identityStart = await post(app, "/api/v2/auth/wechat-web/start", {});
-    const identityConfiguration = await json(identityStart);
-    const identity = await app.handle(new Request(
-      `http://localhost/api/v2/auth/wechat-web/callback?code=identity-failure&state=${encodeURIComponent(identityConfiguration.state)}`,
-      { headers: { cookie: cookiePair(identityStart, "youban_wechat_oauth") } },
-    ));
-    expect(await identity.text()).toContain("wechat_error=identity");
-  });
-
-  it("returns a stable configuration error and retires every custom challenge route", async () => {
-    const { app } = createRuntime(undefined, { website: false });
-    const unavailable = await post(app, "/api/v2/auth/wechat-web/start", {});
+  it("returns a stable provider error and retires Website OAuth routes", async () => {
+    const { app } = createRuntime(undefined, { miniProgramCode: false });
+    const unavailable = await post(app, "/api/v2/auth/web/challenges", {});
     expect(unavailable.status).toBe(503);
-    expect(await json(unavailable)).toEqual({ detail: "微信扫码登录尚未配置" });
-
-    expect((await post(app, "/api/v2/auth/web/challenges", {})).status).toBe(404);
+    expect(await json(unavailable)).toEqual({ detail: "微信扫码登录暂不可用" });
+    expect((await post(app, "/api/v2/auth/wechat-web/start", {})).status).toBe(404);
     expect((await app.handle(new Request(
-      "http://localhost/api/v2/auth/web/challenges/challenge/status?verifier=value",
+      "http://localhost/api/v2/auth/wechat-web/callback?code=value&state=value",
     ))).status).toBe(404);
-    expect((await post(app, "/api/v2/auth/web/challenges/challenge/approve", {
-      credential: "value",
-    })).status).toBe(404);
-    expect((await post(app, "/api/v2/auth/web/challenges/challenge/exchange", {
-      verifier: "value",
-    })).status).toBe(404);
   });
 
   it("lists and revokes device sessions without exposing token hashes", async () => {

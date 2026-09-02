@@ -158,7 +158,7 @@ describe("settings: env 读取", () => {
     expect(settings.openai_base_url).toBe("https://api.openai.com/v1");
     expect(settings.openai_model).toBe("gpt-4");
     expect(settings.app_name).toBe("HelloAgents智能旅行助手");
-    expect(settings.app_version).toBe("2.0.0");
+    expect(settings.app_version).toBe("2.0.4");
     expect(settings.host).toBe("0.0.0.0");
     expect(settings.port).toBe(8000);
     expect(settings.cors_origins).toEqual([
@@ -207,7 +207,7 @@ describe("settings: env 读取", () => {
     expect(getSettings().fliggy_price_cache_ttl_seconds).toBe(300);
   });
 
-  it("reads website-only WeChat OAuth settings without exposing runtime overrides", () => {
+  it("keeps retired website OAuth environment variables outside application settings", () => {
     process.env.WECHAT_WEB_APP_ID = "wx-web-app";
     process.env.WECHAT_WEB_APP_SECRET = "web-secret";
     process.env.WECHAT_WEB_REDIRECT_URI =
@@ -216,11 +216,8 @@ describe("settings: env 读取", () => {
 
     const settings = getSettings();
 
-    expect(settings.wechat_web_app_id).toBe("wx-web-app");
-    expect(settings.wechat_web_app_secret).toBe("web-secret");
-    expect(settings.wechat_web_redirect_uri).toBe(
-      "https://youban.me/api/v2/auth/wechat-web/callback",
-    );
+    expect(Object.keys(settings as unknown as Record<string, unknown>)
+      .filter((key) => key.startsWith("wechat_web_"))).toEqual([]);
     const runtime = runtimeSettingsSnapshot(settings);
     expect(runtime).not.toHaveProperty("wechat_web_app_id");
     expect(runtime).not.toHaveProperty("wechat_web_app_secret");

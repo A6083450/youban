@@ -9,7 +9,7 @@ interface WechatCodeExchangeOptions {
 
 export interface MiniWechatIdentity {
   openid: string;
-  unionid: string;
+  unionid?: string;
 }
 
 export class WechatCodeExchangeError extends Error {}
@@ -44,12 +44,10 @@ export class WechatCodeExchange {
       if (typeof payload.openid !== "string" || !payload.openid.trim() || payload.errcode) {
         throw new WechatCodeExchangeError("微信登录凭证无效");
       }
-      if (typeof payload.unionid !== "string" || !payload.unionid.trim()) {
-        throw new WechatCodeExchangeError("微信账号统一标识不可用");
-      }
+      const unionid = typeof payload.unionid === "string" ? payload.unionid.trim() : "";
       return {
         openid: payload.openid.trim(),
-        unionid: payload.unionid.trim(),
+        ...(unionid ? { unionid } : {}),
       };
     } catch (error) {
       if (error instanceof WechatCodeExchangeError) throw error;

@@ -12,6 +12,7 @@ vi.mock('@/platform/auth', () => ({
   currentPlatform: () => 'mp-weixin',
   getAuthToken: () => mocks.token,
   getStoredUser: () => null,
+  registerAuthSessionInvalidation: vi.fn(),
   setAuthSession: vi.fn(),
 }))
 

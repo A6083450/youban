@@ -6,8 +6,8 @@
 
 1. 记录待发布提交、当前 Python 进程或容器、Caddyfile 路径与哈希、生产数据挂载的真实绝对路径。
 2. 使用独立空目录在备用端口启动 Bun，确认 SQLite 自动创建为 schema 7。
-3. 验证健康检查、微信登录模拟、Bearer/HttpOnly 会话、微信开放平台网站扫码 OAuth、SSE、WebSocket、规划恢复、公开分享和头像上传。
-4. 确认 `WECHAT_APP_SECRET`、`WECHAT_WEB_APP_SECRET`、`AUTH_PEPPER` 只存在于服务器密钥环境；`AUTH_PEPPER` 至少 32 字节。确认网站应用已审核、与小程序绑定到同一开放平台账号，且回调精确配置为 `https://youban.me/api/v2/auth/wechat-web/callback`。
+3. 验证健康检查、微信登录模拟、Bearer/HttpOnly 会话、小程序码创建/确认/单次兑换、SSE、WebSocket、规划恢复、公开分享和头像上传。
+4. 确认 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`AUTH_PEPPER` 只存在于服务器密钥环境；`AUTH_PEPPER` 至少 32 字节。网页扫码登录复用现有小程序凭据，不配置网站应用 AppID、AppSecret 或 OAuth 回调。
 5. 执行 `pnpm type-check && pnpm lint && pnpm test:run`，分别构建 `build:h5:prod` 与 `build:mp-weixin`；H5 必须使用同源空 API 基址。
 6. 从全新浏览器请求验证 `/#/pages/admin/index`，并验证旧 `/plan/:id`、`/share/:code`、`/privacy`、`/admin` 路径以 308 保留查询参数进入对应 hash 页面。
 
@@ -54,6 +54,8 @@ bun run purge:business-data \
 
 ## 4. 启动与切流
 
+先上传并真机验证包含 `pages/web-login/index` 的小程序体验版。只有该页面正式发布、且服务端 `check_path=true` 能生成 release 小程序码后，才能切换生产 H5 与后端；禁止先切 H5 再等待小程序审核。
+
 ```bash
 export YOUBAN_DATA_DIR=/生产数据真实绝对路径
 export BUN_CANDIDATE_PORT=7861
@@ -68,8 +70,8 @@ bun run smoke:deployment --base-url=http://127.0.0.1:7861 --health-only
 
 必须通过以下真实流程：
 
-1. 网站新用户通过微信开放平台官方二维码扫码后直接注册，并使用授权昵称；头像下载失败时仍能完成登录。
-2. 同一微信账号随后登录小程序时，以 UnionID 进入同一业务账号；旧 openid 身份在下次小程序登录时完成升级。
+1. 网站创建五分钟浏览器绑定挑战并展示真实小程序码；微信扫码打开原生确认页，不出现短码、挑战 ID、分享码输入或 WebView。
+2. 新用户先主动选择微信头像完成注册，再返回确认页显式点击确认；电脑随后以 HttpOnly 会话进入同一业务账号，重复兑换失败。
 3. 小程序完成多轮对话、生成行程、杀进程后按任务恢复。
 4. 国内可信坐标可打开原生导航，无可信坐标时保留行程并降级提示。
 5. 生成 32 位分享令牌，由第二个微信账号匿名只读打开。

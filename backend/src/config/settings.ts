@@ -30,7 +30,7 @@ export interface RuntimeSettings {
 
 export interface AppSettings extends RuntimeSettings {
   app_name: string; // 默认 "HelloAgents智能旅行助手"
-  app_version: string; // 默认 "2.0.0"
+  app_version: string; // 默认 "2.0.4"
   debug: boolean;
   host: string; // env HOST，默认 "0.0.0.0"
   port: number; // env PORT，默认 8000（生产部署用 7860）
@@ -40,9 +40,6 @@ export interface AppSettings extends RuntimeSettings {
   fliggy_proxy_url: string;
   fliggy_price_timeout_ms: number;
   fliggy_price_cache_ttl_seconds: number;
-  wechat_web_app_id: string;
-  wechat_web_app_secret: string;
-  wechat_web_redirect_uri: string;
 }
 
 type RuntimeKey = keyof RuntimeSettings;
@@ -257,7 +254,7 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
   const settings: AppSettings = {
     // 应用基本配置
     app_name: readEnv("APP_NAME") ?? "HelloAgents智能旅行助手",
-    app_version: readEnv("APP_VERSION") ?? "2.0.0",
+    app_version: readEnv("APP_VERSION") ?? "2.0.4",
     debug: readEnvBool("DEBUG", false),
     // 服务器配置
     host: readEnv("HOST") ?? "0.0.0.0",
@@ -309,11 +306,6 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
       max: 1_800,
       fallback: 300,
     }),
-    // 微信开放平台网站应用配置仅来自服务端环境变量，不进入运行时配置面。
-    wechat_web_app_id: readEnv("WECHAT_WEB_APP_ID") ?? "",
-    wechat_web_app_secret: readEnv("WECHAT_WEB_APP_SECRET") ?? "",
-    wechat_web_redirect_uri: readEnv("WECHAT_WEB_REDIRECT_URI")
-      ?? "https://youban.me/api/v2/auth/wechat-web/callback",
   };
 
   // runtime 覆盖（非空值）在 env 之上

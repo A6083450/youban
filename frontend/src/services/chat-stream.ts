@@ -5,10 +5,12 @@ import type {
   TripConfirmReplyResponseDto,
   TripParseResponseDto,
 } from '@youban/contracts'
-import { getApiBaseUrl } from '@/http/client'
+import { getApiBaseUrl, handleUnauthorizedResponse } from '@/http/client'
 import { t } from '@/locale'
 import { authHeaders, currentPlatform } from '@/platform/auth'
 import type { AppPlatform } from '@/platform/auth'
+import { createUtf8StreamDecoder } from '@/platform/utf8-stream-decoder'
+import type { Utf8StreamDecoder } from '@/platform/utf8-stream-decoder'
 import { confirmTripReply, parseTripText } from './v2'
 
 type StreamPayload = TripParseResponseDto | TripConfirmReplyResponseDto
@@ -84,7 +86,7 @@ function dispatchStreamEvent<T extends StreamPayload>(
   return event.type === 'final'
 }
 
-function decodeChunk(decoder: TextDecoder, data: unknown, stream: boolean): string {
+function decodeChunk(decoder: Utf8StreamDecoder, data: unknown, stream: boolean): string {
   if (typeof data === 'string')
     return data
   if (data instanceof ArrayBuffer)
@@ -109,11 +111,13 @@ async function streamWithFetch<T extends StreamPayload>(
     body: JSON.stringify(body),
     signal: callbacks.signal,
   })
-  if (!response.ok || !response.body)
+  if (!response.ok || !response.body) {
+    handleUnauthorizedResponse(response.status)
     throw new Error(t('api.requestFailedWithStatus', { status: response.status }))
+  }
 
   const reader = response.body.getReader()
-  const decoder = new TextDecoder()
+  const decoder = createUtf8StreamDecoder()
   let buffer = ''
   while (true) {
     const { done, value } = await reader.read()
@@ -133,7 +137,7 @@ function streamWithUniRequest<T extends StreamPayload>(
   requester: UniRequester,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const decoder = new TextDecoder()
+    const decoder = createUtf8StreamDecoder()
     let buffer = ''
     let receivedChunk = false
     let receivedFinal = false
@@ -179,6 +183,7 @@ function streamWithUniRequest<T extends StreamPayload>(
       success(response) {
         const status = Number(response.statusCode)
         if (status < 200 || status >= 300) {
+          handleUnauthorizedResponse(status)
           finish(new Error(t('api.requestFailedWithStatus', { status })))
           return
         }

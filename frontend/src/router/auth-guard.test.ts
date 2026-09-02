@@ -15,6 +15,7 @@ describe('authentication route guard', () => {
     expect(isPublicRoute('/pages/privacy/index')).toBe(true)
     expect(isPublicRoute('/pages/share/index?code=public-code')).toBe(true)
     expect(isPublicRoute('/pages/admin/index')).toBe(true)
+    expect(isPublicRoute('/pages/web-login/index?scene=challenge')).toBe(true)
   })
 
   it('redirects private routes until a complete profile exists', () => {

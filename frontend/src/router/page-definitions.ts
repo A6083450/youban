@@ -3,6 +3,7 @@ import pageDefinitions from './page-definitions.json'
 interface PageDefinition {
   path: string
   type: string
+  platforms?: readonly string[]
   style: {
     enablePullDownRefresh?: boolean
     navigationBarTitleText: string
@@ -13,9 +14,7 @@ interface PageDefinition {
 export const PAGE_DEFINITIONS: readonly PageDefinition[] = pageDefinitions
 
 export function pageDefinitionsForPlatform(platform: string | undefined) {
-  return platform === 'h5'
-    ? [...PAGE_DEFINITIONS]
-    : PAGE_DEFINITIONS.filter(page => page.path !== 'pages/admin/index')
+  return PAGE_DEFINITIONS.filter(page => !page.platforms || page.platforms.includes(platform || ''))
 }
 
 const PAGE_ORDER = new Map<string, number>(PAGE_DEFINITIONS.map((page, index) => [page.path, index]))

@@ -8,6 +8,7 @@ const PUBLIC_ROUTES = [
   '/pages/privacy/index',
   '/pages/share/index',
   '/pages/admin/index',
+  '/pages/web-login/index',
 ] as const
 
 function pathname(route: string): string {

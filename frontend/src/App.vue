@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
-import { onMounted } from 'vue'
 import { navigateToInterceptor } from '@/router/interceptor'
 import { authRouteDecision, HOME_ROUTE, isPublicRoute, LOGIN_ROUTE } from '@/router/auth-guard'
 import { h5LaunchUrl, normalizedPagePath, waitForInitialPage } from '@/router/launch-route'
@@ -8,12 +7,19 @@ import { useAuthStore } from '@/store/auth'
 import { usePreferencesStore } from '@/store/preferences'
 
 const preferences = usePreferencesStore()
-let appMounted = false
+let initialSynchronizationStarted = false
 let initialSynchronizationDone = false
 let latestShowOptions: Parameters<Parameters<typeof onShow>[0]>[0] | undefined
 
-onLaunch(() => {
+onLaunch((options) => {
+  latestShowOptions = options
   void preferences.sync()
+  if (initialSynchronizationStarted)
+    return
+  initialSynchronizationStarted = true
+  void waitForInitialPage().then(() => synchronizeLaunchRoute(latestShowOptions)).finally(() => {
+    initialSynchronizationDone = true
+  })
 })
 
 function relaunch(url: string): Promise<void> {
@@ -57,15 +63,8 @@ async function synchronizeLaunchRoute(options: typeof latestShowOptions): Promis
 
 onShow((options) => {
   latestShowOptions = options
-  if (appMounted && initialSynchronizationDone)
+  if (initialSynchronizationDone)
     void synchronizeLaunchRoute(options)
-})
-
-onMounted(() => {
-  appMounted = true
-  void waitForInitialPage().then(() => synchronizeLaunchRoute(latestShowOptions)).finally(() => {
-    initialSynchronizationDone = true
-  })
 })
 onHide(() => undefined)
 </script>

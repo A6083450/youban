@@ -27,11 +27,13 @@ import type {
   UserMemoryDto,
   UserPreferencesDto,
   UserPreferencesPatchDto,
+  WebLoginChallengeCreateDto,
+  WebLoginChallengeExchangeDto,
+  WebLoginChallengeStatusDto,
   WechatLoginResponseDto,
-  WechatWebLoginStartDto,
 } from '@youban/contracts'
 import { ApiV2Routes } from '@youban/contracts'
-import { ApiError, apiRequest, getApiBaseUrl } from '@/http/client'
+import { ApiError, apiRequest, getApiBaseUrl, handleUnauthorizedResponse } from '@/http/client'
 import { t } from '@/locale'
 
 function errorMessage(data: unknown, fallback: string): string {
@@ -186,6 +188,7 @@ export function uploadAccountAvatar(filePath: string, token: string): Promise<Us
         }
         const status = Number(response.statusCode)
         if (status < 200 || status >= 300) {
+          handleUnauthorizedResponse(status)
           reject(new ApiError(errorMessage(payload, t('api.avatarUploadFailedWithStatus', { status })), status, payload))
           return
         }
@@ -203,8 +206,27 @@ export function uploadAccountAvatar(filePath: string, token: string): Promise<Us
   })
 }
 
-export function startWechatWebLogin(): Promise<WechatWebLoginStartDto> {
-  return apiRequest(ApiV2Routes.authWechatWebStart, {
+export function createWebLoginChallenge(): Promise<WebLoginChallengeCreateDto> {
+  return apiRequest(ApiV2Routes.authWebChallengeCreate, {
+    method: 'POST',
+    data: {},
+    public: true,
+  })
+}
+
+export function getWebLoginChallengeStatus(challengeId: string): Promise<WebLoginChallengeStatusDto> {
+  return apiRequest(fillRoute(ApiV2Routes.authWebChallengeStatus, 'challengeId', challengeId), { public: true })
+}
+
+export function approveWebLoginChallenge(challengeId: string): Promise<{ success: true }> {
+  return apiRequest(fillRoute(ApiV2Routes.authWebChallengeApprove, 'challengeId', challengeId), {
+    method: 'POST',
+    data: {},
+  })
+}
+
+export function exchangeWebLoginChallenge(challengeId: string): Promise<WebLoginChallengeExchangeDto> {
+  return apiRequest(fillRoute(ApiV2Routes.authWebChallengeExchange, 'challengeId', challengeId), {
     method: 'POST',
     data: {},
     public: true,

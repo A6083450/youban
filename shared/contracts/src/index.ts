@@ -8,8 +8,10 @@ export const ApiV2Routes = {
   authLogout: '/api/v2/auth/logout',
   authNicknameLogin: '/api/v2/auth/nickname',
   authWechatLogin: '/api/v2/auth/wechat/login',
-  authWechatWebStart: '/api/v2/auth/wechat-web/start',
-  authWechatWebCallback: '/api/v2/auth/wechat-web/callback',
+  authWebChallengeCreate: '/api/v2/auth/web/challenges',
+  authWebChallengeStatus: '/api/v2/auth/web/challenges/:challengeId/status',
+  authWebChallengeApprove: '/api/v2/auth/web/challenges/:challengeId/approve',
+  authWebChallengeExchange: '/api/v2/auth/web/challenges/:challengeId/exchange',
   authPreferences: '/api/v2/auth/preferences',
   authMemories: '/api/v2/auth/memories',
   authMemory: '/api/v2/auth/memories/:memoryId',
@@ -80,12 +82,22 @@ export const WechatLoginResponseSchema = Type.Object({
   user: UserInfoSchema,
 }, { additionalProperties: false })
 
-export const WechatWebLoginStartSchema = Type.Object({
-  app_id: Type.String({ minLength: 1 }),
-  scope: Type.Literal('snsapi_login'),
-  redirect_uri: Type.String({ minLength: 1, pattern: '^https://' }),
-  state: Type.String({ minLength: 32, maxLength: 256 }),
+export const WebLoginChallengeCreateSchema = Type.Object({
+  challenge_id: Type.String({ pattern: '^[0-9a-f]{32}$' }),
+  expires_at: Type.String({ minLength: 1 }),
+  qr_code_data_url: Type.String({ pattern: '^data:image/(?:png|jpeg);base64,' }),
 }, { additionalProperties: false })
+
+export const WebLoginChallengeStatusSchema = Type.Object({
+  status: Type.Union([
+    Type.Literal('pending'),
+    Type.Literal('approved'),
+    Type.Literal('expired'),
+    Type.Literal('exchanged'),
+  ]),
+}, { additionalProperties: false })
+
+export const WebLoginChallengeExchangeSchema = AuthResponseSchema
 
 export const UserSkinSchema = Type.Union([Type.Literal('default'), Type.Literal('google')])
 export const UserLocaleSchema = Type.Union([
@@ -589,7 +601,9 @@ export type PublicRuntimeSettingsResponseDto = Static<typeof PublicRuntimeSettin
 export type AuthResponseDto = Static<typeof AuthResponseSchema>
 export type NicknameLoginBodyDto = Static<typeof NicknameLoginBodySchema>
 export type WechatLoginResponseDto = Static<typeof WechatLoginResponseSchema>
-export type WechatWebLoginStartDto = Static<typeof WechatWebLoginStartSchema>
+export type WebLoginChallengeCreateDto = Static<typeof WebLoginChallengeCreateSchema>
+export type WebLoginChallengeStatusDto = Static<typeof WebLoginChallengeStatusSchema>
+export type WebLoginChallengeExchangeDto = Static<typeof WebLoginChallengeExchangeSchema>
 export type UserSkinDto = Static<typeof UserSkinSchema>
 export type UserLocaleDto = Static<typeof UserLocaleSchema>
 export type UserPreferencesDto = Static<typeof UserPreferencesSchema>

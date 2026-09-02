@@ -28,109 +28,88 @@ afterEach(() => {
 });
 
 describe("AuthenticationService", () => {
-  it("binds each website OAuth state to one browser and consumes it once", () => {
-    const { auth } = fixture();
-    const challenge = auth.createWechatWebOauthState();
+  it("binds each Web challenge to one browser and expires it after five minutes", () => {
+    const { auth, advance } = fixture();
+    const challenge = auth.createWebChallenge();
 
     const stored = JSON.stringify(auth.database.raw.query(
-      "SELECT state_hash, browser_verifier_hash FROM wechat_web_oauth_states",
+      "SELECT verifier_hash, approval_token_hash, short_code_hash FROM web_login_challenges",
     ).all());
-    expect(stored).not.toContain(challenge.state);
     expect(stored).not.toContain(challenge.browserVerifier);
-    expect(() => auth.consumeWechatWebOauthState(challenge.state, "wrong-browser"))
+    expect(() => auth.getWebChallengeStatus(challenge.challengeId, "wrong-browser"))
       .toThrow("网页登录凭证无效或已过期");
-    expect(auth.consumeWechatWebOauthState(
-      challenge.state,
-      challenge.browserVerifier,
-    )).toBeUndefined();
-    expect(() => auth.consumeWechatWebOauthState(
-      challenge.state,
-      challenge.browserVerifier,
-    )).toThrow("网页登录凭证无效或已过期");
-    auth.close();
-  });
-
-  it("expires website OAuth state at the exact five-minute boundary", () => {
-    const { auth, advance } = fixture();
-    const challenge = auth.createWechatWebOauthState();
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "pending" });
 
     advance(5 * 60 * 1_000);
 
-    expect(() => auth.consumeWechatWebOauthState(
-      challenge.state,
-      challenge.browserVerifier,
-    )).toThrow("网页登录凭证无效或已过期");
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "expired" });
     auth.close();
   });
 
-  it("registers a website profile and resolves mini-program login by shared UnionID", () => {
+  it("approves idempotently for one ready user and exchanges exactly once", () => {
     const { auth } = fixture();
-    const website = auth.loginWebsiteIdentity({
-      unionid: "shared-unionid",
-      nickname: "旅行者",
-      avatarFile: null,
+    const first = auth.loginMiniProgramIdentity({
+      openid: "approver-openid",
+      unionid: "approver-unionid",
     });
-    const repeated = auth.loginWebsiteIdentity({
-      unionid: "shared-unionid",
-      nickname: "旅行者",
-      avatarFile: null,
+    auth.completeProfile(first.token, "11111111111111111111111111111111.png");
+    const other = auth.loginMiniProgramIdentity({
+      openid: "other-openid",
+      unionid: "other-unionid",
     });
-    const mini = auth.loginMiniProgramIdentity({
-      openid: "mini-openid",
-      unionid: "shared-unionid",
-    });
+    auth.completeProfile(other.token, "22222222222222222222222222222222.png");
+    const challenge = auth.createWebChallenge();
 
-    expect(website.user).toMatchObject({
-      nickname: "旅行者",
-      avatar_url: null,
-      profile_complete: true,
-    });
-    expect(repeated.user.user_id).toBe(website.user.user_id);
-    expect(repeated.token).not.toBe(website.token);
-    expect(mini.user.user_id).toBe(website.user.user_id);
-    expect(auth.authenticateReady(website.token)?.user_id).toBe(website.user.user_id);
-    const stored = JSON.stringify(auth.database.raw.query("SELECT * FROM wechat_identities").all());
-    expect(stored).not.toContain("shared-unionid");
-    expect(stored).not.toContain("mini-openid");
+    expect(auth.approveWebChallenge(first.token, challenge.challengeId)).toBeUndefined();
+    expect(auth.approveWebChallenge(first.token, challenge.challengeId)).toBeUndefined();
+    expect(() => auth.approveWebChallenge(other.token, challenge.challengeId))
+      .toThrow("登录挑战已由其他账号确认");
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "approved" });
+
+    const exchanged = auth.exchangeWebChallenge(challenge.challengeId, challenge.browserVerifier);
+    expect(exchanged.user.user_id).toBe(first.user.user_id);
+    expect(auth.authenticate(exchanged.token)?.user_id).toBe(first.user.user_id);
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "exchanged" });
+    expect(() => auth.exchangeWebChallenge(challenge.challengeId, challenge.browserVerifier))
+      .toThrow("登录挑战已兑换");
     auth.close();
   });
 
-  it("uses a fixed fallback for an empty website nickname", () => {
+  it("requires avatar completion before approving a Web challenge", () => {
     const { auth } = fixture();
-
-    const website = auth.loginWebsiteIdentity({
-      unionid: "website-only-unionid",
-      nickname: "   ",
-      avatarFile: null,
+    const incomplete = auth.loginMiniProgramIdentity({
+      openid: "incomplete-openid",
+      unionid: "incomplete-unionid",
     });
+    const challenge = auth.createWebChallenge();
 
-    expect(website.user).toMatchObject({
-      nickname: "微信用户",
-      avatar_url: null,
-      profile_complete: true,
-    });
+    expect(() => auth.approveWebChallenge(incomplete.token, challenge.challengeId))
+      .toThrow("请先选择微信头像完成登录");
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "pending" });
     auth.close();
   });
 
   it("reuses a normalized historical nickname account without merging a same-name WeChat identity", () => {
     const { auth } = fixture();
-    const wechat = auth.loginWebsiteIdentity({
+    const wechat = auth.loginMiniProgramIdentity({
+      openid: "same-name-wechat-openid",
       unionid: "same-name-wechat-unionid",
-      nickname: "Neo User",
-      avatarFile: null,
     });
+    auth.database.raw.query("UPDATE users SET nickname = ? WHERE user_id = ?")
+      .run("Neo User", wechat.user.user_id);
     auth.database.raw.query(`
       INSERT INTO users (
         user_id, nickname, avatar_file, profile_completed_at, created_at, last_login_at
       ) VALUES (?, ?, NULL, NULL, ?, ?)
     `).run("legacy-nickname-user", "Ｎｅｏ User", "2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z");
 
-    const first = (auth as unknown as {
-      loginNicknameIdentity: (nickname: string) => ReturnType<AuthenticationService["loginWebsiteIdentity"]>;
-    }).loginNicknameIdentity("  neo   user  ");
-    const repeated = (auth as unknown as {
-      loginNicknameIdentity: (nickname: string) => ReturnType<AuthenticationService["loginWebsiteIdentity"]>;
-    }).loginNicknameIdentity("NEO USER");
+    const first = auth.loginNicknameIdentity("  neo   user  ");
+    const repeated = auth.loginNicknameIdentity("NEO USER");
 
     expect(first.user).toMatchObject({
       user_id: "legacy-nickname-user",
@@ -171,6 +150,33 @@ describe("AuthenticationService", () => {
     );
     expect(JSON.stringify(identities)).not.toContain("legacy-openid");
     expect(JSON.stringify(identities)).not.toContain("upgraded-unionid");
+    auth.close();
+  });
+
+  it("reuses an openid-only account and attaches UnionID when it becomes available", () => {
+    const { auth } = fixture();
+    const first = auth.loginMiniProgramIdentity({ openid: "openid-only" });
+    const repeated = auth.loginMiniProgramIdentity({ openid: "openid-only" });
+
+    expect(repeated.user.user_id).toBe(first.user.user_id);
+    expect(auth.database.raw.query("SELECT count(*) AS count FROM wechat_identities").get())
+      .toEqual({ count: 1 });
+
+    const upgraded = auth.loginMiniProgramIdentity({
+      openid: "openid-only",
+      unionid: "later-unionid",
+    });
+
+    expect(upgraded.user.user_id).toBe(first.user.user_id);
+    const identities = auth.database.raw.query(
+      "SELECT subject_digest, user_id FROM wechat_identities ORDER BY subject_digest",
+    ).all() as Array<{ subject_digest: string; user_id: string }>;
+    expect(identities).toHaveLength(2);
+    expect(new Set(identities.map(identity => identity.user_id))).toEqual(
+      new Set([first.user.user_id]),
+    );
+    expect(JSON.stringify(identities)).not.toContain("openid-only");
+    expect(JSON.stringify(identities)).not.toContain("later-unionid");
     auth.close();
   });
 

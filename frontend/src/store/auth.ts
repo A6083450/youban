@@ -2,8 +2,15 @@ import type { UserInfoDto } from '@youban/contracts'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { t } from '@/locale'
-import { clearAuthSession, currentPlatform, getAuthToken, getStoredUser, setAuthSession } from '@/platform/auth'
-import { isLoginReady } from '@/router/auth-guard'
+import {
+  clearAuthSession,
+  currentPlatform,
+  getAuthToken,
+  getStoredUser,
+  registerAuthSessionInvalidation,
+  setAuthSession,
+} from '@/platform/auth'
+import { isLoginReady, LOGIN_ROUTE } from '@/router/auth-guard'
 import { authLogout, authMe, loginWechat, uploadAccountAvatar } from '@/services/v2'
 
 function wechatLoginCode(): Promise<string> {
@@ -31,6 +38,17 @@ export const useAuthStore = defineStore('youban-auth', () => {
   const ready = computed(() => isLoginReady(user.value) && (currentPlatform() !== 'mp-weixin' || Boolean(token.value)))
   let restorePromise: Promise<void> | null = null
   let loginPromise: Promise<UserInfoDto> | null = null
+  let expiryRedirected = false
+
+  registerAuthSessionInvalidation(() => {
+    token.value = ''
+    user.value = null
+    restored.value = true
+    if (expiryRedirected)
+      return
+    expiryRedirected = true
+    uni.reLaunch({ url: LOGIN_ROUTE })
+  })
 
   function clear(): void {
     token.value = ''
@@ -43,6 +61,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
       throw new Error(t('api.avatarRequiredBeforeLogin'))
     token.value = sessionToken
     user.value = nextUser
+    expiryRedirected = false
     setAuthSession(sessionToken, nextUser)
     return nextUser
   }

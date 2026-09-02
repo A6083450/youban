@@ -15,8 +15,6 @@ interface ImportMetaEnv {
   readonly VITE_SERVER_PORT: string
   /** 后台接口地址 */
   readonly VITE_SERVER_BASEURL: string
-  /** 微信小程序开发版后台接口地址，不配置则使用 VITE_SERVER_BASEURL */
-  readonly VITE_SERVER_BASEURL__WEIXIN_DEVELOP?: string
   /** 微信小程序体验版后台接口地址，不配置则使用 VITE_SERVER_BASEURL */
   readonly VITE_SERVER_BASEURL__WEIXIN_TRIAL?: string
   /** 微信小程序正式版后台接口地址，不配置则使用 VITE_SERVER_BASEURL */

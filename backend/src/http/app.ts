@@ -90,10 +90,6 @@ import { UserPreferencesRepository } from "../domain/user-preferences.ts";
 import { projectNativeCalendarEvents } from "../domain/trip-calendar-projection.ts";
 import { AmapResearchSources, type TrustedPoi } from "../services/amap-research-sources.ts";
 import type { MiniWechatIdentity } from "../services/wechat-code-exchange.ts";
-import {
-  WechatWebOAuthError,
-  type WechatWebsiteProfile,
-} from "../services/wechat-web-oauth.ts";
 import { HermesMemoryBridge, type UserMemoryService } from "../services/hermes-memory.ts";
 import { RemoteImageCache } from "../services/remote-image-cache.ts";
 import {
@@ -169,12 +165,7 @@ export interface HttpRuntimeOptions {
   authentication?: {
     pepper: string;
     exchangeWechatCode: (code: string) => Promise<MiniWechatIdentity>;
-    website?: {
-      appId: string;
-      redirectUri: string;
-      exchangeCode: (code: string) => Promise<WechatWebsiteProfile>;
-      importAvatar: (avatarUrl: string) => Promise<string | null>;
-    };
+    createMiniProgramCode?: (scene: string) => Promise<string>;
   };
   planningClock?: {
     now?: () => number;
@@ -228,38 +219,15 @@ function isContained(parent: string, child: string): boolean {
 }
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
-const WECHAT_OAUTH_COOKIE = "youban_wechat_oauth";
-const WECHAT_OAUTH_COOKIE_PATH = "/api/v2/auth/wechat-web";
+const WEB_LOGIN_COOKIE = "youban_web_login";
+const WEB_LOGIN_COOKIE_PATH = "/api/v2/auth/web/challenges";
 
-type WechatOauthCompletion = "success" | "denied" | "expired" | "provider" | "identity";
-
-function oauthCookie(value: string, maxAge: number): string {
-  return `${WECHAT_OAUTH_COOKIE}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=${WECHAT_OAUTH_COOKIE_PATH}; Max-Age=${maxAge}`;
+function webLoginCookie(value: string, maxAge: number): string {
+  return `${WEB_LOGIN_COOKIE}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=${WEB_LOGIN_COOKIE_PATH}; Max-Age=${maxAge}`;
 }
 
 function webSessionCookie(token: string): string {
   return `youban_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
-}
-
-function oauthCompletionHtml(result: WechatOauthCompletion): string {
-  const target = result === "success"
-    ? "/#/pages/index/index"
-    : `/#/pages/login/index?wechat_error=${result}`;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>微信登录</title></head><body><script>window.top.location.replace(${JSON.stringify(target)});</script></body></html>`;
-}
-
-function oauthCompletionResponse(
-  result: WechatOauthCompletion,
-  sessionToken?: string,
-): Response {
-  const headers = new Headers({
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'",
-    "Content-Type": "text/html; charset=utf-8",
-  });
-  headers.append("Set-Cookie", oauthCookie("", 0));
-  if (sessionToken) headers.append("Set-Cookie", webSessionCookie(sessionToken));
-  return new Response(oauthCompletionHtml(result), { status: 200, headers });
 }
 
 function rewriteV2ApiPayload(value: unknown): unknown {
@@ -575,12 +543,12 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     return "";
   };
 
-  const oauthVerifier = (headers: Record<string, string | undefined>): string => {
+  const webLoginVerifier = (headers: Record<string, string | undefined>): string => {
     const cookieHeader = headers.cookie ?? "";
     for (const part of cookieHeader.split(";")) {
       const separator = part.indexOf("=");
       if (separator < 0) continue;
-      if (part.slice(0, separator).trim() === WECHAT_OAUTH_COOKIE) {
+      if (part.slice(0, separator).trim() === WEB_LOGIN_COOKIE) {
         try {
           return decodeURIComponent(part.slice(separator + 1).trim());
         } catch {
@@ -1157,8 +1125,9 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     if (request.method === "GET" && pathname.startsWith("/api/trip/share/")) return true;
     if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/exchange") return true;
     if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/public") return true;
-    if (request.method === "GET" && pathname === "/api/auth/wechat-web/callback") return true;
+    if (request.method === "GET" && /^\/api\/auth\/web\/challenges\/[^/]+\/status$/.test(pathname)) return true;
     if (request.method !== "POST") return false;
+    if (/^\/api\/auth\/web\/challenges(?:\/[^/]+\/(?:approve|exchange))?$/.test(pathname)) return true;
     if ([
       "/api/admin/login",
       "/api/account/profile/avatar",
@@ -1166,7 +1135,6 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
       "/api/auth/logout",
       "/api/auth/nickname",
       "/api/auth/wechat/login",
-      "/api/auth/wechat-web/start",
     ].includes(pathname)) return true;
     return false;
   };
@@ -1460,64 +1428,70 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     }, {
       body: t.Object({ code: t.String({ minLength: 1, maxLength: 256 }) }),
     })
-    .post("/api/auth/wechat-web/start", ({ set, status }) => {
-      const website = options.authentication?.website;
-      if (!authentication || !website) {
-        return status(503, { detail: "微信扫码登录尚未配置" });
+    .post("/api/auth/web/challenges", async ({ set, status }) => {
+      const createMiniProgramCode = options.authentication?.createMiniProgramCode;
+      if (!authentication || !createMiniProgramCode) {
+        return status(503, { detail: "微信扫码登录暂不可用" });
       }
-      const challenge = authentication.createWechatWebOauthState();
-      set.headers["Cache-Control"] = "no-store";
-      set.headers["Set-Cookie"] = oauthCookie(challenge.browserVerifier, 300);
-      return {
-        app_id: website.appId,
-        scope: "snsapi_login" as const,
-        redirect_uri: website.redirectUri,
-        state: challenge.state,
-      };
+      const challenge = authentication.createWebChallenge();
+      try {
+        const qrCodeDataUrl = await createMiniProgramCode(challenge.challengeId);
+        set.headers["Cache-Control"] = "no-store";
+        set.headers["Set-Cookie"] = webLoginCookie(challenge.browserVerifier, 300);
+        return {
+          challenge_id: challenge.challengeId,
+          expires_at: challenge.expiresAt,
+          qr_code_data_url: qrCodeDataUrl,
+        };
+      } catch {
+        return status(503, { detail: "微信扫码登录暂不可用" });
+      }
     }, {
       body: t.Object({}, { additionalProperties: false }),
     })
-    .get("/api/auth/wechat-web/callback", async ({ query, headers }) => {
-      const website = options.authentication?.website;
-      if (!authentication || !website) return oauthCompletionResponse("provider");
-      const code = typeof query.code === "string" ? query.code.trim() : "";
-      const state = typeof query.state === "string" ? query.state.trim() : "";
-      if (!code) return oauthCompletionResponse("denied");
+    .get("/api/auth/web/challenges/:challengeId/status", ({ params, headers, status }) => {
+      if (!authentication) return status(503, { detail: "微信扫码登录暂不可用" });
       try {
-        authentication.consumeWechatWebOauthState(state, oauthVerifier(headers));
+        return authentication.getWebChallengeStatus(params.challengeId, webLoginVerifier(headers));
       } catch {
-        return oauthCompletionResponse("expired");
+        return status(422, { detail: "网页登录凭证无效或已过期" });
       }
-
-      let profile: WechatWebsiteProfile;
+    })
+    .post("/api/auth/web/challenges/:challengeId/approve", ({ params, headers, status }) => {
+      if (!authentication) return status(503, { detail: "微信扫码登录暂不可用" });
       try {
-        profile = await website.exchangeCode(code);
+        authentication.approveWebChallenge(sessionToken(headers), params.challengeId);
+        return { success: true as const };
       } catch (error) {
-        return oauthCompletionResponse(
-          error instanceof WechatWebOAuthError && error.kind === "identity"
-            ? "identity"
-            : "provider",
-        );
-      }
-
-      let avatarFile: string | null = null;
-      if (profile.avatarUrl.startsWith("https://")) {
-        try {
-          avatarFile = await website.importAvatar(profile.avatarUrl);
-        } catch {
-          avatarFile = null;
+        if (!(error instanceof AuthenticationError)) throw error;
+        if (error.message === "请先选择微信头像完成登录") {
+          return status(401, { detail: error.message });
         }
+        if (error.message === "登录挑战已由其他账号确认") {
+          return status(409, { detail: error.message });
+        }
+        return status(422, { detail: error.message });
       }
+    }, {
+      body: t.Object({}, { additionalProperties: false }),
+    })
+    .post("/api/auth/web/challenges/:challengeId/exchange", ({ params, headers, status }) => {
+      if (!authentication) return status(503, { detail: "微信扫码登录暂不可用" });
       try {
-        const result = authentication.loginWebsiteIdentity({
-          unionid: profile.unionid,
-          nickname: profile.nickname,
-          avatarFile,
+        const result = authentication.exchangeWebChallenge(params.challengeId, webLoginVerifier(headers));
+        const responseHeaders = new Headers({
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
         });
-        return oauthCompletionResponse("success", result.token);
-      } catch {
-        return oauthCompletionResponse("identity");
+        responseHeaders.append("Set-Cookie", webSessionCookie(result.token));
+        responseHeaders.append("Set-Cookie", webLoginCookie("", 0));
+        return new Response(JSON.stringify({ success: true, user: result.user }), { headers: responseHeaders });
+      } catch (error) {
+        if (error instanceof AuthenticationError) return status(422, { detail: error.message });
+        throw error;
       }
+    }, {
+      body: t.Object({}, { additionalProperties: false }),
     })
     .post("/api/auth/miniprogram/web-session", ({ body, headers, status }) => {
       if (!authentication) return status(503, { detail: "认证服务尚未配置" });

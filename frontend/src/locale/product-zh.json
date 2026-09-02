@@ -202,6 +202,7 @@
     "pending": "使用微信扫码登录",
     "failed": "微信扫码登录暂时不可用",
     "retry": "重新加载二维码",
+    "webSuccess": "登录成功，正在进入",
     "denied": "你已取消微信登录",
     "expired": "二维码已失效，请重新加载",
     "providerError": "微信登录服务暂时不可用",
@@ -221,7 +222,17 @@
     "miniDescription": "登录后，我会记住你的旅行偏好，帮你生成行程、预算和地图。",
     "miniButton": "使用微信头像继续",
     "miniNote": "仅用于账号识别，不读取其他微信资料。",
-    "privacyLink": "隐私说明与用户协议"
+    "privacyLink": "隐私说明与用户协议",
+    "confirmTitle": "确认登录游伴网页版",
+    "confirmDescription": "确认后，电脑将登录为当前微信账号。",
+    "confirmButton": "确认登录",
+    "confirmLoginButton": "登录并继续确认",
+    "confirmCancel": "取消",
+    "confirmInvalid": "登录二维码无效",
+    "confirmExpired": "登录二维码已失效",
+    "confirmFailed": "确认失败，请重试",
+    "confirmSuccess": "已确认，请返回电脑继续",
+    "confirmBackHome": "返回首页"
   },
   "user": {
     "myMemories": "我的记忆",

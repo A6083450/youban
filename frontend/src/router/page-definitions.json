@@ -16,6 +16,15 @@
     }
   },
   {
+    "path": "pages/web-login/index",
+    "type": "page",
+    "platforms": ["mp-weixin"],
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "确认网页登录"
+    }
+  },
+  {
     "path": "pages/plan/index",
     "type": "page",
     "style": {
@@ -43,6 +52,7 @@
   {
     "path": "pages/admin/index",
     "type": "page",
+    "platforms": ["h5"],
     "style": {
       "navigationStyle": "custom",
       "navigationBarTitleText": "后台管理"

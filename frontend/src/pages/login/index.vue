@@ -2,9 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 // #ifdef H5
-import { mountWechatLoginWidget } from '@/features/auth/wechat-login-widget'
-import { loginNickname, startWechatWebLogin } from '@/services/v2'
+import {
+  createWebLoginChallenge,
+  exchangeWebLoginChallenge,
+  getWebLoginChallengeStatus,
+} from '@/services/v2'
 // #endif
+import { getStoredValue, setStoredValue, StorageKeys } from '@/platform/storage'
 import { useAuthStore } from '@/store/auth'
 import { usePreferencesStore } from '@/store/preferences'
 import { HOME_ROUTE } from '@/router/auth-guard'
@@ -19,49 +23,97 @@ definePage({
 const auth = useAuthStore()
 const preferences = usePreferencesStore()
 const { t } = useI18n()
-const state = ref<'loading' | 'ready' | 'failed'>('loading')
+const state = ref<'loading' | 'ready' | 'success' | 'expired' | 'failed'>('loading')
 const busy = ref(false)
 const previewUrl = ref('')
-const shareCode = ref('')
-const shareInvalid = ref(false)
-const failureMessage = ref('')
-const nickname = ref('')
-const nicknameError = ref('')
-const nicknameBusy = ref(false)
-const failed = computed(() => state.value === 'failed')
+const qrCodeDataUrl = ref('')
+const failed = computed(() => state.value === 'failed' || state.value === 'expired')
 const statusText = computed(() => ({
   loading: t('login.loading'),
   ready: t('login.pending'),
-  failed: failureMessage.value || t('login.failed'),
+  success: t('login.webSuccess'),
+  expired: t('login.expired'),
+  failed: t('login.failed'),
 })[state.value])
 let generation = 0
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let challengeExpiresAt = 0
 
 // #ifdef H5
-function callbackFailureMessage(): string {
-  const query = window.location.hash.split('?', 2)[1] || ''
-  const result = new URLSearchParams(query).get('wechat_error')
-  const translationKey = {
-    denied: 'login.denied',
-    expired: 'login.expired',
-    provider: 'login.providerError',
-    identity: 'login.identityError',
-  }[result || '']
-  return translationKey ? t(translationKey) : ''
+function clearPoll(): void {
+  if (pollTimer)
+    clearTimeout(pollTimer)
+  pollTimer = undefined
+}
+
+function failWebLogin(token: number, nextState: 'expired' | 'failed' = 'failed'): void {
+  if (token === generation)
+    state.value = nextState
+}
+
+function schedulePoll(token: number, challengeId: string, delay = 1000): void {
+  clearPoll()
+  pollTimer = setTimeout(() => void pollWebLogin(token, challengeId), delay)
+}
+
+function retryPoll(token: number, challengeId: string): void {
+  if (Date.now() >= challengeExpiresAt) {
+    failWebLogin(token, 'expired')
+    return
+  }
+  schedulePoll(token, challengeId, 1500)
+}
+
+async function pollWebLogin(token: number, challengeId: string): Promise<void> {
+  try {
+    const result = await getWebLoginChallengeStatus(challengeId)
+    if (token !== generation)
+      return
+    if (result.status === 'pending') {
+      schedulePoll(token, challengeId)
+      return
+    }
+    if (result.status === 'expired') {
+      failWebLogin(token, 'expired')
+      return
+    }
+    if (result.status !== 'approved') {
+      failWebLogin(token)
+      return
+    }
+    state.value = 'success'
+    await exchangeWebLoginChallenge(challengeId)
+    await auth.restore(true)
+    if (token === generation)
+      uni.reLaunch({ url: HOME_ROUTE })
+  }
+  catch (error) {
+    if (token !== generation)
+      return
+    if ((error as { status?: unknown } | null)?.status === 422) {
+      void startWebLogin()
+      return
+    }
+    retryPoll(token, challengeId)
+  }
 }
 
 async function startWebLogin(): Promise<void> {
   generation += 1
   const token = generation
+  clearPoll()
+  challengeExpiresAt = 0
   state.value = 'loading'
-  failureMessage.value = ''
-  document.getElementById('wechat-login-container')?.replaceChildren()
+  qrCodeDataUrl.value = ''
   try {
-    const configuration = await startWechatWebLogin()
+    const challenge = await createWebLoginChallenge()
     if (token !== generation)
       return
-    await mountWechatLoginWidget('wechat-login-container', configuration)
-    if (token === generation)
-      state.value = 'ready'
+    const expiresAt = Date.parse(challenge.expires_at)
+    challengeExpiresAt = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 5 * 60 * 1000
+    qrCodeDataUrl.value = challenge.qr_code_data_url
+    state.value = 'ready'
+    schedulePoll(token, challenge.challenge_id)
   }
   catch {
     if (token === generation)
@@ -69,37 +121,6 @@ async function startWebLogin(): Promise<void> {
   }
 }
 
-function updateNickname(event: { detail: { value: string } }): void {
-  nickname.value = String(event.detail.value || '')
-  nicknameError.value = ''
-}
-
-async function submitNickname(): Promise<void> {
-  const normalized = nickname.value.trim().split(/\s+/u).filter(Boolean).join(' ')
-  if (!normalized) {
-    nicknameError.value = t('login.nicknameRequired')
-    return
-  }
-  if (Array.from(normalized).length > 20) {
-    nicknameError.value = t('login.nicknameTooLong')
-    return
-  }
-  if (nicknameBusy.value)
-    return
-  nicknameBusy.value = true
-  nicknameError.value = ''
-  try {
-    const response = await loginNickname(normalized)
-    auth.acceptWebsiteSession(response.user)
-    uni.reLaunch({ url: HOME_ROUTE })
-  }
-  catch (error) {
-    nicknameError.value = error instanceof Error ? error.message : t('login.nicknameFailed')
-  }
-  finally {
-    nicknameBusy.value = false
-  }
-}
 // #endif
 
 async function chooseAvatar(event: unknown): Promise<void> {
@@ -113,7 +134,14 @@ async function chooseAvatar(event: unknown): Promise<void> {
   try {
     await auth.loginMiniProgramWithAvatar(filePath)
     uni.hideLoading()
-    uni.reLaunch({ url: HOME_ROUTE })
+    const pending = getStoredValue<string>(StorageKeys.pendingWebLoginChallenge)
+    if (/^[0-9a-f]{32}$/.test(pending || '')) {
+      setStoredValue(StorageKeys.pendingWebLoginChallenge, null)
+      uni.reLaunch({ url: `/pages/web-login/index?scene=${pending}` })
+    }
+    else {
+      uni.reLaunch({ url: HOME_ROUTE })
+    }
   }
   catch (error) {
     uni.hideLoading()
@@ -126,23 +154,6 @@ async function chooseAvatar(event: unknown): Promise<void> {
   }
 }
 
-function normalizeShareCode(value: string): string {
-  return value.replace(/\s+/g, '').toLowerCase()
-}
-
-function updateShareCode(event: { detail: { value: string } }): void {
-  shareCode.value = normalizeShareCode(event.detail.value)
-  shareInvalid.value = false
-}
-
-function submitShareCode(): void {
-  if (!/^[0-9a-f]{32}$/.test(shareCode.value)) {
-    shareInvalid.value = true
-    return
-  }
-  uni.navigateTo({ url: `/pages/share/index?code=${encodeURIComponent(shareCode.value)}` })
-}
-
 function openPrivacy(): void {
   uni.navigateTo({ url: '/pages/privacy/index' })
 }
@@ -153,18 +164,15 @@ onMounted(() => {
     return
   }
   // #ifdef H5
-  const callbackFailure = callbackFailureMessage()
-  if (callbackFailure) {
-    failureMessage.value = callbackFailure
-    state.value = 'failed'
-    return
-  }
   void startWebLogin()
   // #endif
 })
 
 onBeforeUnmount(() => {
   generation += 1
+  // #ifdef H5
+  clearPoll()
+  // #endif
 })
 </script>
 
@@ -179,40 +187,14 @@ onBeforeUnmount(() => {
       <view class="status">
         {{ statusText }}
       </view>
-      <view class="nickname-entry">
-        <view class="nickname-label">
-          {{ t('login.nicknameLabel') }}
-        </view>
-        <view class="nickname-row">
-          <input
-            class="nickname-input"
-            :value="nickname"
-            :maxlength="20"
-            :placeholder="t('login.nicknamePlaceholder')"
-            confirm-type="go"
-            @input="updateNickname"
-            @confirm="submitNickname"
-          >
-          <button
-            class="nickname-login-button"
-            :loading="nicknameBusy"
-            :disabled="nicknameBusy"
-            @click="submitNickname"
-          >
-            {{ t('login.nicknameButton') }}
-          </button>
-        </view>
-        <view v-if="nicknameError" class="nickname-error">
-          {{ nicknameError }}
-        </view>
-      </view>
-      <view class="login-divider">
-        <view class="divider-line" />
-        <text>{{ t('login.nicknameDivider') }}</text>
-        <view class="divider-line" />
-      </view>
       <view class="wechat-login-shell">
-        <view id="wechat-login-container" class="wechat-login-widget" />
+        <image
+          v-if="qrCodeDataUrl"
+          class="wechat-login-code"
+          :src="qrCodeDataUrl"
+          mode="aspectFit"
+          :aria-label="t('login.pending')"
+        />
         <view v-if="state === 'loading'" class="widget-state">
           <view class="spinner" :aria-label="t('common.loading')" />
         </view>
@@ -220,26 +202,6 @@ onBeforeUnmount(() => {
           <button class="refresh-button" @click="startWebLogin">
             {{ t('login.retry') }}
           </button>
-        </view>
-      </view>
-      <view class="share-entry">
-        <view class="share-label">
-          {{ t('shareCode.label') }}
-        </view>
-        <view class="share-row">
-          <input
-            class="share-input"
-            :value="shareCode"
-            :maxlength="32"
-            :placeholder="t('shareCode.placeholder')"
-            @input="updateShareCode"
-          >
-          <button class="share-button" @click="submitShareCode">
-            {{ t('shareCode.submit') }}
-          </button>
-        </view>
-        <view v-if="shareInvalid" class="share-error">
-          {{ t('shareCode.invalid') }}
         </view>
       </view>
     </view>
@@ -325,79 +287,21 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-size: 14px;
 }
-.nickname-entry {
-  text-align: left;
-}
-.nickname-label {
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.5;
-}
-.nickname-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-}
-.nickname-input {
-  box-sizing: border-box;
-  flex: 1;
-  min-width: 0;
-  height: 42px;
-  padding: 4px 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-.nickname-login-button {
-  width: 76px;
-  height: 42px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 42px;
-}
-.nickname-login-button[disabled] {
-  opacity: 0.58;
-}
-.nickname-error {
-  margin-top: 8px;
-  color: var(--status-danger);
-  font-size: 12px;
-  line-height: 1.4;
-}
-.login-divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 22px 0 14px;
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: 12px;
-  white-space: nowrap;
-}
-.divider-line {
-  flex: 1;
-  height: 1px;
-  background: var(--border-subtle);
-}
 .wechat-login-shell {
   position: relative;
-  width: 300px;
-  height: 400px;
+  box-sizing: border-box;
+  width: 320px;
+  height: 320px;
   margin: 0 auto;
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: var(--surface-elevated);
   overflow: hidden;
 }
-.wechat-login-widget {
-  width: 300px;
-  height: 400px;
+.wechat-login-code {
+  width: 100%;
+  height: 100%;
 }
 .widget-state {
   position: absolute;
@@ -405,11 +309,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface-page);
+  background: var(--surface-elevated);
 }
 .widget-failed {
-  align-items: flex-start;
-  padding-top: 148px;
+  padding: 18px;
 }
 .spinner {
   width: 28px;
@@ -430,55 +333,6 @@ onBeforeUnmount(() => {
   color: #fff;
   font-size: 15px;
   line-height: 42px;
-}
-.share-entry {
-  margin-top: 30px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-subtle);
-  text-align: left;
-}
-.share-label {
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.5;
-}
-.share-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-}
-.share-input {
-  box-sizing: border-box;
-  flex: 1;
-  min-width: 0;
-  height: 40px;
-  padding: 4px 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-.share-button {
-  width: 76px;
-  height: 40px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 40px;
-}
-.share-error {
-  margin-top: 8px;
-  color: var(--status-danger);
-  font-size: 12px;
-  line-height: 1.4;
 }
 .mini-login-page {
   display: flex;
@@ -611,6 +465,11 @@ button::after {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
   }
 }
 </style>

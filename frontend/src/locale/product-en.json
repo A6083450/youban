@@ -202,6 +202,7 @@
     "pending": "Scan with WeChat to sign in",
     "failed": "WeChat QR sign-in is temporarily unavailable",
     "retry": "Reload QR code",
+    "webSuccess": "Signed in. Opening YouBan",
     "denied": "You cancelled WeChat sign-in",
     "expired": "The QR code has expired. Reload it to continue",
     "providerError": "WeChat sign-in is temporarily unavailable",
@@ -221,7 +222,17 @@
     "miniDescription": "After you sign in, I will remember your travel preferences and create itineraries, budgets, and maps.",
     "miniButton": "Continue with WeChat avatar",
     "miniNote": "Used only to identify your account. No other WeChat profile data is read.",
-    "privacyLink": "Privacy notice and user agreement"
+    "privacyLink": "Privacy notice and user agreement",
+    "confirmTitle": "Confirm web sign-in",
+    "confirmDescription": "After confirmation, your computer will sign in with this WeChat account.",
+    "confirmButton": "Confirm sign-in",
+    "confirmLoginButton": "Sign in and continue",
+    "confirmCancel": "Cancel",
+    "confirmInvalid": "This sign-in code is invalid",
+    "confirmExpired": "This sign-in code has expired",
+    "confirmFailed": "Confirmation failed. Try again",
+    "confirmSuccess": "Confirmed. Return to your computer to continue",
+    "confirmBackHome": "Back to home"
   },
   "user": {
     "myMemories": "My memories",

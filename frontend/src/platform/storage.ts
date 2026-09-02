@@ -7,6 +7,7 @@ export const StorageKeys = {
   locale: `${STORAGE_PREFIX}locale`,
   skin: `${STORAGE_PREFIX}skin`,
   activeTask: `${STORAGE_PREFIX}active-task`,
+  pendingWebLoginChallenge: `${STORAGE_PREFIX}pending-web-login-challenge`,
 } as const
 
 export function getStoredValue<T>(key: string): T | null {

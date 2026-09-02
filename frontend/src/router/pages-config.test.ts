@@ -14,9 +14,11 @@ describe('pages configuration', () => {
   })
 
   it('keeps the H5-only admin route out of the mini-program build', () => {
-    expect(pageDefinitionsForPlatform('mp-weixin').map(page => page.path)).not.toContain(
-      'pages/admin/index',
-    )
+    const miniProgramPages = pageDefinitionsForPlatform('mp-weixin').map(page => page.path)
+    expect(miniProgramPages).not.toContain('pages/admin/index')
+    expect(miniProgramPages).toContain('pages/web-login/index')
+    expect(pageDefinitionsForPlatform('h5').map(page => page.path)).not.toContain('pages/web-login/index')
+    expect(pageDefinitionsForPlatform('app').map(page => page.path)).not.toContain('pages/web-login/index')
   })
 
   it('normalizes filesystem scan order before pages.json is written', () => {

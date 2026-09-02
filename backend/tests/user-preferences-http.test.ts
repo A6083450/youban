@@ -17,17 +17,7 @@ function createRuntime(): HttpRuntime {
         openid: `openid-for-${code}`,
         unionid: `unionid-for-${code}`,
       }),
-      website: {
-        appId: "wx-web-app",
-        redirectUri: "https://youban.me/api/v2/auth/wechat-web/callback",
-        exchangeCode: async (code) => ({
-          openid: `web-openid-for-${code}`,
-          unionid: `unionid-for-${code}`,
-          nickname: "网页用户",
-          avatarUrl: "",
-        }),
-        importAvatar: async () => null,
-      },
+      createMiniProgramCode: async scene => `data:image/png;base64,${Buffer.from(scene).toString("base64")}`,
     },
   });
   return runtime;
@@ -142,19 +132,26 @@ describe("authenticated user preferences", () => {
       body: { skin: "google", locale: "fr-FR" },
     });
 
-    const started = await requestJson(app, "/api/v2/auth/wechat-web/start", {
+    const started = await requestJson(app, "/api/v2/auth/web/challenges", {
       method: "POST",
       body: {},
     });
     expect(started.response.status).toBe(200);
     const verifierCookie = started.response.headers.getSetCookie()
-      .find(value => value.startsWith("youban_wechat_oauth="))
+      .find(value => value.startsWith("youban_web_login="))
       ?.split(";", 1)[0];
     expect(verifierCookie).toEqual(expect.any(String));
-    const exchanged = await app.handle(new Request(
-      `http://localhost/api/v2/auth/wechat-web/callback?code=cross-client-user&state=${encodeURIComponent(started.body.state)}`,
-      { headers: { cookie: verifierCookie! } },
-    ));
+    const approved = await requestJson(
+      app,
+      `/api/v2/auth/web/challenges/${started.body.challenge_id}/approve`,
+      { method: "POST", token: mini.token, body: {} },
+    );
+    expect(approved.response.status).toBe(200);
+    const exchanged = (await requestJson(
+      app,
+      `/api/v2/auth/web/challenges/${started.body.challenge_id}/exchange`,
+      { method: "POST", cookie: verifierCookie, body: {} },
+    )).response;
     expect(exchanged.status).toBe(200);
     const cookie = exchanged.headers.getSetCookie()
       .find(value => value.startsWith("youban_session="))

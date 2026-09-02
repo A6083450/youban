@@ -21,27 +21,43 @@ describe('shared v2 contracts', () => {
     expect(ApiV2Routes.runtimeSettings).toBe('/api/v2/settings')
   })
 
-  test('website login exposes only official widget configuration', () => {
-    const schema = (Contracts as unknown as { WechatWebLoginStartSchema?: TSchema })
-      .WechatWebLoginStartSchema
+  test('web login exposes only mini-program challenge contracts', () => {
+    const routes = ApiV2Routes as unknown as Record<string, string>
+    const schemas = Contracts as unknown as Record<string, TSchema | undefined>
+    const createSchema = schemas.WebLoginChallengeCreateSchema
+    const statusSchema = schemas.WebLoginChallengeStatusSchema
+    const exchangeSchema = schemas.WebLoginChallengeExchangeSchema
 
-    expect(ApiV2Routes.authWechatWebStart).toBe('/api/v2/auth/wechat-web/start')
-    expect(ApiV2Routes.authWechatWebCallback).toBe('/api/v2/auth/wechat-web/callback')
-    expect(ApiV2Routes.authNicknameLogin).toBe('/api/v2/auth/nickname')
-    expect(ApiV2Routes).not.toHaveProperty('authWebChallenges')
-    expect(ApiV2Routes).not.toHaveProperty('authWebChallengeStatus')
-    expect(ApiV2Routes).not.toHaveProperty('authWebChallengeApprove')
-    expect(ApiV2Routes).not.toHaveProperty('authWebChallengeExchange')
-    expect(schema).toBeDefined()
-    expect(Value.Check(schema!, {
-      app_id: 'wx-web-app',
-      scope: 'snsapi_login',
-      redirect_uri: 'https://youban.me/api/v2/auth/wechat-web/callback',
-      state: 'opaque-state-with-at-least-32-bytes',
+    expect(routes.authWebChallengeCreate).toBe('/api/v2/auth/web/challenges')
+    expect(routes.authWebChallengeStatus).toBe('/api/v2/auth/web/challenges/:challengeId/status')
+    expect(routes.authWebChallengeApprove).toBe('/api/v2/auth/web/challenges/:challengeId/approve')
+    expect(routes.authWebChallengeExchange).toBe('/api/v2/auth/web/challenges/:challengeId/exchange')
+    expect(ApiV2Routes).not.toHaveProperty('authWechatWebStart')
+    expect(ApiV2Routes).not.toHaveProperty('authWechatWebCallback')
+    expect(createSchema).toBeDefined()
+    expect(statusSchema).toBeDefined()
+    expect(exchangeSchema).toBeDefined()
+    expect(Value.Check(createSchema!, {
+      challenge_id: 'a'.repeat(32),
+      expires_at: '2026-09-02T12:05:00.000Z',
+      qr_code_data_url: 'data:image/png;base64,AAAA',
     })).toBe(true)
-    expect(Value.Check(schema!, {
-      app_id: 'wx-web-app',
-      app_secret: 'must-not-leak',
+    expect(Value.Check(statusSchema!, { status: 'approved' })).toBe(true)
+    expect(Value.Check(statusSchema!, { status: 'unknown' })).toBe(false)
+    expect(Value.Check(exchangeSchema!, {
+      success: true,
+      user: {
+        user_id: 'user-1',
+        nickname: '旅行者',
+        avatar_url: '/api/avatars/avatar.png',
+        profile_complete: true,
+      },
+    })).toBe(true)
+    expect(Value.Check(createSchema!, {
+      challenge_id: 'a'.repeat(32),
+      expires_at: '2026-09-02T12:05:00.000Z',
+      qr_code_data_url: 'data:image/png;base64,AAAA',
+      browser_verifier: 'must-not-leak',
     })).toBe(false)
   })
 

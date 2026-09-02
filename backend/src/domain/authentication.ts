@@ -7,7 +7,7 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const MINI_IDLE_MS = 30 * DAY_MS;
 const MINI_ABSOLUTE_MS = 90 * DAY_MS;
 const WEB_SESSION_MS = 7 * DAY_MS;
-const WECHAT_WEB_OAUTH_MS = 5 * 60 * 1_000;
+const WEB_CHALLENGE_MS = 5 * 60 * 1_000;
 
 type ClientType = "miniprogram" | "web";
 
@@ -67,75 +67,96 @@ export class AuthenticationService {
     this.getRandomBytes = options.randomBytes ?? ((length) => crypto.getRandomValues(new Uint8Array(length)));
   }
 
-  createWechatWebOauthState(): {
-    state: string;
+  createWebChallenge(): {
+    challengeId: string;
     browserVerifier: string;
     expiresAt: string;
   } {
-    const state = this.randomToken(32);
+    const challengeId = this.randomHex(16);
     const browserVerifier = this.randomToken(32);
     const now = this.now();
     const createdAt = new Date(now).toISOString();
-    const expiresAt = new Date(now + WECHAT_WEB_OAUTH_MS).toISOString();
+    const expiresAt = new Date(now + WEB_CHALLENGE_MS).toISOString();
     this.database.raw.transaction(() => {
-      this.database.raw.query("DELETE FROM wechat_web_oauth_states WHERE expires_at <= ?")
+      this.database.raw.query("DELETE FROM web_login_challenges WHERE expires_at <= ?")
         .run(createdAt);
       this.database.raw.query(`
-        INSERT INTO wechat_web_oauth_states (
-          state_hash, browser_verifier_hash, created_at, expires_at, consumed_at
-        ) VALUES (?, ?, ?, ?, NULL)
-      `).run(sha256(state), sha256(browserVerifier), createdAt, expiresAt);
+        INSERT INTO web_login_challenges (
+          challenge_id, verifier_hash, approval_token_hash, short_code_hash,
+          created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        challengeId,
+        sha256(browserVerifier),
+        sha256(this.randomToken(32)),
+        sha256(this.randomToken(32)),
+        createdAt,
+        expiresAt,
+      );
     })();
-    return { state, browserVerifier, expiresAt };
+    return { challengeId, browserVerifier, expiresAt };
   }
 
-  consumeWechatWebOauthState(state: string, browserVerifier: string): void {
-    const stateHash = sha256(state.trim());
-    const browserVerifierHash = sha256(browserVerifier.trim());
-    const now = this.now();
-    const nowIso = new Date(now).toISOString();
-    const consume = this.database.raw.transaction(() => {
-      const row = this.database.raw.query(`
-        SELECT state_hash, browser_verifier_hash, expires_at, consumed_at
-        FROM wechat_web_oauth_states WHERE state_hash = ?
-      `).get(stateHash) as {
-        state_hash: string;
-        browser_verifier_hash: string;
-        expires_at: string;
-        consumed_at: string | null;
-      } | null;
-      if (
-        !row
-        || row.consumed_at
-        || Date.parse(row.expires_at) <= now
-        || !this.secureEqual(row.state_hash, stateHash)
-        || !this.secureEqual(row.browser_verifier_hash, browserVerifierHash)
-      ) {
-        throw new AuthenticationError("网页登录凭证无效或已过期");
+  approveWebChallenge(token: string, challengeId: string): void {
+    const user = this.authenticateReady(token, "miniprogram");
+    if (!user) throw new AuthenticationError("请先选择微信头像完成登录");
+    this.database.raw.transaction(() => {
+      const challenge = this.challenge(challengeId);
+      if (!challenge || Date.parse(challenge.expires_at) <= this.now()) {
+        throw new AuthenticationError("登录挑战已过期");
       }
-      const result = this.database.raw.query(`
-        UPDATE wechat_web_oauth_states SET consumed_at = ?
-        WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-      `).run(nowIso, stateHash, nowIso);
-      if (result.changes !== 1) {
-        throw new AuthenticationError("网页登录凭证无效或已过期");
-      }
-    });
-    consume();
+      if (challenge.exchanged_at) throw new AuthenticationError("登录挑战已兑换");
+      if (challenge.approved_user_id === user.user_id) return;
+      if (challenge.approved_user_id) throw new AuthenticationError("登录挑战已由其他账号确认");
+      this.database.raw.query(`
+        UPDATE web_login_challenges
+        SET approved_user_id = ?, approved_at = ?
+        WHERE challenge_id = ? AND approved_user_id IS NULL
+      `).run(user.user_id, this.nowIso(), challengeId.trim());
+      this.audit("web_challenge_approve", "success", user.user_id, challengeId.trim());
+    })();
+  }
+
+  getWebChallengeStatus(
+    challengeId: string,
+    browserVerifier: string,
+  ): { status: "pending" | "approved" | "expired" | "exchanged" } {
+    const challenge = this.verifiedChallenge(challengeId, browserVerifier);
+    if (Date.parse(challenge.expires_at) <= this.now()) return { status: "expired" };
+    if (challenge.exchanged_at) return { status: "exchanged" };
+    return { status: challenge.approved_at ? "approved" : "pending" };
+  }
+
+  exchangeWebChallenge(challengeId: string, browserVerifier: string): { user: UserRecord; token: string } {
+    return this.database.raw.transaction(() => {
+      const challenge = this.verifiedChallenge(challengeId, browserVerifier);
+      if (Date.parse(challenge.expires_at) <= this.now()) throw new AuthenticationError("登录挑战已过期");
+      if (challenge.exchanged_at) throw new AuthenticationError("登录挑战已兑换");
+      if (!challenge.approved_user_id) throw new AuthenticationError("登录挑战尚未确认");
+      const user = this.getUser(challenge.approved_user_id);
+      if (!user?.profile_complete) throw new AuthenticationError("请先选择微信头像完成登录");
+      this.database.raw.query(`
+        UPDATE web_login_challenges SET exchanged_at = ?
+        WHERE challenge_id = ? AND exchanged_at IS NULL
+      `).run(this.nowIso(), challengeId.trim());
+      const token = this.issueSession(user.user_id, "web");
+      this.audit("web_challenge_exchange", "success", user.user_id, challengeId.trim());
+      return { user, token };
+    })();
   }
 
   loginMiniProgramIdentity(identity: {
     openid: string;
-    unionid: string;
+    unionid?: string;
   }): { user: UserRecord; token: string } {
     const openid = identity.openid.trim();
-    const unionid = identity.unionid.trim();
-    if (!openid || !unionid) throw new AuthenticationError("微信登录凭证无效");
-    const unionDigest = this.unionIdentityDigest(unionid);
+    const unionid = identity.unionid?.trim() ?? "";
+    if (!openid) throw new AuthenticationError("微信登录凭证无效");
+    const unionDigest = unionid ? this.unionIdentityDigest(unionid) : "";
     const legacyDigest = this.hmac("wechat", openid);
     const now = this.nowIso();
     const login = this.database.raw.transaction(() => {
-      const unionIdentity = this.identity(unionDigest);
+      const unionIdentity = unionDigest ? this.identity(unionDigest) : null;
       const legacyIdentity = this.identity(legacyDigest);
       if (
         unionIdentity
@@ -148,53 +169,12 @@ export class AuthenticationService {
       if (!userId) {
         userId = this.createWechatUser(now).user_id;
       }
-      this.attachIdentity(unionDigest, userId, now);
+      if (unionDigest) this.attachIdentity(unionDigest, userId, now);
       this.attachIdentity(legacyDigest, userId, now);
       this.database.raw.query("UPDATE users SET last_login_at = ? WHERE user_id = ?")
         .run(now, userId);
       const token = this.issueSession(userId, "miniprogram");
-      this.audit("wechat_login", "success", userId, unionDigest.slice(0, 16));
-      return { user: this.getUser(userId)!, token };
-    });
-    return login();
-  }
-
-  loginWebsiteIdentity(profile: {
-    unionid: string;
-    nickname: string;
-    avatarFile: string | null;
-  }): { user: UserRecord; token: string } {
-    const unionid = profile.unionid.trim();
-    if (!unionid) throw new AuthenticationError("无法确认微信账号");
-    const nickname = this.normalizedNickname(profile.nickname);
-    const avatarFile = profile.avatarFile?.trim() || null;
-    const unionDigest = this.unionIdentityDigest(unionid);
-    const now = this.nowIso();
-    const login = this.database.raw.transaction(() => {
-      const identity = this.identity(unionDigest);
-      let userId = identity?.user_id;
-      if (!userId) {
-        userId = this.createWechatUser(now, {
-          nickname,
-          avatarFile,
-          profileCompletedAt: now,
-        }).user_id;
-        this.attachIdentity(unionDigest, userId, now);
-      } else {
-        this.database.raw.query(`
-          UPDATE users SET
-            nickname = ?,
-            avatar_file = COALESCE(?, avatar_file),
-            profile_completed_at = COALESCE(profile_completed_at, ?),
-            last_login_at = ?
-          WHERE user_id = ?
-        `).run(nickname, avatarFile, now, now, userId);
-        this.database.raw.query(
-          "UPDATE wechat_identities SET last_login_at = ? WHERE subject_digest = ?",
-        ).run(now, unionDigest);
-      }
-      const token = this.issueSession(userId, "web");
-      this.audit("wechat_web_login", "success", userId, unionDigest.slice(0, 16));
+      this.audit("wechat_login", "success", userId, (unionDigest || legacyDigest).slice(0, 16));
       return { user: this.getUser(userId)!, token };
     });
     return login();
@@ -251,12 +231,12 @@ export class AuthenticationService {
     return login();
   }
 
-  authenticate(token: string): UserRecord | undefined {
+  authenticate(token: string, requiredClientType?: ClientType): UserRecord | undefined {
     const tokenHash = sha256(token.trim());
     if (!token.trim()) return undefined;
     const row = this.database.raw.query("SELECT * FROM auth_sessions WHERE token_hash = ?")
       .get(tokenHash) as SessionRow | null;
-    if (!row || row.revoked_at) return undefined;
+    if (!row || row.revoked_at || (requiredClientType && row.client_type !== requiredClientType)) return undefined;
     const now = this.now();
     if (Date.parse(row.idle_expires_at) <= now || Date.parse(row.absolute_expires_at) <= now) return undefined;
     const absolute = Date.parse(row.absolute_expires_at);
@@ -268,8 +248,8 @@ export class AuthenticationService {
     return this.getUser(row.user_id);
   }
 
-  authenticateReady(token: string): UserRecord | undefined {
-    const user = this.authenticate(token);
+  authenticateReady(token: string, requiredClientType?: ClientType): UserRecord | undefined {
+    const user = this.authenticate(token, requiredClientType);
     return user?.profile_complete ? user : undefined;
   }
 
@@ -346,6 +326,27 @@ export class AuthenticationService {
     return { user, token };
   }
 
+  private challenge(challengeId: string) {
+    if (!/^[0-9a-f]{32}$/.test(challengeId.trim())) return null;
+    return this.database.raw.query("SELECT * FROM web_login_challenges WHERE challenge_id = ?")
+      .get(challengeId.trim()) as {
+        challenge_id: string;
+        verifier_hash: string;
+        approved_user_id: string | null;
+        expires_at: string;
+        approved_at: string | null;
+        exchanged_at: string | null;
+      } | null;
+  }
+
+  private verifiedChallenge(challengeId: string, browserVerifier: string): NonNullable<ReturnType<AuthenticationService["challenge"]>> {
+    const challenge = this.challenge(challengeId);
+    if (!challenge || !this.secureEqual(challenge.verifier_hash, sha256(browserVerifier.trim()))) {
+      throw new AuthenticationError("网页登录凭证无效或已过期");
+    }
+    return challenge;
+  }
+
   private issueSession(userId: string, clientType: ClientType): string {
     const token = this.randomToken(32);
     const now = this.now();
@@ -408,11 +409,6 @@ export class AuthenticationService {
 
   private unionIdentityDigest(unionid: string): string {
     return this.hmac("wechat-identity", `wechat:unionid:${unionid}`);
-  }
-
-  private normalizedNickname(nickname: string): string {
-    const normalized = Array.from(nickname.normalize("NFKC").trim()).slice(0, 64).join("");
-    return normalized || "微信用户";
   }
 
   private normalizedLoginNickname(value: string): string {

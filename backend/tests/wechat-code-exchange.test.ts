@@ -23,16 +23,16 @@ describe("WechatCodeExchange", () => {
     expect(requested).toContain("js_code=temporary-code");
   });
 
-  it("rejects a production identity without UnionID", async () => {
+  it("accepts a production identity when WeChat omits UnionID", async () => {
     const exchange = new WechatCodeExchange({
       appId: "wx42ddc076b365bf0d",
       appSecret: "secret-value",
       fetch: async () => Response.json({ openid: "openid-1" }),
     });
 
-    await expect(exchange.exchange("temporary-code")).rejects.toThrow(
-      new WechatCodeExchangeError("微信账号统一标识不可用"),
-    );
+    await expect(exchange.exchange("temporary-code")).resolves.toEqual({
+      openid: "openid-1",
+    });
   });
 
   it("maps WeChat errors to a stable error without leaking credentials", async () => {
