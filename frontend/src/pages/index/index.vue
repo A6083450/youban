@@ -9,7 +9,9 @@ import type {
   TripTaskEventDto,
   TripTaskStageDto,
   TripTaskStatusResponseDto,
+  UserLocaleDto,
   UserMemoryDto,
+  UserSkinDto,
 } from '@youban/contracts'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -85,6 +87,8 @@ interface PlanningSnapshot {
   readinessToken: string
 }
 
+type PreferencePanel = '' | 'language' | 'skin'
+
 const auth = useAuthStore()
 const preferences = usePreferencesStore()
 const { t, tm } = useI18n()
@@ -101,7 +105,9 @@ const busy = ref(false)
 const drawerOpen = ref(false)
 const shareToolOpen = ref(false)
 const shareCodeInput = ref('')
+const accountMenuOpen = ref(false)
 const mobileAccountMenuOpen = ref(false)
+const activePreferencePanel = ref<PreferencePanel>('')
 const memoryOpen = ref(false)
 const memoryLoading = ref(false)
 const memories = ref<UserMemoryDto[]>([])
@@ -143,6 +149,30 @@ const conversationRecords = computed(() => records.value.filter(item => item.kin
 const plannedRecords = computed(() => records.value.filter(item => item.kind === 'plan'))
 const planBadge = (record: ConversationRecordDto) => sidebarPlanBadge(record, today)
 const hasMessages = computed(() => messages.value.length > 0)
+const selectedLanguageLabel = computed(() => {
+  if (preferences.locale === 'en-US')
+    return t('app.language.en')
+  if (preferences.locale === 'fr-FR')
+    return t('app.language.fr')
+  return t('app.language.zh')
+})
+const selectedSkinLabel = computed(() => preferences.skin === 'google'
+  ? t('app.skin.clear')
+  : t('app.skin.warm'))
+
+function togglePreferencePanel(panel: Exclude<PreferencePanel, ''>): void {
+  activePreferencePanel.value = activePreferencePanel.value === panel ? '' : panel
+}
+
+async function selectLocale(locale: UserLocaleDto): Promise<void> {
+  activePreferencePanel.value = ''
+  await preferences.setLocale(locale)
+}
+
+async function selectSkin(skin: UserSkinDto): Promise<void> {
+  activePreferencePanel.value = ''
+  await preferences.setSkin(skin)
+}
 
 function refreshSuggestions(): void {
   visibleSuggestions.value = pickSuggestionBatch(suggestions.value, 1)
@@ -161,6 +191,7 @@ function openSharedPlan(): void {
 }
 
 async function openMemories(): Promise<void> {
+  accountMenuOpen.value = false
   mobileAccountMenuOpen.value = false
   memoryOpen.value = true
   memoryLoading.value = true
@@ -737,6 +768,7 @@ onUnload(() => {
           </view>
         </view>
 
+        <!-- #ifdef H5 -->
         <view class="sidebar-preferences">
           <view class="sidebar-preferences-title">
             {{ t('app.preferences.label') }}
@@ -767,6 +799,71 @@ onUnload(() => {
             </view>
           </view>
         </view>
+        <!-- #endif -->
+
+        <!-- #ifdef MP-WEIXIN -->
+        <view class="sidebar-preferences compact">
+          <view v-if="activePreferencePanel === 'language'" class="preference-segment preference-choice-panel language language-segment">
+            <button data-preference-value="zh-CN" :class="{ active: preferences.locale === 'zh-CN' }" @click="selectLocale('zh-CN')">
+              {{ t('app.language.zh') }}
+            </button>
+            <button data-preference-value="en-US" :class="{ active: preferences.locale === 'en-US' }" @click="selectLocale('en-US')">
+              {{ t('app.language.en') }}
+            </button>
+            <button data-preference-value="fr-FR" :class="{ active: preferences.locale === 'fr-FR' }" @click="selectLocale('fr-FR')">
+              {{ t('app.language.fr') }}
+            </button>
+          </view>
+          <view v-if="activePreferencePanel === 'skin'" class="preference-segment preference-choice-panel skin">
+            <button data-preference-value="default" :class="{ active: preferences.skin === 'default' }" @click="selectSkin('default')">
+              <text class="skin-swatch warm" />{{ t('app.skin.warm') }}
+            </button>
+            <button data-preference-value="google" :class="{ active: preferences.skin === 'google' }" @click="selectSkin('google')">
+              <text class="skin-swatch clear" />{{ t('app.skin.clear') }}
+            </button>
+          </view>
+          <view class="preference-toolbar">
+            <button
+              class="preference-toolbar-button preference-language-trigger"
+              :class="{ active: activePreferencePanel === 'language' }"
+              :aria-label="t('app.language.label')"
+              @click="togglePreferencePanel('language')"
+            >
+              <view class="i-carbon-language preference-toolbar-icon" aria-hidden="true" />
+              <text>{{ selectedLanguageLabel }}</text>
+              <wd-icon name="arrow-down" size="13px" />
+            </button>
+            <button
+              class="preference-toolbar-button preference-skin-trigger"
+              :class="{ active: activePreferencePanel === 'skin' }"
+              :aria-label="t('app.skin.label')"
+              @click="togglePreferencePanel('skin')"
+            >
+              <view class="i-carbon-sun preference-toolbar-icon" aria-hidden="true" />
+              <text>{{ selectedSkinLabel }}</text>
+              <wd-icon name="arrow-down" size="13px" />
+            </button>
+          </view>
+        </view>
+        <!-- #endif -->
+
+        <!-- #ifdef H5 -->
+        <view class="sidebar-user">
+          <button class="account-trigger" @click="accountMenuOpen = !accountMenuOpen">
+            <image v-if="userAvatar" class="user-avatar" :src="userAvatar" mode="aspectFill" />
+            <text class="user-name">{{ auth.user?.nickname || t('account.wechatUser') }}</text>
+            <wd-icon name="arrow-down" size="13px" />
+          </button>
+          <view v-if="accountMenuOpen" class="account-menu">
+            <button @click="openMemories">
+              <wd-icon name="list" size="15px" />{{ t('user.myMemories') }}
+            </button>
+            <button class="account-logout" @click="logout">
+              <wd-icon name="logout" size="15px" />{{ t('account.logout') }}
+            </button>
+          </view>
+        </view>
+        <!-- #endif -->
       </view>
     </aside>
 
@@ -816,7 +913,7 @@ onUnload(() => {
             <wd-icon name="list" size="15px" />{{ t('user.myMemories') }}
           </button>
           <button class="mobile-switch-user-action" @click="logout">
-            <wd-icon name="logout" size="15px" />{{ t('user.switchUser') }}
+            <wd-icon name="logout" size="15px" />{{ t('account.logout') }}
           </button>
         </view>
       </view>
@@ -1249,6 +1346,53 @@ onUnload(() => {
   font-size: 11px;
   font-weight: 700;
 }
+.sidebar-preferences.compact {
+  gap: 8px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+.preference-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.preference-toolbar-button {
+  display: grid;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 48px;
+  margin: 0;
+  padding: 8px 9px;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  grid-template-columns: 22px minmax(0, 1fr) 13px;
+  gap: 6px;
+  line-height: 16px;
+  text-align: left;
+}
+.preference-toolbar-button.active {
+  border-color: var(--accent-focus);
+  background: var(--accent-selected);
+  color: var(--accent-strong);
+}
+.preference-toolbar-button text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preference-toolbar-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--accent-strong);
+  font-size: 20px;
+}
+.preference-choice-panel {
+  box-shadow: 0 8px 22px rgba(61, 50, 41, 0.12);
+}
 .preference-group {
   display: flex;
   flex-direction: column;
@@ -1304,6 +1448,71 @@ onUnload(() => {
 }
 .skin-swatch.clear {
   background: #3b9bb4;
+}
+.sidebar-user {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 56px;
+  padding: 0 12px 12px;
+}
+.account-trigger {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 7px 10px;
+  align-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  gap: 10px;
+  line-height: 16.1px;
+}
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+.user-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-menu {
+  position: absolute;
+  z-index: 50;
+  right: 12px;
+  bottom: 62px;
+  left: 12px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  box-shadow: 0 10px 30px rgba(61, 50, 41, 0.16);
+}
+.account-menu button {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  margin: 0;
+  padding: 8px 10px;
+  align-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  gap: 8px;
+  line-height: 18px;
+  text-align: left;
 }
 .modal-mask {
   position: fixed;

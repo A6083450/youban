@@ -73,4 +73,19 @@ describe('useAuthStore', () => {
     expect(store.token).toBe('')
     expect(store.user).toEqual(nicknameUser)
   })
+
+  it('finishes website logout when the server session is already expired', async () => {
+    const nicknameUser = { ...readyUser, nickname: '旅行者', avatar_url: null }
+    const store = useAuthStore()
+    store.acceptWebsiteSession(nicknameUser)
+    authApi.authLogout.mockRejectedValue(new Error('登录已失效'))
+
+    await expect(store.logout()).resolves.toBeUndefined()
+
+    expect(authApi.authLogout).toHaveBeenCalledWith('')
+    expect(store.user).toBeNull()
+    expect(store.token).toBe('')
+    expect(store.ready).toBe(false)
+    expect(store.restored).toBe(true)
+  })
 })

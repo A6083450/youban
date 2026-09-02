@@ -112,7 +112,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
           await authLogout(currentToken).catch(() => undefined)
       }
       else {
-        await authLogout('')
+        await authLogout('').catch(() => undefined)
       }
     }
     finally {

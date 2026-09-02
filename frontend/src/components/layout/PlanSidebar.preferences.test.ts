@@ -4,6 +4,7 @@ import type { Component } from 'vue'
 
 const mocks = vi.hoisted(() => ({
   getConversations: vi.fn().mockResolvedValue({ items: [] }),
+  logout: vi.fn(),
   setLocale: vi.fn(),
   setSkin: vi.fn(),
 }))
@@ -18,10 +19,11 @@ vi.mock('@/store/auth', () => ({
   useAuthStore: () => ({
     user: {
       user_id: 'wechat-user',
-      nickname: '微信用户',
+      nickname: '网页登录昵称',
       avatar_url: '/api/avatars/avatar.png',
+      profile_complete: true,
     },
-    logout: vi.fn(),
+    logout: mocks.logout,
   }),
 }))
 
@@ -46,6 +48,8 @@ vi.mock('vue-i18n', () => ({
       'app.skin.warm': '暖光',
       'app.skin.clear': '清朗',
       'account.wechatUser': '微信用户',
+      'account.logout': '退出登录',
+      'user.myMemories': '我的记忆',
     } as Record<string, string>)[key] ?? key,
   }),
 }))
@@ -57,8 +61,8 @@ beforeAll(async () => {
 })
 
 describe('plan sidebar preferences', () => {
-  it('uses the bottom sidebar slot for preferences without rendering the WeChat user card', async () => {
-    const wrapper = mount(PlanSidebar, {
+  function mountSidebar() {
+    return mount(PlanSidebar, {
       props: { open: true },
       global: {
         stubs: {
@@ -67,14 +71,46 @@ describe('plan sidebar preferences', () => {
         },
       },
     })
+  }
+
+  it('opens language and appearance choices from one compact icon row', async () => {
+    const wrapper = mountSidebar()
     await flushPromises()
 
-    const tools = wrapper.get('.sidebar-tools')
-    expect(tools.element.lastElementChild).toBe(tools.get('.sidebar-preferences').element)
-    expect(wrapper.find('.sidebar-user').exists()).toBe(false)
-    expect(wrapper.text()).toContain('语言')
-    expect(wrapper.text()).toContain('外观')
-    expect(wrapper.text()).not.toContain('微信用户')
+    const toolbar = wrapper.get('.preference-toolbar')
+    const triggers = toolbar.findAll('.preference-toolbar-button')
+    expect(triggers).toHaveLength(2)
+    const languageTrigger = toolbar.get('.preference-language-trigger')
+    const skinTrigger = toolbar.get('.preference-skin-trigger')
+    expect(toolbar.find('.i-carbon-language').exists()).toBe(true)
+    expect(toolbar.find('.i-carbon-sun').exists()).toBe(true)
+
+    await languageTrigger.trigger('click')
+    expect(wrapper.get('.preference-choice-panel.language').text()).toContain('English')
+    await wrapper.get('[data-preference-value="en-US"]').trigger('click')
+    expect(mocks.setLocale).toHaveBeenCalledWith('en-US')
+    expect(wrapper.find('.preference-choice-panel').exists()).toBe(false)
+
+    await skinTrigger.trigger('click')
+    expect(wrapper.get('.preference-choice-panel.skin').text()).toContain('清朗')
+    await wrapper.get('[data-preference-value="google"]').trigger('click')
+    expect(mocks.setSkin).toHaveBeenCalledWith('google')
+
+    wrapper.unmount()
+  })
+
+  it('keeps the website nickname and exposes an explicit logout action', async () => {
+    const wrapper = mountSidebar()
+    await flushPromises()
+
+    expect(wrapper.get('.user-name').text()).toBe('网页登录昵称')
+    await wrapper.get('.account-trigger').trigger('click')
+    expect(wrapper.get('.account-menu').text()).toContain('退出登录')
+    await wrapper.get('.account-logout').trigger('click')
+    await flushPromises()
+
+    expect(mocks.logout).toHaveBeenCalledTimes(1)
+    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/login/index' })
 
     wrapper.unmount()
   })

@@ -17,4 +17,10 @@ describe('mobile planning header', () => {
   it('keeps the mobile avatar trigger background transparent', () => {
     expect(source).toMatch(/\.mobile-account-trigger\s*\{[^}]*background:\s*transparent;/)
   })
+
+  it('separates the H5 account footer from the compact Mini Program preferences', () => {
+    const sidebarTools = source.match(/<view class="sidebar-tools">([\s\S]*?)<\/aside>/)?.[1] || ''
+    expect(sidebarTools).toMatch(/<!-- #ifdef MP-WEIXIN -->[\s\S]*class="sidebar-preferences compact"[\s\S]*i-carbon-language[\s\S]*i-carbon-sun[\s\S]*<!-- #endif -->/)
+    expect(sidebarTools).toMatch(/<!-- #ifdef H5 -->[\s\S]*class="sidebar-user"[\s\S]*account\.logout[\s\S]*<!-- #endif -->/)
+  })
 })
