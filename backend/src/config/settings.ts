@@ -30,7 +30,7 @@ export interface RuntimeSettings {
 
 export interface AppSettings extends RuntimeSettings {
   app_name: string; // 默认 "HelloAgents智能旅行助手"
-  app_version: string; // 默认 "2.0.8"
+  app_version: string; // 默认 "2.0.9"
   debug: boolean;
   host: string; // env HOST，默认 "0.0.0.0"
   port: number; // env PORT，默认 8000（生产部署用 7860）
@@ -254,7 +254,7 @@ function buildSettings(overrides: Partial<RuntimeSettings>): AppSettings {
   const settings: AppSettings = {
     // 应用基本配置
     app_name: readEnv("APP_NAME") ?? "HelloAgents智能旅行助手",
-    app_version: readEnv("APP_VERSION") ?? "2.0.8",
+    app_version: readEnv("APP_VERSION") ?? "2.0.9",
     debug: readEnvBool("DEBUG", false),
     // 服务器配置
     host: readEnv("HOST") ?? "0.0.0.0",
