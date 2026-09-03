@@ -35,6 +35,7 @@ import { defineConfig, loadEnv } from 'vite'
 import ViteRestart from 'vite-plugin-restart'
 import openDevTools from './scripts/open-dev-tools'
 import vitePluginEruda from './scripts/vite-plugin-eruda'
+import { markedWeixinCompatPlugin } from './src/build/marked-weixin-compat'
 import { createCopyNativeResourcesPlugin } from './vite-plugins/copy-native-resources'
 import syncManifestPlugin from './vite-plugins/sync-manifest-plugins'
 
@@ -86,6 +87,7 @@ export default defineConfig(({ command, mode }) => {
     envDir: './env', // 自定义env目录
     base: VITE_APP_PUBLIC_BASE,
     plugins: [
+      UNI_PLATFORM === 'mp-weixin' && markedWeixinCompatPlugin(),
       // UniXXX 需要在 Uni 之前引入
       UniLayouts(),
       UniPlatform(),
