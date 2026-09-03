@@ -1127,7 +1127,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
     if (request.method === "GET" && pathname === "/api/auth/miniprogram/web-session/public") return true;
     if (request.method === "GET" && /^\/api\/auth\/web\/challenges\/[^/]+\/status$/.test(pathname)) return true;
     if (request.method !== "POST") return false;
-    if (/^\/api\/auth\/web\/challenges(?:\/[^/]+\/(?:approve|exchange))?$/.test(pathname)) return true;
+    if (/^\/api\/auth\/web\/challenges(?:\/[^/]+\/(?:scan|approve|exchange))?$/.test(pathname)) return true;
     if ([
       "/api/admin/login",
       "/api/account/profile/avatar",
@@ -1457,6 +1457,24 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         return status(422, { detail: "网页登录凭证无效或已过期" });
       }
     })
+    .post("/api/auth/web/challenges/:challengeId/scan", ({ params, headers, status }) => {
+      if (!authentication) return status(503, { detail: "微信扫码登录暂不可用" });
+      try {
+        authentication.claimWebChallenge(sessionToken(headers), params.challengeId);
+        return { success: true as const };
+      } catch (error) {
+        if (!(error instanceof AuthenticationError)) throw error;
+        if (error.message === "请先选择微信头像完成登录") {
+          return status(401, { detail: error.message });
+        }
+        if (error.message === "登录挑战已由其他账号扫码") {
+          return status(409, { detail: error.message });
+        }
+        return status(422, { detail: error.message });
+      }
+    }, {
+      body: t.Object({}, { additionalProperties: false }),
+    })
     .post("/api/auth/web/challenges/:challengeId/approve", ({ params, headers, status }) => {
       if (!authentication) return status(503, { detail: "微信扫码登录暂不可用" });
       try {
@@ -1467,7 +1485,7 @@ export function createHttpRuntime(options: HttpRuntimeOptions) {
         if (error.message === "请先选择微信头像完成登录") {
           return status(401, { detail: error.message });
         }
-        if (error.message === "登录挑战已由其他账号确认") {
+        if (["登录挑战已由其他账号扫码", "登录挑战已由其他账号确认"].includes(error.message)) {
           return status(409, { detail: error.message });
         }
         return status(422, { detail: error.message });

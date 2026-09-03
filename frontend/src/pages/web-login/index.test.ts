@@ -1,12 +1,12 @@
 import type { VueWrapper } from '@vue/test-utils'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { Component } from 'vue'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const challengeId = 'b'.repeat(32)
 let loadPage: ((query: Record<string, string>) => void) | undefined
 const auth = { ready: true, restore: vi.fn(), user: { nickname: '微信用户' } }
-const mocks = vi.hoisted(() => ({ approve: vi.fn() }))
+const mocks = vi.hoisted(() => ({ approve: vi.fn(), scan: vi.fn() }))
 
 vi.mock('@dcloudio/uni-app', () => ({
   onLoad: vi.fn((handler: (query: Record<string, string>) => void) => {
@@ -15,6 +15,7 @@ vi.mock('@dcloudio/uni-app', () => ({
 }))
 vi.mock('@/services/v2', () => ({
   approveWebLoginChallenge: mocks.approve,
+  scanWebLoginChallenge: mocks.scan,
 }))
 vi.mock('@/store/auth', () => ({ useAuthStore: () => auth }))
 vi.mock('@/store/preferences', () => ({
@@ -34,6 +35,7 @@ vi.mock('vue-i18n', () => ({
       'login.confirmFailed': '确认失败，请重试',
       'login.confirmSuccess': '已确认，请返回电脑继续',
       'login.confirmBackHome': '返回首页',
+      'login.confirmClaimed': '该二维码已被其他微信账号扫码，请返回电脑刷新二维码。',
     } as Record<string, string>)[key] ?? key,
   }),
 }))
@@ -49,12 +51,17 @@ beforeAll(async () => {
   WebLoginPage = (await import('./index.vue')).default
 })
 
+beforeEach(() => {
+  mocks.scan.mockResolvedValue({ success: true })
+})
+
 afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
   auth.ready = true
   auth.restore.mockReset().mockResolvedValue(undefined)
   mocks.approve.mockReset()
+  mocks.scan.mockReset()
   vi.mocked(uni.getStorageSync).mockReturnValue(null)
 })
 
@@ -66,6 +73,14 @@ async function open(scene = challengeId): Promise<VueWrapper> {
 }
 
 describe('mini-program Web login confirmation', () => {
+  it('claims the challenge when an authenticated user opens the confirmation page', async () => {
+    const page = await open()
+
+    expect(mocks.scan).toHaveBeenCalledWith(challengeId)
+    expect(mocks.approve).not.toHaveBeenCalled()
+    expect(page.text()).toContain('确认后，电脑将登录为当前微信账号。')
+  })
+
   it('waits for explicit confirmation before approving', async () => {
     mocks.approve.mockResolvedValue({ success: true })
     const page = await open()
@@ -131,5 +146,13 @@ describe('mini-program Web login confirmation', () => {
     await page.get('.cancel-button').trigger('click')
     expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/index/index' })
     expect(mocks.approve).not.toHaveBeenCalled()
+  })
+
+  it('blocks confirmation when another WeChat account already scanned the code', async () => {
+    mocks.scan.mockRejectedValue(Object.assign(new Error('登录挑战已由其他账号扫码'), { status: 409 }))
+    const page = await open()
+
+    expect(page.text()).toContain('该二维码已被其他微信账号扫码，请返回电脑刷新二维码。')
+    expect(page.get('.confirm-button').attributes()).toHaveProperty('disabled')
   })
 })

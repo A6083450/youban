@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { TripTaskDetailDto, TripTaskStageDto } from '@youban/contracts'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import YoubanGenerationLoader from '@/components/YoubanGenerationLoader.vue'
+import { createAlternatingScrollFollower } from '@/features/chat/scroll-anchor'
 
 interface ProgressStep {
   key: string
@@ -25,6 +26,7 @@ const { t } = useI18n()
 const expanded = ref(true)
 const timelineTarget = ref('')
 const timelineBottomAnchors = ['generation-progress-bottom-a', 'generation-progress-bottom-b'] as const
+const followTimeline = createAlternatingScrollFollower(timelineTarget, timelineBottomAnchors)
 const collapsedCount = 2
 const stageOrder: TripTaskStageDto[] = [
   'submitted',
@@ -131,14 +133,6 @@ const eventSteps = computed<ProgressStep[]>(() => {
 
 const visibleSteps = computed(() => expanded.value ? eventSteps.value : eventSteps.value.slice(-collapsedCount))
 
-function followTimeline(): void {
-  void nextTick().then(() => {
-    timelineTarget.value = timelineTarget.value === timelineBottomAnchors[0]
-      ? timelineBottomAnchors[1]
-      : timelineBottomAnchors[0]
-  })
-}
-
 watch(
   () => [
     props.stage,
@@ -148,7 +142,7 @@ watch(
     props.details.at(-1)?.content || '',
     expanded.value,
   ],
-  followTimeline,
+  () => void followTimeline(),
   { immediate: true, flush: 'post' },
 )
 </script>

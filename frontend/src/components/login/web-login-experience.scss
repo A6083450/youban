@@ -1,0 +1,287 @@
+.web-login-experience {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--surface-page);
+  color: var(--text-primary);
+  isolation: isolate;
+}
+.login-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background:
+    linear-gradient(110deg, transparent 0 52%, color-mix(in srgb, var(--surface-soft) 62%, transparent) 100%),
+    var(--surface-page);
+  color: var(--status-success);
+}
+.contour {
+  position: absolute;
+  border: 1px solid var(--accent-primary);
+  border-radius: 50%;
+  opacity: 0.1;
+}
+.contour-left {
+  inset: 11% 52% 8% -15%;
+  animation: contour-left 14s ease-in-out infinite alternate;
+}
+.contour-right {
+  inset: 4% -14% 34% 58%;
+  border-color: var(--status-success);
+  animation: contour-right 17s ease-in-out infinite alternate;
+}
+.route-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.route-base,
+.route-flow {
+  fill: none;
+  stroke: currentColor;
+  vector-effect: non-scaling-stroke;
+}
+.route-base {
+  stroke-width: 1.5;
+  opacity: 0.22;
+}
+.route-flow {
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 4 38;
+  filter: drop-shadow(0 0 6px currentColor);
+  animation: route-flow 4s linear infinite;
+}
+.route-node {
+  fill: var(--accent-primary);
+  filter: drop-shadow(0 0 9px var(--accent-primary));
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: route-node 1.8s ease-in-out infinite;
+}
+.route-node:nth-of-type(2) {
+  animation-delay: 0.55s;
+}
+.route-node:nth-of-type(3) {
+  animation-delay: 1.1s;
+}
+.login-toolbar {
+  position: absolute;
+  top: 22px;
+  right: 26px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preference-control {
+  display: flex;
+  padding: 3px;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
+  backdrop-filter: blur(14px);
+}
+.preference-control button,
+.motion-toggle {
+  display: flex;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  gap: 6px;
+  line-height: 34px;
+}
+.preference-control button.active {
+  background: var(--surface-elevated);
+  color: var(--accent-strong);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+.control-icon {
+  width: 17px;
+  height: 17px;
+  margin: 0 4px 0 7px;
+  color: var(--accent-strong);
+  font-size: 17px;
+}
+.skin-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.skin-swatch.warm {
+  background: #d97757;
+}
+.skin-swatch.clear {
+  background: #3b9bb4;
+}
+.motion-toggle {
+  width: 40px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
+  color: var(--accent-strong);
+  font-size: 17px;
+  backdrop-filter: blur(14px);
+}
+.login-content {
+  display: grid;
+  box-sizing: border-box;
+  width: min(1180px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 104px 36px 56px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 88px;
+}
+.journey-copy {
+  max-width: 560px;
+}
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-logo {
+  width: 48px;
+  height: 48px;
+}
+.brand-name {
+  font-size: 25px;
+  font-weight: 750;
+}
+.journey-title {
+  max-width: 520px;
+  margin-top: 54px;
+  font-size: 54px;
+  font-weight: 760;
+  line-height: 1.16;
+}
+.journey-description {
+  max-width: 480px;
+  margin-top: 22px;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.75;
+}
+.journey-steps {
+  display: flex;
+  margin-top: 36px;
+  gap: 28px;
+}
+.journey-step {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  gap: 8px;
+}
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--status-success);
+  border-radius: 50%;
+}
+.journey-step.active .step-dot {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+}
+.login-panel {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--text-primary) 13%, transparent);
+  backdrop-filter: blur(18px);
+  text-align: center;
+}
+.panel-status {
+  min-height: 22px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.motion-paused .contour,
+.motion-paused .route-flow,
+.motion-paused .route-node {
+  animation-play-state: paused;
+}
+button::after {
+  border: 0;
+}
+@keyframes route-flow {
+  to {
+    stroke-dashoffset: -168;
+  }
+}
+@keyframes route-node {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+}
+@keyframes contour-left {
+  from {
+    transform: translate3d(-1%, 0, 0) rotate(11deg);
+  }
+  to {
+    transform: translate3d(2%, -2%, 0) rotate(16deg);
+  }
+}
+@keyframes contour-right {
+  from {
+    transform: translate3d(1%, -1%, 0) rotate(-20deg);
+  }
+  to {
+    transform: translate3d(-2%, 2%, 0) rotate(-14deg);
+  }
+}
+@media (max-width: 760px) {
+  .login-toolbar {
+    position: relative;
+    top: auto;
+    right: auto;
+    padding: 14px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .login-content {
+    min-height: auto;
+    padding: 38px 22px 42px;
+    grid-template-columns: 1fr;
+    gap: 42px;
+  }
+  .journey-title {
+    margin-top: 38px;
+    font-size: 38px;
+  }
+  .journey-steps {
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .login-panel {
+    width: min(100%, 360px);
+    margin: 0 auto;
+    padding: 18px;
+  }
+}

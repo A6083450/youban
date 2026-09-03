@@ -15,6 +15,7 @@ describe('pages configuration', () => {
 
   it('keeps the H5-only admin route out of the mini-program build', () => {
     const miniProgramPages = pageDefinitionsForPlatform('mp-weixin').map(page => page.path)
+    expect(miniProgramPages[0]).toBe('pages/index/index')
     expect(miniProgramPages).not.toContain('pages/admin/index')
     expect(miniProgramPages).toContain('pages/web-login/index')
     expect(pageDefinitionsForPlatform('h5').map(page => page.path)).not.toContain('pages/web-login/index')
@@ -29,6 +30,12 @@ describe('pages configuration', () => {
       { path: 'pages/share/index' },
     ]
     expect(sortPageDefinitions(scanned).map(page => page.path)).toEqual([
+      'pages/index/index',
+      'pages/login/index',
+      'pages/share/index',
+      'pages/admin/index',
+    ])
+    expect(sortPageDefinitions(scanned, 'mp-weixin').map(page => page.path)).toEqual([
       'pages/index/index',
       'pages/login/index',
       'pages/share/index',

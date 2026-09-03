@@ -97,7 +97,7 @@ export class AuthenticationService {
     return { challengeId, browserVerifier, expiresAt };
   }
 
-  approveWebChallenge(token: string, challengeId: string): void {
+  claimWebChallenge(token: string, challengeId: string): void {
     const user = this.authenticateReady(token, "miniprogram");
     if (!user) throw new AuthenticationError("请先选择微信头像完成登录");
     this.database.raw.transaction(() => {
@@ -107,12 +107,36 @@ export class AuthenticationService {
       }
       if (challenge.exchanged_at) throw new AuthenticationError("登录挑战已兑换");
       if (challenge.approved_user_id === user.user_id) return;
-      if (challenge.approved_user_id) throw new AuthenticationError("登录挑战已由其他账号确认");
+      if (challenge.approved_user_id) throw new AuthenticationError("登录挑战已由其他账号扫码");
+      const claimed = this.database.raw.query(`
+        UPDATE web_login_challenges SET approved_user_id = ?
+        WHERE challenge_id = ? AND approved_user_id IS NULL
+      `).run(user.user_id, challengeId.trim());
+      if (claimed.changes === 0) throw new AuthenticationError("登录挑战已由其他账号扫码");
+      this.audit("web_challenge_scan", "success", user.user_id, challengeId.trim());
+    })();
+  }
+
+  approveWebChallenge(token: string, challengeId: string): void {
+    const user = this.authenticateReady(token, "miniprogram");
+    if (!user) throw new AuthenticationError("请先选择微信头像完成登录");
+    this.database.raw.transaction(() => {
+      const challenge = this.challenge(challengeId);
+      if (!challenge || Date.parse(challenge.expires_at) <= this.now()) {
+        throw new AuthenticationError("登录挑战已过期");
+      }
+      if (challenge.exchanged_at) throw new AuthenticationError("登录挑战已兑换");
+      if (challenge.approved_user_id && challenge.approved_user_id !== user.user_id) {
+        throw new AuthenticationError(challenge.approved_at
+          ? "登录挑战已由其他账号确认"
+          : "登录挑战已由其他账号扫码");
+      }
+      if (challenge.approved_at) return;
       this.database.raw.query(`
         UPDATE web_login_challenges
         SET approved_user_id = ?, approved_at = ?
-        WHERE challenge_id = ? AND approved_user_id IS NULL
-      `).run(user.user_id, this.nowIso(), challengeId.trim());
+        WHERE challenge_id = ? AND (approved_user_id IS NULL OR approved_user_id = ?)
+      `).run(user.user_id, this.nowIso(), challengeId.trim(), user.user_id);
       this.audit("web_challenge_approve", "success", user.user_id, challengeId.trim());
     })();
   }
@@ -120,11 +144,12 @@ export class AuthenticationService {
   getWebChallengeStatus(
     challengeId: string,
     browserVerifier: string,
-  ): { status: "pending" | "approved" | "expired" | "exchanged" } {
+  ): { status: "pending" | "scanned" | "approved" | "expired" | "exchanged" } {
     const challenge = this.verifiedChallenge(challengeId, browserVerifier);
     if (Date.parse(challenge.expires_at) <= this.now()) return { status: "expired" };
     if (challenge.exchanged_at) return { status: "exchanged" };
-    return { status: challenge.approved_at ? "approved" : "pending" };
+    if (challenge.approved_at) return { status: "approved" };
+    return { status: challenge.approved_user_id ? "scanned" : "pending" };
   }
 
   exchangeWebChallenge(challengeId: string, browserVerifier: string): { user: UserRecord; token: string } {

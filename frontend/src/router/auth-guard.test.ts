@@ -18,8 +18,11 @@ describe('authentication route guard', () => {
     expect(isPublicRoute('/pages/web-login/index?scene=challenge')).toBe(true)
   })
 
-  it('redirects private routes until a complete profile exists', () => {
+  it('allows anonymous home only when the caller enables the mini-program shell', () => {
+    expect(isPublicRoute('/pages/index/index')).toBe(false)
+    expect(isPublicRoute('/pages/index/index', true)).toBe(true)
     expect(authRouteDecision('/pages/index/index', false)).toBe('login')
+    expect(authRouteDecision('/pages/index/index', false, true)).toBe('allow')
     expect(authRouteDecision('/pages/plan/index?id=plan-1', false)).toBe('login')
     expect(authRouteDecision('/pages/index/index', true)).toBe('allow')
   })

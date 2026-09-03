@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
 import { navigateToInterceptor } from '@/router/interceptor'
+import { currentPlatform } from '@/platform/auth'
 import { authRouteDecision, HOME_ROUTE, isPublicRoute, LOGIN_ROUTE } from '@/router/auth-guard'
 import { h5LaunchUrl, normalizedPagePath, waitForInitialPage } from '@/router/launch-route'
 import { useAuthStore } from '@/store/auth'
@@ -40,20 +41,25 @@ async function synchronizeLaunchRoute(options: typeof latestShowOptions): Promis
   launchUrl = h5LaunchUrl(window.location.hash, stagedLaunchUrl) || launchUrl
   // #endif
   const path = normalizedPagePath(launchUrl) || HOME_ROUTE
+  const allowAnonymousHome = currentPlatform() === 'mp-weixin'
   const auth = useAuthStore()
-  if (!isPublicRoute(path))
+  if (!isPublicRoute(path, allowAnonymousHome))
     await auth.restore()
   await preferences.sync()
-  const decision = authRouteDecision(path, auth.ready)
+  const currentPath = normalizedPagePath(getCurrentPages().at(-1)?.route)
+  const decision = authRouteDecision(path, auth.ready, allowAnonymousHome)
   if (decision === 'login') {
-    await relaunch(LOGIN_ROUTE)
+    if (currentPath !== LOGIN_ROUTE)
+      await relaunch(LOGIN_ROUTE)
     return
   }
   if (decision === 'home') {
-    await relaunch(HOME_ROUTE)
+    if (currentPath !== HOME_ROUTE)
+      await relaunch(HOME_ROUTE)
     return
   }
-  const currentPath = normalizedPagePath(getCurrentPages().at(-1)?.route)
+  if (allowAnonymousHome && path === HOME_ROUTE && currentPath === LOGIN_ROUTE)
+    return
   if (currentPath !== path) {
     await relaunch(launchUrl)
     return

@@ -4,7 +4,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setStoredValue, StorageKeys } from '@/platform/storage'
 import { HOME_ROUTE } from '@/router/auth-guard'
-import { approveWebLoginChallenge } from '@/services/v2'
+import { approveWebLoginChallenge, scanWebLoginChallenge } from '@/services/v2'
 import { useAuthStore } from '@/store/auth'
 import { usePreferencesStore } from '@/store/preferences'
 
@@ -15,7 +15,7 @@ definePage({
   },
 })
 
-type PageState = 'ready' | 'invalid' | 'submitting' | 'success' | 'expired' | 'failed'
+type PageState = 'ready' | 'claimed' | 'invalid' | 'submitting' | 'success' | 'expired' | 'failed'
 
 const auth = useAuthStore()
 const preferences = usePreferencesStore()
@@ -35,7 +35,14 @@ const message = computed(() => ({
   success: t('login.confirmSuccess'),
   expired: t('login.confirmExpired'),
   failed: t('login.confirmFailed'),
+  claimed: t('login.confirmClaimed'),
 })[state.value])
+
+function failureState(error: unknown): Extract<PageState, 'claimed' | 'expired' | 'failed'> {
+  if ((error as { status?: unknown } | null)?.status === 409)
+    return 'claimed'
+  return error instanceof Error && error.message.includes('过期') ? 'expired' : 'failed'
+}
 
 function normalizedScene(value: unknown): string {
   try {
@@ -51,7 +58,7 @@ function clearPendingChallenge(): void {
 }
 
 async function confirmLogin(): Promise<void> {
-  if (!valid.value || busy.value || state.value === 'success')
+  if (!valid.value || busy.value || ['claimed', 'success'].includes(state.value))
     return
   state.value = 'submitting'
   try {
@@ -67,7 +74,20 @@ async function confirmLogin(): Promise<void> {
   }
   catch (error) {
     clearPendingChallenge()
-    state.value = error instanceof Error && error.message.includes('过期') ? 'expired' : 'failed'
+    state.value = failureState(error)
+  }
+}
+
+async function claimChallenge(): Promise<void> {
+  if (!valid.value || !auth.ready)
+    return
+  try {
+    await auth.restore(true)
+    if (auth.ready)
+      await scanWebLoginChallenge(challengeId.value)
+  }
+  catch (error) {
+    state.value = failureState(error)
   }
 }
 
@@ -81,6 +101,8 @@ onLoad((query) => {
   state.value = valid.value ? 'ready' : 'invalid'
   if (!valid.value)
     clearPendingChallenge()
+  else
+    void claimChallenge()
 })
 </script>
 
@@ -99,7 +121,7 @@ onLoad((query) => {
       <button
         class="confirm-button"
         :loading="busy"
-        :disabled="!valid || busy || state === 'success'"
+        :disabled="!valid || busy || ['claimed', 'success'].includes(state)"
         @click="confirmLogin"
       >
         {{ confirmLabel }}

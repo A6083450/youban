@@ -98,4 +98,40 @@ describe("local WeChat authentication mode", () => {
       "YOUBAN_DEV_WECHAT_AUTH cannot be enabled in production",
     );
   });
+
+  it("refuses an invalid mini-program code environment", async () => {
+    const child = spawnBackend({
+      AUTH_PEPPER: "x".repeat(32),
+      NODE_ENV: "production",
+      WECHAT_APP_SECRET: "server-secret",
+      WECHAT_MINI_PROGRAM_ENV_VERSION: "invalid",
+    });
+    const exitCode = await Promise.race([
+      child.exited,
+      Bun.sleep(3_000).then(() => null),
+    ]);
+    if (exitCode === null) child.kill("SIGTERM");
+    expect(exitCode).not.toBeNull();
+    expect(await streamText(child.stderr)).toContain(
+      "WECHAT_MINI_PROGRAM_ENV_VERSION must be release, trial, or develop",
+    );
+  });
+
+  it("refuses an invalid mini-program page check setting", async () => {
+    const child = spawnBackend({
+      AUTH_PEPPER: "x".repeat(32),
+      NODE_ENV: "production",
+      WECHAT_APP_SECRET: "server-secret",
+      WECHAT_MINI_PROGRAM_CHECK_PATH: "invalid",
+    });
+    const exitCode = await Promise.race([
+      child.exited,
+      Bun.sleep(3_000).then(() => null),
+    ]);
+    if (exitCode === null) child.kill("SIGTERM");
+    expect(exitCode).not.toBeNull();
+    expect(await streamText(child.stderr)).toContain(
+      "WECHAT_MINI_PROGRAM_CHECK_PATH must be true or false",
+    );
+  });
 });

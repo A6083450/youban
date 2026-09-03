@@ -1,0 +1,134 @@
+.login-page {
+  box-sizing: border-box;
+  min-height: 100vh;
+  background: var(--surface-page);
+  color: var(--text-primary);
+}
+.mini-login-page {
+  display: flex;
+  flex-direction: column;
+  padding: 112rpx 44rpx calc(env(safe-area-inset-bottom) + 24rpx);
+}
+.login-main {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 680rpx;
+  margin: 0 auto;
+  text-align: left;
+}
+.mini-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 24rpx;
+}
+.mini-brand-logo-frame {
+  width: 108rpx;
+  height: 108rpx;
+  flex: none;
+  overflow: hidden;
+}
+.mini-brand-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mini-brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5rpx;
+}
+.mini-brand-name {
+  color: var(--accent-strong);
+  font-size: 28rpx;
+  font-weight: 720;
+  line-height: 1.35;
+}
+.mini-agent-label {
+  color: var(--text-secondary);
+  font-size: 22rpx;
+  line-height: 1.45;
+}
+.login-title {
+  max-width: 620rpx;
+  margin-top: 96rpx;
+  font-size: 48rpx;
+  font-weight: 720;
+  line-height: 1.3;
+}
+.login-description {
+  max-width: 590rpx;
+  margin-top: 22rpx;
+  color: var(--text-secondary);
+  font-size: 27rpx;
+  line-height: 1.7;
+}
+.mini-agent-callout {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 64rpx;
+  padding: 26rpx 30rpx;
+  border-left: 6rpx solid var(--accent-primary);
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: 24rpx;
+  line-height: 1.65;
+}
+.mini-login-button {
+  display: flex;
+  width: 100%;
+  height: 96rpx;
+  margin: 0;
+  margin-top: auto;
+  padding: 0 28rpx;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10rpx;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 29rpx;
+  font-weight: 680;
+  gap: 16rpx;
+  line-height: 96rpx;
+}
+.wechat-login-mark {
+  display: flex;
+  width: 44rpx;
+  height: 44rpx;
+  align-items: center;
+  justify-content: center;
+  border: 2rpx solid rgba(255, 255, 255, 0.72);
+  border-radius: 10rpx;
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 44rpx;
+}
+.mini-login-button[disabled] {
+  opacity: 0.58;
+}
+.login-note {
+  width: 100%;
+  margin-top: 20rpx;
+  color: var(--text-secondary);
+  font-size: 23rpx;
+  line-height: 1.65;
+  text-align: center;
+}
+.privacy-link {
+  width: 100%;
+  height: 72rpx;
+  margin: 10rpx 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 23rpx;
+  line-height: 72rpx;
+  text-align: center;
+}
+button::after {
+  border: 0;
+}

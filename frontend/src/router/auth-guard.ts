@@ -16,8 +16,10 @@ function pathname(route: string): string {
   return path === '/' ? HOME_ROUTE : path
 }
 
-export function isPublicRoute(route: string): boolean {
+export function isPublicRoute(route: string, allowAnonymousHome = false): boolean {
   const path = pathname(route)
+  if (allowAnonymousHome && path === HOME_ROUTE)
+    return true
   return PUBLIC_ROUTES.some(publicPath => path === publicPath || path.startsWith(`${publicPath}/`))
 }
 
@@ -27,11 +29,15 @@ export function isLoginReady(user: UserInfoDto | null | undefined): user is User
 
 export type AuthRouteDecision = 'allow' | 'home' | 'login'
 
-export function authRouteDecision(route: string, authenticated: boolean): AuthRouteDecision {
+export function authRouteDecision(
+  route: string,
+  authenticated: boolean,
+  allowAnonymousHome = false,
+): AuthRouteDecision {
   const path = pathname(route)
   if (path === LOGIN_ROUTE && authenticated)
     return 'home'
-  if (isPublicRoute(path))
+  if (isPublicRoute(path, allowAnonymousHome))
     return 'allow'
   return authenticated ? 'allow' : 'login'
 }

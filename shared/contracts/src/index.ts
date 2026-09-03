@@ -10,6 +10,7 @@ export const ApiV2Routes = {
   authWechatLogin: '/api/v2/auth/wechat/login',
   authWebChallengeCreate: '/api/v2/auth/web/challenges',
   authWebChallengeStatus: '/api/v2/auth/web/challenges/:challengeId/status',
+  authWebChallengeScan: '/api/v2/auth/web/challenges/:challengeId/scan',
   authWebChallengeApprove: '/api/v2/auth/web/challenges/:challengeId/approve',
   authWebChallengeExchange: '/api/v2/auth/web/challenges/:challengeId/exchange',
   authPreferences: '/api/v2/auth/preferences',
@@ -91,6 +92,7 @@ export const WebLoginChallengeCreateSchema = Type.Object({
 export const WebLoginChallengeStatusSchema = Type.Object({
   status: Type.Union([
     Type.Literal('pending'),
+    Type.Literal('scanned'),
     Type.Literal('approved'),
     Type.Literal('expired'),
     Type.Literal('exchanged'),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mobileActionsRightCss, safeAreaTopCss } from './safe-area'
+import { mobileActionsRightCss, mobileHeaderMetrics, safeAreaTopCss } from './safe-area'
 
 describe('mobile safe area', () => {
   it('keeps the runtime status bar inset in CSS pixels', () => {
@@ -11,5 +11,21 @@ describe('mobile safe area', () => {
   it('reserves the native WeChat menu capsule on the right', () => {
     expect(mobileActionsRightCss(390, 279)).toBe('119px')
     expect(mobileActionsRightCss(390, undefined)).toBe('12px')
+  })
+
+  it('aligns the custom header to the native capsule vertical center', () => {
+    expect(mobileHeaderMetrics(390, 47, {
+      left: 279,
+      top: 48,
+      height: 32,
+      bottom: 80,
+    })).toEqual({
+      safeTop: '47px',
+      actionsRight: '119px',
+      menuTop: '48px',
+      menuHeight: '32px',
+      menuCenter: '64px',
+      headerHeight: '99px',
+    })
   })
 })

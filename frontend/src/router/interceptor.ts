@@ -4,6 +4,7 @@
  * 黑、白名单的配置，请看 config.ts 文件， EXCLUDE_LOGIN_PATH_LIST
  */
 import { getLastPage, parseUrlToObj } from '@/utils/index'
+import { currentPlatform } from '@/platform/auth'
 import { authRouteDecision, HOME_ROUTE, LOGIN_ROUTE } from './auth-guard'
 import { useAuthStore } from '@/store/auth'
 
@@ -45,7 +46,7 @@ export const navigateToInterceptor = {
     //   path = url
     // }
 
-    const decision = authRouteDecision(path, useAuthStore().ready)
+    const decision = authRouteDecision(path, useAuthStore().ready, currentPlatform() === 'mp-weixin')
     if (decision === 'login') {
       uni.reLaunch({ url: LOGIN_ROUTE })
       return false

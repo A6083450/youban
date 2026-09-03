@@ -105,7 +105,7 @@ export default defineConfig(({ command, mode }) => {
           context.pageMetaData.splice(
             0,
             context.pageMetaData.length,
-            ...sortPageDefinitions(context.pageMetaData),
+            ...sortPageDefinitions(context.pageMetaData, UNI_PLATFORM),
           )
         },
         // pages 目录为 src/pages，分包目录不能配置在pages目录下！！

@@ -13,7 +13,26 @@ import {
 function runtimeAuthentication() {
   const appId = process.env.WECHAT_APP_ID?.trim() || "wx42ddc076b365bf0d";
   const appSecret = process.env.WECHAT_APP_SECRET?.trim() ?? "";
-  const miniProgramCode = appSecret ? new WechatMiniProgramCode({ appId, appSecret }) : undefined;
+  const miniProgramEnvVersion = process.env.WECHAT_MINI_PROGRAM_ENV_VERSION?.trim() || "release";
+  if (
+    miniProgramEnvVersion !== "release"
+    && miniProgramEnvVersion !== "trial"
+    && miniProgramEnvVersion !== "develop"
+  ) {
+    throw new Error("WECHAT_MINI_PROGRAM_ENV_VERSION must be release, trial, or develop");
+  }
+  const miniProgramCheckPath = process.env.WECHAT_MINI_PROGRAM_CHECK_PATH?.trim() || "true";
+  if (miniProgramCheckPath !== "true" && miniProgramCheckPath !== "false") {
+    throw new Error("WECHAT_MINI_PROGRAM_CHECK_PATH must be true or false");
+  }
+  const miniProgramCode = appSecret
+    ? new WechatMiniProgramCode({
+        appId,
+        appSecret,
+        envVersion: miniProgramEnvVersion,
+        checkPath: miniProgramCheckPath === "true",
+      })
+    : undefined;
   const developmentMode = process.env.YOUBAN_DEV_WECHAT_AUTH?.trim() === "1";
   if (developmentMode) {
     if (process.env.NODE_ENV?.trim() === "production") {

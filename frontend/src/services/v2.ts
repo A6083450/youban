@@ -218,6 +218,13 @@ export function getWebLoginChallengeStatus(challengeId: string): Promise<WebLogi
   return apiRequest(fillRoute(ApiV2Routes.authWebChallengeStatus, 'challengeId', challengeId), { public: true })
 }
 
+export function scanWebLoginChallenge(challengeId: string): Promise<{ success: true }> {
+  return apiRequest(fillRoute(ApiV2Routes.authWebChallengeScan, 'challengeId', challengeId), {
+    method: 'POST',
+    data: {},
+  })
+}
+
 export function approveWebLoginChallenge(challengeId: string): Promise<{ success: true }> {
   return apiRequest(fillRoute(ApiV2Routes.authWebChallengeApprove, 'challengeId', challengeId), {
     method: 'POST',

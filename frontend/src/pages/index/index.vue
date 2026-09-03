@@ -14,13 +14,19 @@ import type {
   UserSkinDto,
 } from '@youban/contracts'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChatMessageContent from '@/components/ChatMessageContent.vue'
 import YoubanGenerationProgress from '@/components/YoubanGenerationProgress.vue'
+// #ifdef MP-WEIXIN
+import WechatLoginSheet from '@/components/login/WechatLoginSheet.vue'
+// #endif
 import { createReactiveMessage } from '@/features/chat/reactive-message'
+import { createAlternatingScrollFollower } from '@/features/chat/scroll-anchor'
 import { createTypewriter } from '@/features/chat/typewriter'
-import { mobileActionsRightCss, safeAreaTopCss } from '@/features/layout/safe-area'
+import { useChatKeyboardViewport } from '@/features/layout/chat-keyboard-viewport'
+import type { MobileMenuButtonRect } from '@/features/layout/safe-area'
+import { mobileHeaderMetrics } from '@/features/layout/safe-area'
 import { localDateText, sidebarPlanBadge } from '@/features/sidebar/record-status'
 import {
   buildTripPlanRequest,
@@ -30,6 +36,7 @@ import {
 } from '@/features/planning/state'
 import { getApiBaseUrl } from '@/http/client'
 import { getStoredValue, setStoredValue, StorageKeys } from '@/platform/storage'
+import { HOME_ROUTE, LOGIN_ROUTE } from '@/router/auth-guard'
 import { subscribeTaskEvents } from '@/platform/task-events'
 import type { TaskEventSubscription } from '@/platform/task-events'
 import {
@@ -102,6 +109,8 @@ const records = ref<ConversationRecordDto[]>([])
 const recordsLoading = ref(false)
 const input = ref('')
 const busy = ref(false)
+const loginSheetOpen = ref(false)
+const pendingLoginPrompt = ref('')
 const drawerOpen = ref(false)
 const shareToolOpen = ref(false)
 const shareCodeInput = ref('')
@@ -117,6 +126,12 @@ const pendingDraft = ref<ParsedTripDraftDto | null>(null)
 const readinessToken = ref('')
 const scrollTarget = ref('')
 const chatBottomAnchors = ['chat-bottom-a', 'chat-bottom-b'] as const
+const followLatest = createAlternatingScrollFollower(scrollTarget, chatBottomAnchors)
+const {
+  style: chatViewportStyle,
+  update: updateKeyboardViewport,
+  reset: resetKeyboardViewport,
+} = useChatKeyboardViewport(() => void followLatest())
 const activeTask = ref<ActiveTaskRecord | null>(getStoredValue<ActiveTaskRecord>(StorageKeys.activeTask))
 const today = localDateText()
 let taskSubscription: TaskEventSubscription | null = null
@@ -124,19 +139,23 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined
 let generationFinished = false
 let persistQueue = Promise.resolve()
 
-function getMenuButtonLeft(): number | undefined {
+function getMenuButtonRect(): MobileMenuButtonRect | undefined {
   // #ifdef MP-WEIXIN
-  return uni.getMenuButtonBoundingClientRect().left
+  return uni.getMenuButtonBoundingClientRect()
   // #endif
   // #ifndef MP-WEIXIN
   return undefined
   // #endif
 }
 
-const menuButtonLeft = getMenuButtonLeft()
+const headerMetrics = mobileHeaderMetrics(systemInfo?.windowWidth, safeAreaInsets?.top, getMenuButtonRect())
 const mobileHeaderStyle = {
-  '--mobile-safe-top': safeAreaTopCss(safeAreaInsets?.top),
-  '--mobile-actions-right': mobileActionsRightCss(systemInfo?.windowWidth, menuButtonLeft),
+  '--mobile-safe-top': headerMetrics.safeTop,
+  '--mobile-actions-right': headerMetrics.actionsRight,
+  '--mobile-menu-top': headerMetrics.menuTop,
+  '--mobile-menu-height': headerMetrics.menuHeight,
+  '--mobile-menu-center': headerMetrics.menuCenter,
+  '--mobile-header-height': headerMetrics.headerHeight,
 }
 
 const userAvatar = computed(() => {
@@ -226,13 +245,6 @@ function pushItem(item: Omit<ChatItem, 'id'>): ChatItem {
   messages.value.push(created)
   void followLatest()
   return created
-}
-
-async function followLatest(): Promise<void> {
-  await nextTick()
-  scrollTarget.value = scrollTarget.value === chatBottomAnchors[0]
-    ? chatBottomAnchors[1]
-    : chatBottomAnchors[0]
 }
 
 function history(): ChatMessageDto[] {
@@ -501,6 +513,17 @@ async function sendMessage(value = input.value): Promise<void> {
   const text = value.trim()
   if (!text || busy.value)
     return
+  if (!auth.ready) {
+    // #ifdef MP-WEIXIN
+    pendingLoginPrompt.value = text
+    loginSheetOpen.value = true
+    return
+    // #endif
+    // #ifndef MP-WEIXIN
+    uni.reLaunch({ url: LOGIN_ROUTE })
+    // #endif
+    return
+  }
   input.value = ''
   pushItem({ role: 'user', kind: 'text', text })
   busy.value = true
@@ -524,6 +547,19 @@ async function sendMessage(value = input.value): Promise<void> {
   finally {
     busy.value = false
   }
+}
+
+async function handleLoginSuccess(): Promise<void> {
+  const text = pendingLoginPrompt.value
+  pendingLoginPrompt.value = ''
+  loginSheetOpen.value = false
+  if (text)
+    await sendMessage(text)
+}
+
+function closeLoginSheet(): void {
+  pendingLoginPrompt.value = ''
+  loginSheetOpen.value = false
 }
 
 function confirmDraft(item: ChatItem): void {
@@ -650,17 +686,22 @@ function resumeActiveTask(): void {
 
 async function logout(): Promise<void> {
   await auth.logout()
-  uni.reLaunch({ url: '/pages/login/index' })
+  uni.reLaunch({ url: HOME_ROUTE })
 }
 
 onLoad((query) => {
   void preferences.sync()
-  void loadRecords()
-  const selectedConversation = typeof query?.conversation === 'string' ? query.conversation : ''
-  if (selectedConversation)
-    void openConversation(selectedConversation)
-  if (activeTask.value)
-    resumeActiveTask()
+  if (auth.ready) {
+    void loadRecords()
+    const selectedConversation = typeof query?.conversation === 'string' ? query.conversation : ''
+    if (selectedConversation)
+      void openConversation(selectedConversation)
+    if (activeTask.value)
+      resumeActiveTask()
+  }
+  else {
+    activeTask.value = null
+  }
 })
 
 onUnload(() => {
@@ -669,9 +710,9 @@ onUnload(() => {
 </script>
 
 <template>
-  <view class="planning-shell" :class="preferences.themeClass">
+  <view class="planning-shell" :class="preferences.themeClass" :style="chatViewportStyle">
     <view v-if="drawerOpen" class="drawer-mask" @click="drawerOpen = false" />
-    <aside class="sidebar" :class="{ open: drawerOpen }">
+    <aside class="sidebar" :class="{ open: drawerOpen }" :style="mobileHeaderStyle">
       <view class="sidebar-brand">
         {{ t('app.brand') }}
       </view>
@@ -904,11 +945,11 @@ onUnload(() => {
             <text class="mobile-add-symbol">+</text>
           </button>
           <!-- #endif -->
-          <button class="mobile-account-trigger" :aria-label="auth.user?.nickname" @click="mobileAccountMenuOpen = !mobileAccountMenuOpen">
+          <button v-if="auth.ready" class="mobile-account-trigger" :aria-label="auth.user?.nickname" @click="mobileAccountMenuOpen = !mobileAccountMenuOpen">
             <image v-if="userAvatar" :src="userAvatar" mode="aspectFill" />
           </button>
         </view>
-        <view v-if="mobileAccountMenuOpen" class="mobile-account-menu">
+        <view v-if="auth.ready && mobileAccountMenuOpen" class="mobile-account-menu">
           <button @click="openMemories">
             <wd-icon name="list" size="15px" />{{ t('user.myMemories') }}
           </button>
@@ -923,7 +964,7 @@ onUnload(() => {
         scroll-y
         class="chat-scroll"
         :scroll-into-view="scrollTarget"
-        :scroll-with-animation="true"
+        :scroll-with-animation="!busy"
       >
         <view class="thread">
           <view
@@ -934,11 +975,12 @@ onUnload(() => {
             :class="item.role"
           >
             <view v-if="item.role === 'assistant'" class="message-avatar assistant">
-              游
+              <image class="message-avatar-image assistant-logo" src="/static/brand-logo.png" mode="aspectFit" />
             </view>
             <view class="message-column" :class="item.role">
               <text class="message-name">{{ item.role === 'assistant' ? t('chatHome.assistantName') : t('chatHome.userName') }}</text>
               <view class="message-bubble" :class="[item.role, item.kind]">
+                <view class="message-notch" />
                 <YoubanGenerationProgress
                   v-if="item.kind === 'progress'"
                   :message="item.text"
@@ -966,7 +1008,8 @@ onUnload(() => {
               </view>
             </view>
             <view v-if="item.role === 'user'" class="message-avatar user">
-              {{ t('chatHome.userName') }}
+              <image v-if="userAvatar" class="message-avatar-image" :src="userAvatar" mode="aspectFill" />
+              <text v-else class="message-avatar-fallback">{{ t('chatHome.userName') }}</text>
             </view>
           </view>
           <view :id="chatBottomAnchors[0]" class="chat-bottom-anchor" />
@@ -995,8 +1038,13 @@ onUnload(() => {
             class="home-prompt-input"
             :disabled="busy"
             :maxlength="500"
+            :adjust-position="false"
+            :cursor-spacing="0"
             confirm-type="send"
             :placeholder="t('composer.homePlaceholder')"
+            @focus="followLatest()"
+            @blur="resetKeyboardViewport"
+            @keyboardheightchange="updateKeyboardViewport"
             @confirm="sendMessage()"
           >
           <textarea
@@ -1006,8 +1054,14 @@ onUnload(() => {
             :disabled="busy"
             :maxlength="500"
             :auto-height="true"
+            :adjust-position="false"
+            :cursor-spacing="0"
+            :show-confirm-bar="false"
             confirm-type="send"
             :placeholder="t('composer.placeholder')"
+            @focus="followLatest()"
+            @blur="resetKeyboardViewport"
+            @keyboardheightchange="updateKeyboardViewport"
             @confirm="sendMessage()"
           />
           <button
@@ -1041,6 +1095,14 @@ onUnload(() => {
         </view>
       </view>
     </main>
+    <!-- #ifdef MP-WEIXIN -->
+    <WechatLoginSheet
+      :open="loginSheetOpen"
+      :prompt="pendingLoginPrompt"
+      @authenticated="handleLoginSuccess"
+      @close="closeLoginSheet"
+    />
+    <!-- #endif -->
   </view>
 </template>
 
@@ -1048,8 +1110,8 @@ onUnload(() => {
 .planning-shell {
   display: flex;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh - var(--chat-keyboard-height, 0px));
+  height: calc(100dvh - var(--chat-keyboard-height, 0px));
   overflow: hidden;
   background: var(--surface-page);
 }
@@ -1604,8 +1666,10 @@ onUnload(() => {
 }
 .chat-home {
   display: flex;
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   flex: 1;
   flex-direction: column;
   background: var(--surface-page);
@@ -1642,21 +1706,40 @@ onUnload(() => {
 .message-avatar {
   display: flex;
   flex: 0 0 34px;
+  box-sizing: border-box;
   align-items: center;
   justify-content: center;
   width: 34px;
   height: 34px;
   margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(217, 119, 87, 0.28);
   border-radius: 50%;
+  background: var(--surface-elevated);
+  box-shadow: 0 3px 10px rgba(61, 50, 41, 0.1);
   font-size: 12px;
 }
 .message-avatar.assistant {
-  background: var(--accent-primary);
-  color: #fff;
+  padding: 6px;
+  background: #fffaf6;
 }
 .message-avatar.user {
+  border: 1px solid #fff;
   background: rgba(61, 50, 41, 0.08);
   color: var(--text-secondary);
+}
+.message-avatar-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.assistant-logo {
+  border-radius: 0;
+}
+.message-avatar-fallback {
+  font-size: 11px;
+  font-weight: 650;
 }
 .message-column {
   display: flex;
@@ -1676,6 +1759,9 @@ onUnload(() => {
   padding: 0 2px;
   color: #a89888;
   font-size: 12px;
+}
+.message-notch {
+  display: none;
 }
 .message-bubble {
   box-sizing: border-box;
@@ -1751,6 +1837,7 @@ onUnload(() => {
   max-width: 768px;
   margin: 0 auto;
   padding: 0 24px 24px;
+  flex-shrink: 0;
   flex-direction: column;
   gap: 14px;
 }
@@ -1959,6 +2046,7 @@ button::after {
     width: 280px;
     max-width: 82vw;
     min-width: 0;
+    padding-top: var(--mobile-safe-top);
     transform: translateX(-100%);
     transition: transform 0.25s ease;
     box-shadow: 4px 0 24px rgba(61, 50, 41, 0.15);
@@ -1977,17 +2065,24 @@ button::after {
     position: relative;
     display: flex;
     flex: 0 0 auto;
-    align-items: center;
-    justify-content: space-between;
     box-sizing: border-box;
-    height: calc(52px + var(--mobile-safe-top));
-    padding: var(--mobile-safe-top) var(--mobile-actions-right) 0 12px;
+    height: var(--mobile-header-height);
+    padding: 0;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-navigation);
   }
+  .mobile-header > .icon-button {
+    position: absolute;
+    top: calc(var(--mobile-menu-center) - 20px);
+    left: 12px;
+  }
   .mobile-brand {
     position: absolute;
+    top: var(--mobile-menu-top);
     left: 50%;
+    display: flex;
+    height: var(--mobile-menu-height);
+    align-items: center;
     transform: translateX(-50%);
     color: var(--text-primary);
     font-size: 17px;
@@ -2005,7 +2100,11 @@ button::after {
     line-height: 40px;
   }
   .mobile-actions {
+    position: absolute;
+    top: calc(var(--mobile-menu-center) - 22px);
+    right: var(--mobile-actions-right);
     display: flex;
+    height: 44px;
     align-items: center;
     gap: 4px;
   }
@@ -2033,7 +2132,7 @@ button::after {
   .mobile-account-menu {
     position: absolute;
     z-index: 60;
-    top: calc(48px + var(--mobile-safe-top));
+    top: calc(var(--mobile-menu-top) + var(--mobile-menu-height) + 8px);
     right: var(--mobile-actions-right);
     width: 180px;
     padding: 6px;
@@ -2061,14 +2160,78 @@ button::after {
   .chat-scroll {
     padding: 20px 14px 10px;
   }
+  .message-row {
+    position: relative;
+    margin-bottom: 14px;
+    padding-top: 21px;
+    gap: 0;
+  }
   .message-column {
-    max-width: calc(100vw - 74px);
+    max-width: calc(100vw - 46px);
+    gap: 0;
   }
   .message-avatar {
+    display: flex;
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    width: 42px;
+    height: 42px;
+    margin: 0;
+  }
+  .message-avatar.assistant {
+    left: 0;
+  }
+  .message-avatar.user {
+    right: 0;
+    width: 38px;
+    height: 38px;
+  }
+  .message-column.assistant {
+    max-width: calc(100vw - 74px);
+    margin-left: 16px;
+  }
+  .message-column.user {
+    max-width: 72%;
+    margin-right: 18px;
+  }
+  .message-name {
     display: none;
   }
-  .message-row {
-    gap: 0;
+  .message-bubble {
+    position: relative;
+  }
+  .message-notch {
+    position: absolute;
+    top: -4px;
+    display: block;
+    box-sizing: border-box;
+    width: 8px;
+    height: 8px;
+    transform: rotate(45deg);
+  }
+  .message-bubble.assistant .message-notch {
+    left: 28px;
+    border-top: 1px solid var(--accent-focus);
+    border-left: 1px solid var(--accent-focus);
+    background: #fff;
+  }
+  .message-bubble.user .message-notch {
+    top: -3px;
+    right: 28px;
+    width: 6px;
+    height: 6px;
+    background: var(--surface-page);
+  }
+  .message-bubble.assistant {
+    padding: 22px 16px 13px;
+    border-top-color: var(--accent-focus);
+    border-radius: 18px 18px 18px 5px;
+    box-shadow: 0 5px 16px rgba(61, 50, 41, 0.06);
+  }
+  .message-bubble.user {
+    padding: 14px 28px 12px 16px;
+    border-radius: 18px 18px 5px 18px;
   }
   .chat-input-area {
     padding: 0 18px calc(24px + env(safe-area-inset-bottom));

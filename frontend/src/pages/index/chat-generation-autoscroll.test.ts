@@ -8,7 +8,7 @@ const progressSource = readFileSync(resolve(process.cwd(), 'src/components/Youba
 describe('generation progress auto scroll', () => {
   it('re-triggers the outer chat bottom anchor when an existing progress message changes', () => {
     expect(homeSource).toContain('const chatBottomAnchors = [\'chat-bottom-a\', \'chat-bottom-b\'] as const')
-    expect(homeSource).toMatch(/async function followLatest[\s\S]*scrollTarget\.value = scrollTarget\.value === chatBottomAnchors\[0\][\s\S]*chatBottomAnchors\[1\][\s\S]*chatBottomAnchors\[0\]/)
+    expect(homeSource).toMatch(/const followLatest = createAlternatingScrollFollower\([\s\S]*scrollTarget,[\s\S]*chatBottomAnchors/)
     expect(homeSource).toMatch(/if \(progressItem && event\.status === 'processing'\) \{[\s\S]*progressItem\.details = [^\n][\s\S]*void followLatest\(\)/)
     expect(homeSource).toContain(':id="chatBottomAnchors[0]"')
     expect(homeSource).toContain(':id="chatBottomAnchors[1]"')
@@ -16,7 +16,7 @@ describe('generation progress auto scroll', () => {
 
   it('keeps the progress timeline focused on its newest event', () => {
     expect(progressSource).toContain('const timelineTarget = ref(\'\')')
-    expect(progressSource).toContain('function followTimeline(): void')
+    expect(progressSource).toMatch(/const followTimeline = createAlternatingScrollFollower\([\s\S]*timelineTarget,[\s\S]*timelineBottomAnchors/)
     expect(progressSource).toMatch(/watch\([\s\S]*props\.details\.length[\s\S]*followTimeline/)
     expect(progressSource).toContain(':scroll-into-view="timelineTarget"')
     expect(progressSource).toContain(':id="timelineBottomAnchors[0]"')

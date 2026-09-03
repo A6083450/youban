@@ -38,6 +38,14 @@ describe('ai planning home', () => {
     expect(source).not.toContain('↻ {{ t(\'chatHome.refreshSuggestions\') }}')
   })
 
+  it('requires login only when the user sends a prompt', () => {
+    expect(source).toMatch(/async function sendMessage[\s\S]*if \(!auth\.ready\) \{[\s\S]*pendingLoginPrompt\.value = text[\s\S]*loginSheetOpen\.value = true[\s\S]*return/)
+    expect(source).toMatch(/async function handleLoginSuccess[\s\S]*sendMessage\(text\)/)
+    expect(source).toContain('<WechatLoginSheet')
+    expect(source).toContain('@authenticated="handleLoginSuccess"')
+    expect(source).toMatch(/onLoad[\s\S]*if \(auth\.ready\) \{[\s\S]*loadRecords/)
+  })
+
   it.each(['product-zh.json', 'product-en.json', 'product-fr.json'])('provides concise agent copy in %s', (name) => {
     const messages = locale(name)
     expect(messages.chatHome.agentLabel).toBeTruthy()

@@ -158,7 +158,7 @@ describe("settings: env 读取", () => {
     expect(settings.openai_base_url).toBe("https://api.openai.com/v1");
     expect(settings.openai_model).toBe("gpt-4");
     expect(settings.app_name).toBe("HelloAgents智能旅行助手");
-    expect(settings.app_version).toBe("2.0.5");
+    expect(settings.app_version).toBe("2.0.8");
     expect(settings.host).toBe("0.0.0.0");
     expect(settings.port).toBe(8000);
     expect(settings.cors_origins).toEqual([

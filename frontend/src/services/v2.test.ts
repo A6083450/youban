@@ -6,6 +6,7 @@ import {
   exchangeWebLoginChallenge,
   getWebLoginChallengeStatus,
   miniProgramActionPath,
+  scanWebLoginChallenge,
   taskEventsPath,
   taskStatusPath,
   tripAttractionPath,
@@ -52,12 +53,14 @@ describe('v2 service paths', () => {
 
     await expect(createWebLoginChallenge()).resolves.toEqual(challenge)
     await getWebLoginChallengeStatus(challenge.challenge_id)
+    await scanWebLoginChallenge(challenge.challenge_id)
     await approveWebLoginChallenge(challenge.challenge_id)
     await exchangeWebLoginChallenge(challenge.challenge_id)
 
     expect(requests.map(request => [request.url, request.method])).toEqual([
       ['/api/v2/auth/web/challenges', 'POST'],
       [`/api/v2/auth/web/challenges/${challenge.challenge_id}/status`, 'GET'],
+      [`/api/v2/auth/web/challenges/${challenge.challenge_id}/scan`, 'POST'],
       [`/api/v2/auth/web/challenges/${challenge.challenge_id}/approve`, 'POST'],
       [`/api/v2/auth/web/challenges/${challenge.challenge_id}/exchange`, 'POST'],
     ])

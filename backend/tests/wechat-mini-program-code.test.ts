@@ -15,6 +15,8 @@ describe("WechatMiniProgramCode", () => {
     const provider = new WechatMiniProgramCode({
       appId: "wx-mini",
       appSecret: "server-secret",
+      envVersion: "trial",
+      checkPath: false,
       fetch: async (input, init) => {
         requests.push({ url: String(input), body: String(init?.body ?? "") });
         if (requests.length === 1) {
@@ -30,8 +32,8 @@ describe("WechatMiniProgramCode", () => {
     expect(JSON.parse(requests[1]!.body)).toEqual({
       scene: "a".repeat(32),
       page: "pages/web-login/index",
-      check_path: true,
-      env_version: "release",
+      check_path: false,
+      env_version: "trial",
       width: 320,
     });
   });

@@ -30,6 +30,7 @@ describe('shared v2 contracts', () => {
 
     expect(routes.authWebChallengeCreate).toBe('/api/v2/auth/web/challenges')
     expect(routes.authWebChallengeStatus).toBe('/api/v2/auth/web/challenges/:challengeId/status')
+    expect(routes.authWebChallengeScan).toBe('/api/v2/auth/web/challenges/:challengeId/scan')
     expect(routes.authWebChallengeApprove).toBe('/api/v2/auth/web/challenges/:challengeId/approve')
     expect(routes.authWebChallengeExchange).toBe('/api/v2/auth/web/challenges/:challengeId/exchange')
     expect(ApiV2Routes).not.toHaveProperty('authWechatWebStart')
@@ -43,6 +44,7 @@ describe('shared v2 contracts', () => {
       qr_code_data_url: 'data:image/png;base64,AAAA',
     })).toBe(true)
     expect(Value.Check(statusSchema!, { status: 'approved' })).toBe(true)
+    expect(Value.Check(statusSchema!, { status: 'scanned' })).toBe(true)
     expect(Value.Check(statusSchema!, { status: 'unknown' })).toBe(false)
     expect(Value.Check(exchangeSchema!, {
       success: true,

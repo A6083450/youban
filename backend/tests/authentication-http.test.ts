@@ -249,6 +249,21 @@ describe("unified authentication HTTP", () => {
 
     const mini = await json(await post(app, "/api/auth/wechat/login", { code: "web-user" }));
     expect((await uploadAvatar(app, mini.token)).status).toBe(200);
+    const scanned = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/scan`,
+      {},
+      { authorization: `Bearer ${mini.token}` },
+    );
+    expect(scanned.status).toBe(200);
+    expect(await json(scanned)).toEqual({ success: true });
+
+    const scannedStatus = await app.handle(new Request(
+      `http://localhost/api/v2/auth/web/challenges/${created.challenge_id}/status`,
+      { headers: { cookie: verifierCookie } },
+    ));
+    expect(await json(scannedStatus)).toEqual({ status: "scanned" });
+
     const approved = await post(
       app,
       `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
@@ -332,6 +347,20 @@ describe("unified authentication HTTP", () => {
     const second = await json(await post(app, "/api/auth/wechat/login", { code: "second-approver" }));
     expect((await uploadAvatar(app, first.token)).status).toBe(200);
     expect((await uploadAvatar(app, second.token)).status).toBe(200);
+    expect((await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/scan`,
+      {},
+      { authorization: `Bearer ${first.token}` },
+    )).status).toBe(200);
+    const scanConflict = await post(
+      app,
+      `/api/v2/auth/web/challenges/${created.challenge_id}/scan`,
+      {},
+      { authorization: `Bearer ${second.token}` },
+    );
+    expect(scanConflict.status).toBe(409);
+    expect(await json(scanConflict)).toEqual({ detail: "登录挑战已由其他账号扫码" });
     expect((await post(
       app,
       `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,

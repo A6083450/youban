@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   exchange: vi.fn(),
   loginMiniProgramWithAvatar: vi.fn(),
   restore: vi.fn(),
+  setLocale: vi.fn(),
+  setSkin: vi.fn(),
   status: vi.fn(),
 }))
 
@@ -33,7 +35,13 @@ vi.mock('@/store/auth', () => ({
   }),
 }))
 vi.mock('@/store/preferences', () => ({
-  usePreferencesStore: () => ({ themeClass: 'theme-warm' }),
+  usePreferencesStore: () => ({
+    locale: 'zh-CN',
+    setLocale: mocks.setLocale,
+    setSkin: mocks.setSkin,
+    skin: 'default',
+    themeClass: 'theme-warm',
+  }),
 }))
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -42,6 +50,9 @@ vi.mock('vue-i18n', () => ({
       'common.loading': '加载中',
       'login.loading': '正在连接微信',
       'login.pending': '使用微信扫码登录',
+      'login.scanned': '已扫码，请在小程序中确认',
+      'login.scannedTitle': '已扫码',
+      'login.scannedHint': '请在小程序中确认登录，请勿重复扫码。',
       'login.failed': '微信扫码登录暂时不可用',
       'login.retry': '重新加载二维码',
       'login.expired': '二维码已失效，请重新加载',
@@ -108,6 +119,49 @@ describe('login page', () => {
     await flushPromises()
     expect(mocks.create).toHaveBeenCalledTimes(2)
     expect(wrapper.get('.wechat-login-code').attributes('src')).toBe('data:image/png;base64,BBBB')
+  })
+
+  it('changes theme and language before login', async () => {
+    mocks.create.mockResolvedValue(challenge())
+    wrapper = mount(LoginPage)
+    await flushPromises()
+
+    await wrapper.get('[data-skin="google"]').trigger('click')
+    await wrapper.get('[data-locale="en-US"]').trigger('click')
+
+    expect(mocks.setSkin).toHaveBeenCalledWith('google')
+    expect(mocks.setLocale).toHaveBeenCalledWith('en-US')
+  })
+
+  it('lets only the latest mounted login page create a Web challenge', async () => {
+    mocks.create.mockResolvedValue(challenge())
+
+    const first = mount(LoginPage)
+    const second = mount(LoginPage)
+    await flushPromises()
+
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    first.unmount()
+    second.unmount()
+  })
+
+  it('hides the QR code behind a clear waiting state after scanning', async () => {
+    vi.useFakeTimers()
+    mocks.create.mockResolvedValue(challenge())
+    mocks.status.mockResolvedValue({ status: 'scanned' })
+
+    wrapper = mount(LoginPage)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已扫码，请在小程序中确认')
+    expect(wrapper.text()).toContain('请在小程序中确认登录，请勿重复扫码。')
+    expect(wrapper.get('.wechat-login-code').classes()).toContain('is-scanned')
+    expect(wrapper.find('.scan-waiting-state').exists()).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(mocks.create).toHaveBeenCalledTimes(1)
   })
 
   it('retries a temporary polling failure until expiry and labels an expired code', async () => {

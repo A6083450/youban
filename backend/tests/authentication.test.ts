@@ -79,6 +79,27 @@ describe("AuthenticationService", () => {
     auth.close();
   });
 
+  it("claims a Web challenge for the first ready mini-program user", () => {
+    const { auth } = fixture();
+    const first = auth.loginMiniProgramIdentity({ openid: "scanner-one" });
+    const other = auth.loginMiniProgramIdentity({ openid: "scanner-two" });
+    auth.completeProfile(first.token, "11111111111111111111111111111111.png");
+    auth.completeProfile(other.token, "22222222222222222222222222222222.png");
+    const challenge = auth.createWebChallenge();
+
+    expect(auth.claimWebChallenge(first.token, challenge.challengeId)).toBeUndefined();
+    expect(auth.claimWebChallenge(first.token, challenge.challengeId)).toBeUndefined();
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "scanned" });
+    expect(() => auth.claimWebChallenge(other.token, challenge.challengeId))
+      .toThrow("登录挑战已由其他账号扫码");
+
+    auth.approveWebChallenge(first.token, challenge.challengeId);
+    expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
+      .toEqual({ status: "approved" });
+    auth.close();
+  });
+
   it("requires avatar completion before approving a Web challenge", () => {
     const { auth } = fixture();
     const incomplete = auth.loginMiniProgramIdentity({
