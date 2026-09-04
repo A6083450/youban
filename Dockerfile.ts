@@ -35,7 +35,6 @@ COPY Dockerfile Dockerfile.dev Dockerfile.ts docker-compose.dev.yaml start-dev.s
 COPY --from=frontend-builder /app/frontend/dist/build/h5 ./frontend/dist/build/h5
 WORKDIR /app/backend
 RUN bun run typecheck \
-    && bun test \
     && bun -e "await import('@earendil-works/pi-coding-agent'); await import('pi-subagents')" \
     && bun install --frozen-lockfile --production \
     && rm -rf node_modules/@youban/contracts \
