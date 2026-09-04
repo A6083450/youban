@@ -100,18 +100,17 @@ describe("AuthenticationService", () => {
     auth.close();
   });
 
-  it("requires avatar completion before approving a Web challenge", () => {
+  it("allows a newly authenticated WeChat user to approve a Web challenge", () => {
     const { auth } = fixture();
-    const incomplete = auth.loginMiniProgramIdentity({
-      openid: "incomplete-openid",
-      unionid: "incomplete-unionid",
+    const user = auth.loginMiniProgramIdentity({
+      openid: "ready-openid",
+      unionid: "ready-unionid",
     });
     const challenge = auth.createWebChallenge();
 
-    expect(() => auth.approveWebChallenge(incomplete.token, challenge.challengeId))
-      .toThrow("请先选择微信头像完成登录");
+    expect(() => auth.approveWebChallenge(user.token, challenge.challengeId)).not.toThrow();
     expect(auth.getWebChallengeStatus(challenge.challengeId, challenge.browserVerifier))
-      .toEqual({ status: "pending" });
+      .toEqual({ status: "approved" });
     auth.close();
   });
 
@@ -231,18 +230,15 @@ describe("AuthenticationService", () => {
     auth.close();
   });
 
-  it("persists first-login profile completion for every session of the WeChat account", () => {
+  it("completes new and legacy WeChat identities without requiring an avatar", () => {
     const { auth } = fixture();
     const identity = { openid: "openid-profile", unionid: "union-profile" };
     const first = auth.loginMiniProgramIdentity(identity);
-    expect(first.user).toMatchObject({ avatar_url: null, profile_complete: false });
-
-    const completed = auth.completeProfile(first.token, "0123456789abcdef0123456789abcdef.png");
-    expect(completed).toMatchObject({
-      avatar_url: "/api/avatars/0123456789abcdef0123456789abcdef.png",
-      profile_complete: true,
-    });
-    expect(auth.loginMiniProgramIdentity(identity).user).toMatchObject(completed);
+    expect(first.user).toMatchObject({ avatar_url: null, profile_complete: true });
+    auth.database.raw.query("UPDATE users SET profile_completed_at = NULL WHERE user_id = ?")
+      .run(first.user.user_id);
+    expect(auth.loginMiniProgramIdentity(identity).user)
+      .toMatchObject({ avatar_url: null, profile_complete: true });
     auth.close();
   });
 

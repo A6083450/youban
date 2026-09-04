@@ -297,7 +297,7 @@ function makeDayGroup(
   items: Array<{ day: TripDay, index: number }>,
 ): ItineraryDayGroup | null {
   const first = items[0]
-  const last = items.at(-1)
+  const last = items[items.length - 1]
   if (!first || !last)
     return null
   return {
@@ -334,7 +334,7 @@ export function groupItineraryDays(days: TripDay[], mode: ItineraryDisplayMode):
     const nextKey = parsed
       ? `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`
       : 'unknown'
-    const current = groups.at(-1)
+    const current = groups[groups.length - 1]
     if (!current || monthKey !== nextKey) {
       monthKey = nextKey
       const group = makeDayGroup(`month-${nextKey}-${groups.length}`, 'month', groups.length, [item])

@@ -3,6 +3,7 @@ import type { BudgetItemTypeDto, BudgetLedgerItemDto, BudgetLedgerResponseDto } 
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { budgetCalculationDescriptor, budgetItemDisplayAmount, selectBudgetItems } from '@/features/result/budget'
+import { formatResultNumber } from '@/features/result/format'
 import type { BudgetFilter, BudgetSort } from '@/features/result/budget'
 
 const props = defineProps<{
@@ -56,7 +57,7 @@ function formatNumber(value: number): string {
 function formatAmount(value: number | null | undefined): string {
   return value === null || value === undefined
     ? t('result.budget.amountPending')
-    : `¥${value.toLocaleString(locale.value, { maximumFractionDigits: 2 })}`
+    : `¥${formatResultNumber(value, locale.value, 2)}`
 }
 
 function formatDisplayAmount(item: BudgetLedgerItemDto): string {

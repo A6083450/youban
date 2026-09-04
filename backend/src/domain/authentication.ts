@@ -192,12 +192,16 @@ export class AuthenticationService {
       }
       let userId = unionIdentity?.user_id ?? legacyIdentity?.user_id;
       if (!userId) {
-        userId = this.createWechatUser(now).user_id;
+        userId = this.createWechatUser(now, { profileCompletedAt: now }).user_id;
       }
       if (unionDigest) this.attachIdentity(unionDigest, userId, now);
       this.attachIdentity(legacyDigest, userId, now);
-      this.database.raw.query("UPDATE users SET last_login_at = ? WHERE user_id = ?")
-        .run(now, userId);
+      this.database.raw.query(`
+        UPDATE users SET
+          profile_completed_at = COALESCE(profile_completed_at, ?),
+          last_login_at = ?
+        WHERE user_id = ?
+      `).run(now, now, userId);
       const token = this.issueSession(userId, "miniprogram");
       this.audit("wechat_login", "success", userId, (unionDigest || legacyDigest).slice(0, 16));
       return { user: this.getUser(userId)!, token };

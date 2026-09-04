@@ -178,6 +178,7 @@
     "footerTech": "Powered by HelloAgents + AMap MCP"
   },
   "account": {
+    "login": "Sign in",
     "wechatUser": "WeChat user",
     "wechatAccount": "WeChat account",
     "logout": "Log out"
@@ -187,9 +188,9 @@
   },
   "privacy": {
     "title": "Privacy notice and user agreement",
-    "updated": "Updated: August 27, 2026",
+    "updated": "Updated: September 4, 2026",
     "accountTitle": "Account and identity",
-    "accountCopy": "The YouBan website supports nickname and WeChat QR sign-in. The same nickname opens the same historical account, so do not use sensitive information as a nickname. QR sign-in reads the WeChat nickname and avatar you authorize. The Mini Program supports WeChat sign-in only and uploads an avatar only after you choose it. YouBan never exposes openid, session_key, or server secrets to the client.",
+    "accountCopy": "The YouBan website supports nickname and WeChat QR sign-in. The same nickname opens the same historical account, so do not use sensitive information as a nickname. WeChat sign-in only uses the account identifier provided by WeChat and does not read your nickname, avatar, or other profile data. YouBan never exposes openid, session_key, or server secrets to the client.",
     "mapTitle": "Location and maps",
     "mapCopy": "Map and navigation capabilities are invoked only when you open them. Locations without trusted coordinates in China are not sent to location navigation.",
     "shareTitle": "Public sharing",
@@ -231,17 +232,17 @@
     "miniAgentHint": "Tell me where you want to go. I will handle the planning.",
     "miniTitle": "Hi, I'm YouBan",
     "miniDescription": "After you sign in, I will remember your travel preferences and create itineraries, budgets, and maps.",
-    "miniButton": "Continue with WeChat avatar",
-    "miniNote": "Used only to identify your account. No other WeChat profile data is read.",
+    "miniButton": "Sign in with WeChat",
+    "miniNote": "Only your WeChat account identity is used. Your avatar and other profile data are not read.",
     "sheetKicker": "Continue this plan",
     "sheetTitle": "Sign in to continue planning",
     "sheetDescription": "After signing in, YouBan will continue with your current request. You will not need to enter it again.",
     "sheetBenefitSave": "Save conversations and generated trips",
-    "sheetBenefitPrivacy": "Only the avatar you select is used to identify your account",
+    "sheetBenefitPrivacy": "Only your WeChat account identity is used",
     "sheetCancel": "Not now",
     "privacyLink": "Privacy notice and user agreement",
     "privacyPromptTitle": "Agree to the privacy notice first",
-    "privacyPromptDescription": "YouBan only uses the avatar you select to identify your account and does not read other WeChat profile data.",
+    "privacyPromptDescription": "Read and agree to the YouBan privacy notice before continuing.",
     "privacyPromptView": "View the privacy notice",
     "privacyPromptDecline": "Not now",
     "privacyPromptAgree": "Agree and continue",
@@ -724,6 +725,7 @@
   "result": {
     "pageTitle": "Trip details",
     "share": {
+      "pageTitle": "Shared trip",
       "button": "Share",
       "modalTitle": "Share trip plan",
       "linkLabel": "Share link",
@@ -738,7 +740,8 @@
       "qrTitle": "Scan to view",
       "downloadQr": "Download QR code",
       "qrFailed": "Failed to generate QR code",
-      "readonlyBanner": "This is a shared trip plan",
+      "readonlyBanner": "A trip plan shared with you",
+      "readonlyHint": "Read-only view. The original trip will not be changed.",
       "readonlyCta": "Plan my own"
     },
     "enhancement": {

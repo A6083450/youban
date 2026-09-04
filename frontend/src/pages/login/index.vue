@@ -32,7 +32,6 @@ const preferences = usePreferencesStore()
 const { t } = useI18n()
 const state = ref<'loading' | 'ready' | 'scanned' | 'success' | 'expired' | 'failed'>('loading')
 const busy = ref(false)
-const previewUrl = ref('')
 const qrCodeDataUrl = ref('')
 const failed = computed(() => state.value === 'failed' || state.value === 'expired')
 const statusText = computed(() => ({
@@ -109,7 +108,7 @@ async function pollWebLogin(token: number, challengeId: string): Promise<void> {
     if (!isCurrentWebLogin(token))
       return
     if ((error as { status?: unknown } | null)?.status === 422) {
-      void startWebLogin()
+      failWebLogin(token)
       return
     }
     retryPoll(token, challengeId)
@@ -141,16 +140,13 @@ async function startWebLogin(): Promise<void> {
 
 // #endif
 
-async function chooseAvatar(event: unknown): Promise<void> {
-  const detail = (event as { detail?: { avatarUrl?: string } })?.detail
-  const filePath = String(detail?.avatarUrl || '').trim()
-  if (!filePath || busy.value)
+async function loginMiniProgram(): Promise<void> {
+  if (busy.value)
     return
   busy.value = true
-  previewUrl.value = filePath
   uni.showLoading({ title: t('login.loggingIn'), mask: true })
   try {
-    await auth.loginMiniProgramWithAvatar(filePath)
+    await auth.loginMiniProgram()
     uni.hideLoading()
     const pending = getStoredValue<string>(StorageKeys.pendingWebLoginChallenge)
     if (/^[0-9a-f]{32}$/.test(pending || '')) {
@@ -164,7 +160,6 @@ async function chooseAvatar(event: unknown): Promise<void> {
   catch (error) {
     uni.hideLoading()
     busy.value = false
-    previewUrl.value = ''
     uni.showToast({
       title: error instanceof Error ? error.message : t('login.miniFailed'),
       icon: 'none',
@@ -237,10 +232,9 @@ onBeforeUnmount(() => {
 
       <button
         class="mini-login-button"
-        open-type="chooseAvatar"
         :loading="busy"
         :disabled="busy"
-        @chooseavatar="chooseAvatar"
+        @click="loginMiniProgram"
       >
         <text class="wechat-login-mark">微</text>
         <text>{{ t('login.miniButton') }}</text>

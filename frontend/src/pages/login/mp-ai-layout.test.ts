@@ -32,14 +32,15 @@ describe('mini-program AI login layout', () => {
     expect(styles).toMatch(/\.mini-brand-logo\s*\{[\s\S]*?height:\s*100%/)
   })
 
-  it('keeps one explicit avatar authorization action', () => {
-    expect(source.match(/open-type="chooseAvatar"/g)).toHaveLength(1)
+  it('uses normal WeChat login without native avatar authorization', () => {
+    expect(source).not.toContain('open-type="chooseAvatar"')
+    expect(source).toContain('@click="loginMiniProgram"')
     expect(source).toContain('class="wechat-login-mark"')
     expect(source).not.toContain('class="avatar-login"')
     expect(source).not.toContain('class="avatar-placeholder"')
   })
 
-  it('mounts one login-scoped WeChat privacy gate before native avatar authorization', () => {
+  it('keeps the explicit WeChat privacy notice flow available', () => {
     expect(source).toContain('<WechatPrivacyAuthorization />')
     expect(privacyAuthorization).toContain('id="youban-privacy-agree"')
     expect(privacyAuthorization).toContain('open-type="agreePrivacyAuthorization"')

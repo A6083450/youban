@@ -4,6 +4,8 @@ import { onLoad, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TripResult from '@/components/trip/TripResult.vue'
+import type { MobileMenuButtonRect } from '@/features/layout/safe-area'
+import { mobileHeaderMetrics } from '@/features/layout/safe-area'
 import { renderTripGuideImage, saveImageToAlbum } from '@/features/result/guide-image'
 import {
   buildCalendarEvents,
@@ -13,7 +15,9 @@ import {
 import type { TripPlan } from '@/features/result/model'
 import { addCalendarEventsSequentially } from '@/platform/native-actions'
 import { getSharedTripPlan } from '@/services/v2'
+import { useAuthStore } from '@/store/auth'
 import { usePreferencesStore } from '@/store/preferences'
+import { safeAreaInsets, systemInfo } from '@/utils/systemInfo'
 
 definePage({
   style: {
@@ -23,12 +27,30 @@ definePage({
 })
 
 const plan = ref<TripPlan | null>(null)
+const auth = useAuthStore()
 const preferences = usePreferencesStore()
 const { t } = useI18n()
 const shareCode = ref('')
 const loading = ref(true)
 const errorMessage = ref('')
 const actionBusy = ref(false)
+
+function getMenuButtonRect(): MobileMenuButtonRect | undefined {
+  // #ifdef MP-WEIXIN
+  return uni.getMenuButtonBoundingClientRect()
+  // #endif
+  // #ifndef MP-WEIXIN
+  return undefined
+  // #endif
+}
+
+const headerMetrics = mobileHeaderMetrics(systemInfo?.windowWidth, safeAreaInsets?.top, getMenuButtonRect())
+const shareHeaderStyle = {
+  '--mobile-actions-right': headerMetrics.actionsRight,
+  '--mobile-menu-center': headerMetrics.menuCenter,
+  '--mobile-header-height': headerMetrics.headerHeight,
+  '--result-toolbar-top': headerMetrics.headerHeight,
+}
 
 function errorText(error: unknown, fallback: string): string {
   const message = (error as { message?: unknown } | null)?.message
@@ -55,6 +77,10 @@ async function loadSharedPlan(): Promise<void> {
 
 function goHome(): void {
   uni.reLaunch({ url: '/pages/index/index' })
+}
+
+function openPlans(): void {
+  uni.reLaunch({ url: '/pages/index/index?plans=1' })
 }
 
 function downloadCalendar(): void {
@@ -177,10 +203,13 @@ onLoad((query) => {
 </script>
 
 <template>
-  <view class="share-page" :class="preferences.themeClass">
-    <button class="home-button" :title="t('result.backHome')" :aria-label="t('result.backHome')" @click="goHome">
-      <wd-icon name="home" size="20px" />
-    </button>
+  <view class="share-page" :class="preferences.themeClass" :style="shareHeaderStyle">
+    <view class="share-navigation">
+      <button class="share-home-action" :title="t('result.backHome')" :aria-label="t('result.backHome')" @click="goHome">
+        <wd-icon name="home" size="18px" />
+      </button>
+      <text class="share-navigation-title">{{ t('result.share.pageTitle') }}</text>
+    </view>
     <view v-if="loading" class="share-state">
       <view class="loader-ring" />
       <text>{{ t('common.loading') }}</text>
@@ -196,7 +225,9 @@ onLoad((query) => {
     <TripResult
       v-else-if="plan"
       :plan="plan"
+      :readonly-action-label="auth.ready ? t('sidebar.plans') : ''"
       readonly
+      @readonly-action="openPlans"
       @export="exportGuide"
       @calendar="addCalendar"
     />
@@ -206,40 +237,70 @@ onLoad((query) => {
 
 <style scoped>
 .share-page {
+  display: flex;
+  width: 100%;
   min-height: 100vh;
+  flex-direction: column;
   background: var(--surface-page);
 }
-.home-button,
+.share-navigation {
+  position: sticky;
+  z-index: 70;
+  top: 0;
+  display: flex;
+  box-sizing: border-box;
+  height: var(--mobile-header-height);
+  flex: 0 0 var(--mobile-header-height);
+  padding: 0 var(--mobile-actions-right) 0 12px;
+  align-items: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-navigation);
+}
+.share-home-action,
 .primary-command {
   box-sizing: border-box;
   margin: 0;
   border: 0;
   line-height: 1.4;
 }
-.home-button::after,
+.share-home-action::after,
 .primary-command::after {
   display: none;
 }
-.home-button {
-  position: fixed;
-  z-index: 60;
-  top: max(14px, env(safe-area-inset-top));
-  left: 14px;
-  display: flex;
-  width: 38px;
-  height: 38px;
+.share-home-action {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  margin-top: calc(var(--mobile-menu-center) - 20px);
+  padding: 0;
+  flex: none;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-subtle);
   border-radius: 50%;
-  background: rgba(255, 250, 246, 0.94);
+  background: var(--surface-elevated);
   color: var(--text-primary);
-  box-shadow: 0 5px 16px rgba(61, 50, 41, 0.1);
+}
+.share-navigation-title {
+  position: absolute;
+  top: var(--mobile-menu-center);
+  left: 50%;
+  max-width: calc(100% - var(--mobile-actions-right) - 64px);
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .share-state {
   display: flex;
   box-sizing: border-box;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--mobile-header-height));
   padding: 60px 24px;
   align-items: center;
   justify-content: center;
@@ -289,7 +350,7 @@ onLoad((query) => {
   }
 }
 @media print {
-  .home-button {
+  .share-navigation {
     display: none;
   }
 }

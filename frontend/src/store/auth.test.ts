@@ -13,7 +13,6 @@ const authApi = vi.hoisted(() => ({
   authLogout: vi.fn(),
   authMe: vi.fn(),
   loginWechat: vi.fn(),
-  uploadAccountAvatar: vi.fn(),
 }))
 
 vi.mock('@/services/v2', () => authApi)
@@ -24,13 +23,12 @@ describe('useAuthStore', () => {
     vi.mocked(uni.getStorageSync).mockReturnValue(null)
   })
 
-  it('does not persist the mini-program session before avatar upload succeeds', async () => {
+  it('rejects an incomplete mini-program identity response', async () => {
     authApi.loginWechat.mockResolvedValue({ token: 'pending-token', user: { ...readyUser, avatar_url: null, profile_complete: false } })
-    authApi.uploadAccountAvatar.mockRejectedValue(new Error('头像无效'))
     authApi.authLogout.mockResolvedValue(undefined)
     const store = useAuthStore()
 
-    await expect(store.loginMiniProgramWithAvatar('/tmp/avatar.png')).rejects.toThrow('头像无效')
+    await expect(store.loginMiniProgram()).rejects.toThrow()
 
     expect(store.user).toBeNull()
     expect(store.token).toBe('')
@@ -38,16 +36,16 @@ describe('useAuthStore', () => {
     expect(authApi.authLogout).toHaveBeenCalledWith('pending-token')
   })
 
-  it('persists the mini-program session only after avatar upload completes', async () => {
-    authApi.loginWechat.mockResolvedValue({ token: 'ready-token', user: { ...readyUser, avatar_url: null, profile_complete: false } })
-    authApi.uploadAccountAvatar.mockResolvedValue(readyUser)
+  it('persists the mini-program session without requesting an avatar', async () => {
+    const account = { ...readyUser, avatar_url: null }
+    authApi.loginWechat.mockResolvedValue({ token: 'ready-token', user: account })
     const store = useAuthStore()
 
-    await expect(store.loginMiniProgramWithAvatar('/tmp/avatar.png')).resolves.toEqual(readyUser)
+    await expect(store.loginMiniProgram()).resolves.toEqual(account)
 
     expect(store.ready).toBe(true)
     expect(store.token).toBe('ready-token')
-    expect(store.user).toEqual(readyUser)
+    expect(store.user).toEqual(account)
   })
 
   it('restores a complete website profile when its authorized avatar is unavailable', async () => {

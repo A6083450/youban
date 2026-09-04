@@ -164,6 +164,7 @@ const userAvatar = computed(() => {
     return source
   return `${getApiBaseUrl()}${source.startsWith('/') ? source : `/${source}`}`
 })
+const userInitial = computed(() => Array.from(auth.user?.nickname || t('account.wechatUser'))[0] || '游')
 const conversationRecords = computed(() => records.value.filter(item => item.kind === 'conversation'))
 const plannedRecords = computed(() => records.value.filter(item => item.kind === 'plan'))
 const planBadge = (record: ConversationRecordDto) => sidebarPlanBadge(record, today)
@@ -557,6 +558,12 @@ async function handleLoginSuccess(): Promise<void> {
     await sendMessage(text)
 }
 
+function openLoginSheet(): void {
+  pendingLoginPrompt.value = ''
+  mobileAccountMenuOpen.value = false
+  loginSheetOpen.value = true
+}
+
 function closeLoginSheet(): void {
   pendingLoginPrompt.value = ''
   loginSheetOpen.value = false
@@ -691,6 +698,7 @@ async function logout(): Promise<void> {
 
 onLoad((query) => {
   void preferences.sync()
+  drawerOpen.value = auth.ready && query?.plans === '1'
   if (auth.ready) {
     void loadRecords()
     const selectedConversation = typeof query?.conversation === 'string' ? query.conversation : ''
@@ -947,6 +955,7 @@ onUnload(() => {
           <!-- #endif -->
           <button v-if="auth.ready" class="mobile-account-trigger" :aria-label="auth.user?.nickname" @click="mobileAccountMenuOpen = !mobileAccountMenuOpen">
             <image v-if="userAvatar" :src="userAvatar" mode="aspectFill" />
+            <text v-else class="mobile-account-fallback">{{ userInitial }}</text>
           </button>
         </view>
         <view v-if="auth.ready && mobileAccountMenuOpen" class="mobile-account-menu">
@@ -958,6 +967,19 @@ onUnload(() => {
           </button>
         </view>
       </view>
+
+      <!-- #ifdef MP-WEIXIN -->
+      <button v-if="!auth.ready" class="mobile-login-strip" @click="openLoginSheet">
+        <view class="mobile-login-strip-copy">
+          <view class="i-carbon-user mobile-login-strip-icon" aria-hidden="true" />
+          <text>{{ t('login.sheetBenefitSave') }}</text>
+        </view>
+        <view class="mobile-login-strip-action">
+          <text>{{ t('account.login') }}</text>
+          <wd-icon name="arrow-right" size="15px" />
+        </view>
+      </button>
+      <!-- #endif -->
 
       <scroll-view
         v-if="hasMessages"
@@ -1020,7 +1042,7 @@ onUnload(() => {
       <view class="chat-input-area" :class="{ empty: !hasMessages }">
         <view v-if="!hasMessages" class="ai-agent-intro">
           <view class="ai-agent-label">
-            <text class="ai-agent-mark">AI</text>
+            <text class="ai-agent-mark">游</text>
             <text>{{ t('chatHome.agentLabel') }}</text>
           </view>
           <view class="ai-agent-title">
@@ -1219,6 +1241,7 @@ onUnload(() => {
   position: relative;
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   border-radius: 10px;
   flex-direction: column;
@@ -1232,7 +1255,7 @@ onUnload(() => {
   width: 100%;
   min-height: 0;
   margin: 0;
-  padding: 0 28px 0 0;
+  padding: 0 44px 0 0;
   flex-direction: column;
   align-items: stretch;
   border: 0;
@@ -1251,11 +1274,11 @@ onUnload(() => {
 .record-delete {
   display: flex;
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 0;
+  right: 0;
   box-sizing: border-box;
-  width: 24px;
-  height: 24px;
+  width: 44px;
+  height: 44px;
   margin: 0;
   padding: 0;
   align-items: center;
@@ -1264,15 +1287,15 @@ onUnload(() => {
   background: transparent;
   color: var(--text-secondary);
   justify-content: center;
-  opacity: 0;
+  opacity: 1;
 }
 .record-delete::after {
   display: none;
 }
-.record-delete:hover {
+.record-delete:hover,
+.record-delete:focus-visible {
   background: var(--surface-soft);
   color: var(--status-danger);
-  opacity: 1;
 }
 .record-title {
   overflow: hidden;
@@ -2123,6 +2146,75 @@ button::after {
     width: 30px;
     height: 30px;
     border-radius: 50%;
+  }
+  .mobile-account-fallback {
+    display: flex;
+    width: 30px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 30px;
+  }
+  .mobile-login-strip {
+    display: flex;
+    box-sizing: border-box;
+    width: calc(100% - 24px);
+    min-height: 50px;
+    margin: 10px 12px 0;
+    padding: 8px 10px;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--accent-soft);
+    color: var(--text-primary);
+    box-shadow: 0 4px 14px rgba(61, 50, 41, 0.06);
+    gap: 10px;
+    line-height: 18px;
+  }
+  .mobile-login-strip:active {
+    background: var(--accent-selected);
+    transform: translateY(1px);
+  }
+  .mobile-login-strip-copy,
+  .mobile-login-strip-action {
+    display: flex;
+    align-items: center;
+  }
+  .mobile-login-strip-copy {
+    min-width: 0;
+    flex: 1;
+    color: var(--text-secondary);
+    font-size: 12px;
+    gap: 8px;
+    text-align: left;
+  }
+  .mobile-login-strip-icon {
+    display: flex;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: var(--surface-elevated);
+    color: var(--accent-strong);
+    font-size: 14px;
+  }
+  .mobile-login-strip-action {
+    flex: none;
+    color: var(--accent-strong);
+    font-size: 13px;
+    font-weight: 700;
+    gap: 3px;
+  }
+  .mobile-login-strip-action text {
+    white-space: nowrap;
   }
   .mobile-add-symbol {
     font-size: 28px;

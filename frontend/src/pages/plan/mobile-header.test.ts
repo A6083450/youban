@@ -12,7 +12,7 @@ describe('mobile plan header', () => {
     expect(planSource).toContain('flex: 0 0 var(--plan-mobile-header-height);')
     const mobileToolbar = resultSource.match(/@media \(max-width: 820px\)[\s\S]*?\.result-toolbar \{([\s\S]*?)\}/)?.[1] || ''
     expect(mobileToolbar).toContain('height: auto;')
-    expect(mobileToolbar).toContain('top: 0;')
+    expect(mobileToolbar).toContain('top: var(--result-toolbar-top, 0px);')
   })
 
   it('restores the legacy H5 menu, centered brand and new-plan actions', () => {

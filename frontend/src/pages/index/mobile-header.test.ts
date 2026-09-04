@@ -23,6 +23,16 @@ describe('mobile planning header', () => {
     expect(source).toMatch(/\.mobile-actions\s*\{[^}]*top:\s*calc\(var\(--mobile-menu-center\) - 22px\)/)
   })
 
+  it('places the signed-out login action below the navigation without occupying the avatar slot', () => {
+    expect(source).not.toContain('class="mobile-login-trigger"')
+    expect(source).toContain('class="mobile-account-fallback"')
+    expect(source).toMatch(/<button\s+v-if="!auth\.ready"\s+class="mobile-login-strip"\s+@click="openLoginSheet"/)
+    expect(source).toMatch(/class="mobile-login-strip-copy"[\s\S]*?login\.sheetBenefitSave/)
+    expect(source).toMatch(/\.mobile-login-strip\s*\{[^}]*width:\s*calc\(100% - 24px\);/)
+    expect(source).toMatch(/\.mobile-login-strip\s*\{[^}]*min-height:\s*50px;/)
+    expect(source).toMatch(/\.mobile-login-strip\s*\{[^}]*background:\s*var\(--accent-soft\);/)
+  })
+
   it('keeps the header and composer inside the keyboard-adjusted chat viewport', () => {
     expect(source).toContain(':style="chatViewportStyle"')
     expect(source).toMatch(/<input[\s\S]*?:adjust-position="false"[\s\S]*?@keyboardheightchange="updateKeyboardViewport"/)

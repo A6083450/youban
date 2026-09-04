@@ -39,15 +39,13 @@ function agreePrivacy(): void {
   wechatPrivacyAuthorization.agree(AGREE_BUTTON_ID)
 }
 
-async function chooseAvatar(event: unknown): Promise<void> {
-  const detail = (event as { detail?: { avatarUrl?: string } })?.detail
-  const filePath = String(detail?.avatarUrl || '').trim()
-  if (!filePath || busy.value)
+async function loginMiniProgram(): Promise<void> {
+  if (busy.value)
     return
   busy.value = true
   errorMessage.value = ''
   try {
-    await auth.loginMiniProgramWithAvatar(filePath)
+    await auth.loginMiniProgram()
     emit('authenticated')
   }
   catch (error) {
@@ -105,7 +103,7 @@ async function chooseAvatar(event: unknown): Promise<void> {
         <view class="sheet-description">
           {{ t('login.sheetDescription') }}
         </view>
-        <view class="sheet-prompt-preview">
+        <view v-if="prompt" class="sheet-prompt-preview">
           “{{ prompt }}”
         </view>
         <view class="sheet-benefits">
@@ -122,11 +120,10 @@ async function chooseAvatar(event: unknown): Promise<void> {
           {{ errorMessage }}
         </view>
         <button
-          class="sheet-avatar-action"
-          open-type="chooseAvatar"
+          class="sheet-login-action"
           :loading="busy"
           :disabled="busy"
-          @chooseavatar="chooseAvatar"
+          @click="loginMiniProgram"
         >
           <text class="sheet-wechat-mark">微</text>
           <text>{{ busy ? t('login.loggingIn') : t('login.miniButton') }}</text>

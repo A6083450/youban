@@ -1,5 +1,5 @@
 import type { UserInfoDto } from '@youban/contracts'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/store/auth'
 import { apiRequest } from './client'
 
@@ -37,6 +37,31 @@ describe('api authentication expiry', () => {
     vi.mocked(uni.removeStorageSync).mockImplementation((key) => {
       storage.delete(String(key))
     })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('keeps proxied H5 requests on the current origin', async () => {
+    vi.stubEnv('VITE_APP_PROXY_ENABLE', 'true')
+    vi.stubEnv('VITE_SERVER_BASEURL', 'https://youban.me')
+    let requestUrl = ''
+    vi.mocked(uni.request).mockImplementation((options) => {
+      requestUrl = options.url
+      options.success?.({
+        data: { success: true },
+        statusCode: 200,
+        header: {},
+        cookies: [],
+        errMsg: 'request:ok',
+      })
+      return {} as UniApp.RequestTask
+    })
+
+    await apiRequest('/api/v2/auth/web/challenges', { public: true })
+
+    expect(requestUrl).toBe('/api/v2/auth/web/challenges')
   })
 
   it('clears the active session and returns to login after a private 401', async () => {

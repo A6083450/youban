@@ -228,6 +228,10 @@ export default defineConfig(({ command, mode }) => {
       // 仅 H5 端生效，其他端不生效（其他端走build，不走devServer)
       proxy: JSON.parse(VITE_APP_PROXY_ENABLE)
         ? {
+            '/api': {
+              target: VITE_SERVER_BASEURL,
+              changeOrigin: true,
+            },
             [VITE_APP_PROXY_PREFIX]: {
               target: VITE_SERVER_BASEURL,
               changeOrigin: true,

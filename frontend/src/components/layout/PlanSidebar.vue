@@ -388,6 +388,7 @@ onMounted(() => {
   position: relative;
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   border-radius: 10px;
   flex-direction: column;
@@ -401,7 +402,7 @@ onMounted(() => {
   width: 100%;
   min-height: 0;
   margin: 0;
-  padding: 0 28px 0 0;
+  padding: 0 44px 0 0;
   align-items: stretch;
   border: 0;
   border-radius: 0;
@@ -420,10 +421,10 @@ onMounted(() => {
 .record-delete {
   display: flex;
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
   margin: 0;
   padding: 0;
   align-items: center;
@@ -432,7 +433,12 @@ onMounted(() => {
   background: transparent;
   color: var(--text-secondary);
   justify-content: center;
-  opacity: 0;
+  opacity: 1;
+}
+.record-delete:hover,
+.record-delete:focus-visible {
+  background: var(--surface-soft);
+  color: var(--status-danger);
 }
 .record-title {
   overflow: hidden;

@@ -178,6 +178,7 @@
     "footerTech": "Propulsé par HelloAgents + AMap MCP"
   },
   "account": {
+    "login": "Connexion",
     "wechatUser": "Utilisateur WeChat",
     "wechatAccount": "Compte WeChat",
     "logout": "Se déconnecter"
@@ -187,9 +188,9 @@
   },
   "privacy": {
     "title": "Confidentialité et accord utilisateur",
-    "updated": "Mise à jour : 27 août 2026",
+    "updated": "Mise à jour : 4 septembre 2026",
     "accountTitle": "Compte et identité",
-    "accountCopy": "Le site YouBan permet la connexion par pseudonyme ou par QR code WeChat. Un même pseudonyme ouvre le même compte historique ; n'y mettez donc aucune information sensible. La connexion par QR code lit le nom et l'avatar WeChat autorisés. Le mini-programme accepte uniquement WeChat et téléverse l'avatar après votre choix. YouBan n'expose jamais openid, session_key ni les secrets serveur au client.",
+    "accountCopy": "Le site YouBan permet la connexion par pseudonyme ou par QR code WeChat. Un même pseudonyme ouvre le même compte historique ; n'y mettez donc aucune information sensible. La connexion WeChat utilise uniquement l'identifiant de compte fourni par WeChat et ne lit ni votre nom, ni votre avatar, ni vos autres données de profil. YouBan n'expose jamais openid, session_key ni les secrets serveur au client.",
     "mapTitle": "Localisation et cartes",
     "mapCopy": "Les fonctions de carte et de navigation ne sont appelées que lorsque vous les ouvrez. Aucun lieu sans coordonnées fiables en Chine n'est envoyé à la navigation.",
     "shareTitle": "Partage public",
@@ -231,17 +232,17 @@
     "miniAgentHint": "Dites-moi où vous souhaitez aller. Je m'occupe de la planification.",
     "miniTitle": "Bonjour, je suis YouBan",
     "miniDescription": "Après la connexion, je retiendrai vos préférences et créerai l'itinéraire, le budget et la carte.",
-    "miniButton": "Continuer avec l'avatar WeChat",
-    "miniNote": "Utilisé uniquement pour identifier votre compte. Aucune autre donnée WeChat n'est lue.",
+    "miniButton": "Se connecter avec WeChat",
+    "miniNote": "Seule l'identité de votre compte WeChat est utilisée. Votre avatar et vos autres données ne sont pas lus.",
     "sheetKicker": "Continuer ce voyage",
     "sheetTitle": "Connectez-vous pour continuer",
     "sheetDescription": "Après la connexion, YouBan poursuivra votre demande actuelle sans vous demander de la saisir à nouveau.",
     "sheetBenefitSave": "Enregistrer les conversations et les voyages générés",
-    "sheetBenefitPrivacy": "Seul l'avatar choisi sert à identifier votre compte",
+    "sheetBenefitPrivacy": "Seule l'identité de votre compte WeChat est utilisée",
     "sheetCancel": "Pas maintenant",
     "privacyLink": "Confidentialité et accord utilisateur",
     "privacyPromptTitle": "Acceptez d'abord l'avis de confidentialité",
-    "privacyPromptDescription": "YouBan utilise uniquement l'avatar que vous choisissez pour identifier votre compte et ne lit aucune autre donnée WeChat.",
+    "privacyPromptDescription": "Lisez et acceptez l'avis de confidentialité YouBan avant de continuer.",
     "privacyPromptView": "Voir l'avis de confidentialité",
     "privacyPromptDecline": "Pas maintenant",
     "privacyPromptAgree": "Accepter et continuer",
@@ -754,6 +755,7 @@
   "result": {
     "pageTitle": "Détails du voyage",
     "share": {
+      "pageTitle": "Voyage partagé",
       "button": "Partager",
       "modalTitle": "Partager le plan de voyage",
       "linkLabel": "Lien de partage",
@@ -768,7 +770,8 @@
       "qrTitle": "Scanner pour voir",
       "downloadQr": "Télécharger le code QR",
       "qrFailed": "Échec de la génération du code QR",
-      "readonlyBanner": "Ceci est un plan de voyage partagé",
+      "readonlyBanner": "Un plan de voyage partagé avec vous",
+      "readonlyHint": "Consultation seule. Le voyage d’origine ne sera pas modifié.",
       "readonlyCta": "Créer mon propre plan"
     },
     "enhancement": {

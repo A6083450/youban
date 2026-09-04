@@ -11,7 +11,7 @@ import {
   setAuthSession,
 } from '@/platform/auth'
 import { isLoginReady, LOGIN_ROUTE } from '@/router/auth-guard'
-import { authLogout, authMe, loginWechat, uploadAccountAvatar } from '@/services/v2'
+import { authLogout, authMe, loginWechat } from '@/services/v2'
 
 function wechatLoginCode(): Promise<string> {
   return new Promise<string>((resolve, reject) => {
@@ -58,7 +58,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
 
   function save(sessionToken: string, nextUser: UserInfoDto): UserInfoDto {
     if (!isLoginReady(nextUser))
-      throw new Error(t('api.avatarRequiredBeforeLogin'))
+      throw new Error(t('login.identityError'))
     token.value = sessionToken
     user.value = nextUser
     expiryRedirected = false
@@ -91,9 +91,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
     return restorePromise
   }
 
-  async function loginMiniProgramWithAvatar(filePath: string): Promise<UserInfoDto> {
-    if (!filePath.trim())
-      throw new Error(t('api.avatarRequired'))
+  async function loginMiniProgram(): Promise<UserInfoDto> {
     if (loginPromise)
       return loginPromise
     clear()
@@ -101,8 +99,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
       const code = await wechatLoginCode()
       const session = await loginWechat(code)
       try {
-        const completedUser = await uploadAccountAvatar(filePath, session.token)
-        return save(session.token, completedUser)
+        return save(session.token, session.user)
       }
       catch (error) {
         await authLogout(session.token).catch(() => undefined)
@@ -147,7 +144,7 @@ export const useAuthStore = defineStore('youban-auth', () => {
     ready,
     clear,
     acceptWebsiteSession,
-    loginMiniProgramWithAvatar,
+    loginMiniProgram,
     logout,
     restore,
   }

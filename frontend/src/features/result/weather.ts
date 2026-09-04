@@ -1,3 +1,5 @@
+import { formatResultDate } from './format'
+
 export type WeatherIconKind
   = | 'sun-shower'
     | 'thunder-storm'
@@ -36,11 +38,11 @@ export function formatWeatherDate(rawDate: string, localeTag = 'zh-CN'): string 
   const date = parseWeatherDate(rawDate)
   if (!date)
     return rawDate || '--'
-  return new Intl.DateTimeFormat(localeTag, {
+  return formatResultDate(date, localeTag, {
     month: 'short',
     day: 'numeric',
     weekday: 'short',
-  }).format(date)
+  }, rawDate)
 }
 
 export function formatWeatherTemperature(temperature: number | null | undefined): string {

@@ -95,33 +95,44 @@ const nativeMarkers = computed(() => [
   })),
 ])
 
-const nativePolylines = computed(() => props.plan.days.flatMap((day, dayIndex) => {
-  if (selectedDayIndex.value !== null && selectedDayIndex.value !== dayIndex)
-    return []
-  const attractions = projection.value.attractions
-    .filter(item => item.dayIndex === dayIndex)
-    .sort((left, right) => left.attractionIndex - right.attractionIndex)
-  const points = attractions.map(item => [item.longitude, item.latitude] as [number, number])
-  const hotel = day.hotel?.location
-  if (hotel && Number.isFinite(hotel.longitude) && Number.isFinite(hotel.latitude)) {
-    points.unshift([hotel.longitude, hotel.latitude])
-    points.push([hotel.longitude, hotel.latitude])
-  }
-  if (points.length < 2)
-    return []
-  const routePoints = points.slice(0, -1).flatMap((start, index) => {
-    const segment = buildArcPath(start, points[index + 1], 12)
-    return index ? segment.slice(1) : segment
+const nativePolylines = computed(() => {
+  const polylines: Array<{
+    points: Array<{ longitude: number, latitude: number }>
+    color: string
+    width: number
+    dottedLine: boolean
+    arrowLine: boolean
+  }> = []
+  props.plan.days.forEach((day, dayIndex) => {
+    if (selectedDayIndex.value !== null && selectedDayIndex.value !== dayIndex)
+      return
+    const attractions = projection.value.attractions
+      .filter(item => item.dayIndex === dayIndex)
+      .sort((left, right) => left.attractionIndex - right.attractionIndex)
+    const points = attractions.map(item => [item.longitude, item.latitude] as [number, number])
+    const hotel = day.hotel?.location
+    if (hotel && Number.isFinite(hotel.longitude) && Number.isFinite(hotel.latitude)) {
+      points.unshift([hotel.longitude, hotel.latitude])
+      points.push([hotel.longitude, hotel.latitude])
+    }
+    if (points.length < 2)
+      return
+    const routePoints: Array<[number, number]> = []
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const segment = buildArcPath(points[index], points[index + 1], 12)
+      routePoints.push(...(index ? segment.slice(1) : segment))
+    }
+    const walking = detectRouteMode(day.transportation) === 'walking'
+    polylines.push({
+      points: routePoints.map(([longitude, latitude]) => ({ longitude, latitude })),
+      color: '#07C160',
+      width: walking ? 4 : 5,
+      dottedLine: walking,
+      arrowLine: !walking,
+    })
   })
-  const walking = detectRouteMode(day.transportation) === 'walking'
-  return [{
-    points: routePoints.map(([longitude, latitude]) => ({ longitude, latitude })),
-    color: '#07C160',
-    width: walking ? 4 : 5,
-    dottedLine: walking,
-    arrowLine: !walking,
-  }]
-}))
+  return polylines
+})
 
 function chooseDay(dayIndex: number | null): void {
   userTouchedFilter.value = true

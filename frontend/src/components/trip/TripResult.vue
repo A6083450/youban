@@ -14,6 +14,7 @@ import TripToday from './TripToday.vue'
 import WeatherDayCard from './WeatherDayCard.vue'
 import { waitForAmapVisibilityFrame } from '@/features/map/amap-capture'
 import { getApiBaseUrl } from '@/http/client'
+import { formatResultDate, formatResultNumber } from '@/features/result/format'
 import {
   resolveTripAttractionPhoto,
   resolveTripDayPinPhoto,
@@ -28,6 +29,7 @@ const props = withDefaults(defineProps<{
   plan: TripPlan
   planId?: string
   readonly?: boolean
+  readonlyActionLabel?: string
   editable?: boolean
   shareReady?: boolean
   budgetLedger?: BudgetLedgerResponseDto | null
@@ -40,6 +42,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   planId: '',
   readonly: false,
+  readonlyActionLabel: '',
   editable: false,
   shareReady: true,
   budgetLedger: null,
@@ -53,6 +56,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   share: []
+  readonlyAction: []
   export: [format: 'image' | 'pdf']
   calendar: []
   edit: []
@@ -91,9 +95,15 @@ const tripMapRef = ref<{ captureScreenshot: () => Promise<string> } | null>(null
 const instance = getCurrentInstance()
 const localeTag = computed(() => ({ zh: 'zh-CN', en: 'en-US', fr: 'fr-FR' }[locale.value] || locale.value))
 const noticeDismissed = ref(false)
-const allAttractions = computed(() => props.plan.days.flatMap((day, dayIndex) =>
-  day.attractions.map((attraction, attractionIndex) => ({ attraction, day, dayIndex, attractionIndex })),
-))
+const allAttractions = computed(() => {
+  const result: Array<{ attraction: TripAttraction, day: TripDay, dayIndex: number, attractionIndex: number }> = []
+  props.plan.days.forEach((day, dayIndex) => {
+    day.attractions.forEach((attraction, attractionIndex) => {
+      result.push({ attraction, day, dayIndex, attractionIndex })
+    })
+  })
+  return result
+})
 const availableSections = computed<ResultSection[]>(() => {
   const result: ResultSection[] = props.readonly ? [] : ['today']
   result.push('overview', 'days', 'map')
@@ -118,12 +128,19 @@ const journeyTitle = computed(() => props.plan.blueprint?.title || t('result.gra
   cities: cities.value.join(' → '),
 }))
 const journeySummary = computed(() => props.plan.blueprint?.summary || '')
-const journeyHighlights = computed(() => props.plan.days.flatMap((day, index) => {
-  const attraction = day.attractions.find(item => attractionImage(item))
-  return attraction
-    ? [{ day, index, attraction, photo: attractionImage(attraction) }]
-    : []
-}))
+const journeyHighlights = computed(() => {
+  const result: Array<{ day: TripDay, index: number, attraction: TripAttraction, photo: string }> = []
+  props.plan.days.forEach((day, index) => {
+    for (const attraction of day.attractions) {
+      const photo = attractionImage(attraction)
+      if (!photo)
+        continue
+      result.push({ day, index, attraction, photo })
+      break
+    }
+  })
+  return result
+})
 const journeyHeroPhoto = computed(() => journeyHighlights.value[0]?.photo || '')
 const journeyHeroStyle = computed(() => journeyHeroPhoto.value
   ? {
@@ -188,16 +205,16 @@ function formatLongDate(value: string): string {
   if (!match)
     return value
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
-  return new Intl.DateTimeFormat(locale.value, {
+  return formatResultDate(date, locale.value, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     timeZone: 'UTC',
-  }).format(date)
+  }, formatDate(value))
 }
 
 function formatMoney(value: number | undefined): string {
-  return Number(value || 0).toLocaleString(locale.value, { maximumFractionDigits: 0 })
+  return formatResultNumber(Number(value || 0), locale.value, 0)
 }
 
 function attractionImage(attraction: TripAttraction): string {
@@ -387,7 +404,19 @@ defineExpose({ captureMapScreenshot })
       </view>
 
       <view v-if="props.readonly" class="readonly-banner">
-        {{ t('result.share.readonlyBanner') }}
+        <view class="readonly-banner-copy">
+          <text class="readonly-banner-title">{{ t('result.share.readonlyBanner') }}</text>
+          <text class="readonly-banner-hint">{{ t('result.share.readonlyHint') }}</text>
+        </view>
+        <button
+          v-if="props.readonlyActionLabel"
+          class="readonly-banner-action"
+          :aria-label="props.readonlyActionLabel"
+          @click="emit('readonlyAction')"
+        >
+          <text>{{ props.readonlyActionLabel }}</text>
+          <wd-icon name="arrow-right" size="14px" />
+        </button>
       </view>
 
       <view v-if="enhancementMessage" class="enhancement-notice" role="status">
@@ -679,7 +708,7 @@ defineExpose({ captureMapScreenshot })
 .result-toolbar {
   position: sticky;
   z-index: 20;
-  top: 0;
+  top: var(--result-toolbar-top, 0px);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -831,14 +860,61 @@ defineExpose({ captureMapScreenshot })
   opacity: 0.48;
 }
 .readonly-banner {
+  display: flex;
   margin-bottom: 18px;
   padding: 12px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border: 1px solid rgba(58, 156, 122, 0.24);
   border-radius: 8px;
   background: rgba(58, 156, 122, 0.08);
   color: #2f795f;
   font-size: 13px;
   line-height: 1.6;
+}
+.readonly-banner-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.readonly-banner-title {
+  font-weight: 700;
+}
+.readonly-banner-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.readonly-banner-action {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 128px;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-elevated);
+  color: #2f795f;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.readonly-banner-action::after {
+  display: none;
+}
+.readonly-banner-action text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .enhancement-notice {
   display: flex;
@@ -1969,7 +2045,7 @@ defineExpose({ captureMapScreenshot })
     border-radius: 22px;
   }
   .result-toolbar {
-    top: 0;
+    top: var(--result-toolbar-top, 0px);
     height: auto;
     min-height: 0;
     align-items: stretch;

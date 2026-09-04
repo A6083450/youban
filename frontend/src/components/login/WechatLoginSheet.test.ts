@@ -21,7 +21,7 @@ vi.mock('@/platform/wechat-privacy', () => ({
 }))
 
 vi.mock('@/store/auth', () => ({
-  useAuthStore: () => ({ loginMiniProgramWithAvatar: mocks.login }),
+  useAuthStore: () => ({ loginMiniProgram: mocks.login }),
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -35,17 +35,15 @@ describe('wechat login sheet', () => {
     mocks.login.mockResolvedValue({ user_id: 'user-1' })
   })
 
-  it('keeps the pending prompt visible and completes avatar login in place', async () => {
+  it('keeps the pending prompt visible and completes WeChat login in place', async () => {
     const wrapper = mount(WechatLoginSheet, {
       props: { open: true, prompt: '去杭州玩三天' },
     })
 
     expect(wrapper.text()).toContain('去杭州玩三天')
-    await wrapper.get('.sheet-avatar-action').trigger('chooseavatar', {
-      detail: { avatarUrl: '/tmp/avatar.png' },
-    })
+    await wrapper.get('.sheet-login-action').trigger('click')
 
-    expect(mocks.login).toHaveBeenCalledWith('/tmp/avatar.png')
+    expect(mocks.login).toHaveBeenCalledWith()
     expect(wrapper.emitted('authenticated')).toHaveLength(1)
   })
 
@@ -60,5 +58,13 @@ describe('wechat login sheet', () => {
 
     expect(mocks.disagree).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('hides the prompt preview when opened from the account area', () => {
+    const wrapper = mount(WechatLoginSheet, {
+      props: { open: true, prompt: '' },
+    })
+
+    expect(wrapper.find('.sheet-prompt-preview').exists()).toBe(false)
   })
 })

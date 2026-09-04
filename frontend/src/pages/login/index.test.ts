@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
   create: vi.fn(),
   exchange: vi.fn(),
-  loginMiniProgramWithAvatar: vi.fn(),
+  loginMiniProgram: vi.fn(),
   restore: vi.fn(),
   setLocale: vi.fn(),
   setSkin: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('@/services/v2', () => ({
 vi.mock('@/store/auth', () => ({
   useAuthStore: () => ({
     ready: false,
-    loginMiniProgramWithAvatar: mocks.loginMiniProgramWithAvatar,
+    loginMiniProgram: mocks.loginMiniProgram,
     restore: mocks.restore,
   }),
 }))
@@ -183,17 +183,29 @@ describe('login page', () => {
     expect(wrapper.text()).toContain('二维码已失效，请重新加载')
   })
 
-  it('returns to a pending confirmation after avatar login', async () => {
+  it('stops instead of replacing the QR code when its verifier is invalid', async () => {
+    vi.useFakeTimers()
+    mocks.create.mockResolvedValue(challenge())
+    mocks.status.mockRejectedValue({ status: 422 })
+
+    wrapper = mount(LoginPage)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('微信扫码登录暂时不可用')
+  })
+
+  it('returns to a pending confirmation after WeChat login', async () => {
     mocks.create.mockRejectedValue(new Error('unused on mini program'))
-    mocks.loginMiniProgramWithAvatar.mockResolvedValue({ user_id: 'user-1' })
+    mocks.loginMiniProgram.mockResolvedValue({ user_id: 'user-1' })
     vi.mocked(uni.getStorageSync).mockImplementation(key => (
       key === 'youban.v2.pending-web-login-challenge' ? challengeId : null
     ))
 
     wrapper = mount(LoginPage)
-    await wrapper.get('.mini-login-button').trigger('chooseavatar', {
-      detail: { avatarUrl: '/tmp/avatar.png' },
-    })
+    await wrapper.get('.mini-login-button').trigger('click')
     await flushPromises()
 
     expect(uni.removeStorageSync).toHaveBeenCalledWith('youban.v2.pending-web-login-challenge')

@@ -83,19 +83,13 @@ describe("unified authentication HTTP", () => {
     const login = await json(loginResponse);
     expect(login.token).toEqual(expect.any(String));
     expect(JSON.stringify(login)).not.toContain("openid");
-    expect(login.user).toMatchObject({ avatar_url: null, profile_complete: false });
+    expect(login.user).toMatchObject({ avatar_url: null, profile_complete: true });
 
     const forged = await app.handle(new Request("http://localhost/api/auth/me", {
       headers: { "x-user-id": login.user.user_id },
     }));
     expect(forged.status).toBe(401);
 
-    const incompleteMe = await app.handle(new Request("http://localhost/api/auth/me", {
-      headers: { authorization: `Bearer ${login.token}` },
-    }));
-    expect(incompleteMe.status).toBe(401);
-
-    expect((await uploadAvatar(app, login.token)).status).toBe(200);
     const me = await app.handle(new Request("http://localhost/api/auth/me", {
       headers: { authorization: `Bearer ${login.token}` },
     }));
@@ -194,15 +188,15 @@ describe("unified authentication HTTP", () => {
     expect((await post(app, "/api/v2/auth/web/challenges", {})).status).toBe(200);
   });
 
-  it("does not grant private API access to an avatar-incomplete mini-program session", async () => {
+  it("grants private API access immediately after WeChat identity login", async () => {
     const { app } = createRuntime();
     const login = await json(await post(app, "/api/auth/wechat/login", { code: "incomplete-user" }));
     const authorization = { authorization: `Bearer ${login.token}` };
 
     expect((await app.handle(new Request("http://localhost/api/trip/history", { headers: authorization }))).status)
-      .toBe(401);
+      .toBe(200);
     expect((await app.handle(new Request("http://localhost/api/auth/me", { headers: authorization }))).status)
-      .toBe(401);
+      .toBe(200);
     expect((await post(app, "/api/account/profile/skip-avatar", {}, authorization)).status).toBe(404);
   });
 
@@ -321,7 +315,7 @@ describe("unified authentication HTTP", () => {
     expect(replayed.status).toBe(422);
   });
 
-  it("rejects wrong browsers, incomplete users, conflicting approvers, and expired challenges", async () => {
+  it("rejects wrong browsers, conflicting approvers, and expired challenges", async () => {
     const instance = createRuntime();
     const { app } = instance;
     const createdResponse = await post(app, "/api/v2/auth/web/challenges", {});
@@ -332,16 +326,6 @@ describe("unified authentication HTTP", () => {
     }));
     expect(forged.status).toBe(422);
     expect(await json(forged)).toEqual({ detail: "网页登录凭证无效或已过期" });
-
-    const incomplete = await json(await post(app, "/api/auth/wechat/login", { code: "incomplete-web" }));
-    const rejectedApproval = await post(
-      app,
-      `/api/v2/auth/web/challenges/${created.challenge_id}/approve`,
-      {},
-      { authorization: `Bearer ${incomplete.token}` },
-    );
-    expect(rejectedApproval.status).toBe(401);
-    expect(await json(rejectedApproval)).toEqual({ detail: "请先选择微信头像完成登录" });
 
     const first = await json(await post(app, "/api/auth/wechat/login", { code: "first-approver" }));
     const second = await json(await post(app, "/api/auth/wechat/login", { code: "second-approver" }));

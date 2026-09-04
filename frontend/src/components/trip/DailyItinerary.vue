@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getApiBaseUrl } from '@/http/client'
+import { formatResultDate } from '@/features/result/format'
 import {
   buildDayTimeline,
   groupItineraryDays,
@@ -38,18 +39,18 @@ function formatDate(raw: string | null): string {
   const date = parseTripDate(raw)
   if (!date)
     return raw || t('result.daily.dateUnknown')
-  return new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric' }).format(date)
+  return formatResultDate(date, locale.value, { month: 'short', day: 'numeric' }, raw || t('result.daily.dateUnknown'))
 }
 
 function formatWeekday(raw: string): string {
   const date = parseTripDate(raw)
-  return date ? new Intl.DateTimeFormat(locale.value, { weekday: 'short' }).format(date) : ''
+  return date ? formatResultDate(date, locale.value, { weekday: 'short' }, '') : ''
 }
 
 function formatMonth(raw: string | null): string {
   const date = parseTripDate(raw)
   return date
-    ? new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'long' }).format(date)
+    ? formatResultDate(date, locale.value, { year: 'numeric', month: 'long' }, raw || t('result.daily.dateUnknown'))
     : t('result.daily.dateUnknown')
 }
 

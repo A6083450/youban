@@ -33,10 +33,10 @@
   "chatHome": {
     "title": "想去哪里玩？",
     "desc": "用一句话描述你的旅行，游伴帮你搞定行程、预算和地图",
-    "agentLabel": "游伴 AI · 在线",
-    "agentTitle": "你的旅行智能体",
+    "agentLabel": "游伴 · 在线",
+    "agentTitle": "你的旅行搭子",
     "agentDescription": "说出目的地、时间和偏好，我会为你生成行程、预算和地图。",
-    "inspiration": "AI 灵感推荐",
+    "inspiration": "旅行灵感",
     "suggestions": [
       "下周末去西安玩3天，喜欢美食",
       "五一去成都看大熊猫，4天",
@@ -178,6 +178,7 @@
     "footerTech": "Powered by HelloAgents + 高德 MCP"
   },
   "account": {
+    "login": "登录",
     "wechatUser": "微信用户",
     "wechatAccount": "微信账号",
     "logout": "退出登录"
@@ -187,9 +188,9 @@
   },
   "privacy": {
     "title": "隐私说明与用户协议",
-    "updated": "更新日期：2026 年 8 月 27 日",
+    "updated": "更新日期：2026 年 9 月 4 日",
     "accountTitle": "账号与身份",
-    "accountCopy": "游伴网站支持昵称登录和微信扫码登录：同一昵称会进入同一个历史账号，请勿使用敏感信息作为昵称；扫码登录会读取你授权的微信昵称和头像。小程序仅支持微信登录，头像只在你主动选择后上传。游伴不会向客户端提供 openid、session_key 或服务端密钥。",
+    "accountCopy": "游伴网站支持昵称登录和微信扫码登录：同一昵称会进入同一个历史账号，请勿使用敏感信息作为昵称。微信登录仅使用微信提供的账号标识，不读取昵称、头像或其他微信资料。游伴不会向客户端提供 openid、session_key 或服务端密钥。",
     "mapTitle": "位置与地图",
     "mapCopy": "仅在你主动查看地图或导航时调用地图能力。没有可信国内坐标的地点不会发起定位导航。",
     "shareTitle": "公开分享",
@@ -231,17 +232,17 @@
     "miniAgentHint": "告诉我想去哪里，剩下的规划交给我。",
     "miniTitle": "你好，我是游伴",
     "miniDescription": "登录后，我会记住你的旅行偏好，帮你生成行程、预算和地图。",
-    "miniButton": "使用微信头像继续",
-    "miniNote": "仅用于账号识别，不读取其他微信资料。",
+    "miniButton": "使用微信登录",
+    "miniNote": "仅使用微信账号识别身份，不读取头像或其他微信资料。",
     "sheetKicker": "继续当前规划",
     "sheetTitle": "登录后继续生成行程",
     "sheetDescription": "登录后会继续处理你刚才输入的需求，不需要重新填写。",
     "sheetBenefitSave": "保存对话和生成中的行程",
-    "sheetBenefitPrivacy": "仅使用你主动选择的头像识别账号",
+    "sheetBenefitPrivacy": "仅使用微信账号识别身份",
     "sheetCancel": "暂不登录",
     "privacyLink": "隐私说明与用户协议",
     "privacyPromptTitle": "请先同意隐私保护指引",
-    "privacyPromptDescription": "游伴仅使用你主动选择的头像识别账号，不会读取其他微信资料。",
+    "privacyPromptDescription": "继续前请阅读并同意游伴隐私保护指引。",
     "privacyPromptView": "查看隐私保护指引",
     "privacyPromptDecline": "暂不使用",
     "privacyPromptAgree": "同意并继续",
@@ -724,6 +725,7 @@
   "result": {
     "pageTitle": "行程详情",
     "share": {
+      "pageTitle": "分享行程",
       "button": "分享",
       "modalTitle": "分享游玩计划",
       "linkLabel": "分享链接",
@@ -738,7 +740,8 @@
       "qrTitle": "扫码查看",
       "downloadQr": "下载二维码",
       "qrFailed": "二维码生成失败",
-      "readonlyBanner": "这是一份分享的游玩计划",
+      "readonlyBanner": "朋友分享的游玩计划",
+      "readonlyHint": "只读浏览，不会修改原行程",
       "readonlyCta": "我也要规划"
     },
     "enhancement": {

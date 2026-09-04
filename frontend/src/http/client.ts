@@ -93,9 +93,12 @@ function adminSessionHeaders(): Record<string, string> {
 }
 
 export function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const baseUrl = currentPlatform() === 'h5' && import.meta.env.VITE_APP_PROXY_ENABLE === 'true'
+    ? ''
+    : getApiBaseUrl()
   return new Promise<T>((resolve, reject) => {
     uni.request({
-      url: `${getApiBaseUrl()}${path}`,
+      url: `${baseUrl}${path}`,
       method: (options.method ?? 'GET') as UniNamespace.RequestOptions['method'],
       data: options.data as UniNamespace.RequestOptions['data'],
       withCredentials: true,
