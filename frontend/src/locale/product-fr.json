@@ -33,10 +33,10 @@
   "chatHome": {
     "title": "Où souhaitez-vous aller ?",
     "desc": "Décrivez votre voyage en une phrase — YouBan gère l'itinéraire, le budget et la carte",
-    "agentLabel": "YouBan AI · En ligne",
-    "agentTitle": "Votre agent de voyage IA",
+    "agentLabel": "YouBan · En ligne",
+    "agentTitle": "Votre compagnon de voyage",
     "agentDescription": "Indiquez la destination, les dates et vos préférences. Je créerai l'itinéraire, le budget et la carte.",
-    "inspiration": "Inspiration voyage IA",
+    "inspiration": "Inspiration voyage",
     "suggestions": [
       "3 jours à Xi'an le week-end prochain, j'adore la cuisine",
       "4 jours à Chengdu pour voir les pandas pendant le 1er mai",
@@ -152,10 +152,10 @@
     "suggestionsTitle": "Suggestions de YouBan :"
   },
   "app": {
-    "title": "YouBan · Agent de voyage IA",
+    "title": "YouBan",
     "brand": "YouBan",
-    "subBrand": "YouBan · Moteur de voyage IA",
-    "badge": "Agent de voyage IA",
+    "subBrand": "YouBan · Planificateur de voyage",
+    "badge": "Planificateur de voyage",
     "navigation": {
       "home": "Retour à l'accueil"
     },
@@ -228,7 +228,7 @@
     "nicknameDivider": "ou connectez-vous avec WeChat",
     "loggingIn": "Connexion…",
     "miniFailed": "Échec de la connexion WeChat",
-    "miniAgentLabel": "Agent de voyage IA",
+    "miniAgentLabel": "Compagnon de voyage",
     "miniAgentHint": "Dites-moi où vous souhaitez aller. Je m'occupe de la planification.",
     "miniTitle": "Bonjour, je suis YouBan",
     "miniDescription": "Après la connexion, je retiendrai vos préférences et créerai l'itinéraire, le budget et la carte.",
@@ -261,7 +261,7 @@
   "user": {
     "myMemories": "Mes souvenirs",
     "switchUser": "Changer d'utilisateur",
-    "memoriesTitle": "Ce que l'IA se souvient de vous",
+    "memoriesTitle": "Ce que YouBan retient de vos préférences",
     "memoriesEmpty": "Discutez avec moi de voyage et j'apprendrai vos goûts",
     "memoryDelete": "Supprimer",
     "memoryDeleted": "Supprimé",
@@ -663,9 +663,9 @@
     }
   },
   "home": {
-    "heroBadge": "Moteur d'itinéraire intelligent IA",
+    "heroBadge": "Planificateur d'itinéraire intelligent",
     "titleLine": "Débloquez toutes les possibilités",
-    "heroDesc": "Indiquez votre destination et vos préférences, et l'IA créera un plan de voyage unique pour vous",
+    "heroDesc": "Indiquez votre destination et vos préférences, et je créerai un plan de voyage unique pour vous",
     "nav": {
       "cta": "Commencer la planification",
       "fogOn": "Brouillard activé",
@@ -716,7 +716,7 @@
     },
     "specialNeedsPlaceholder": "Indiquez vos besoins particuliers, par ex. voyage avec des seniors, envie de voir le lever du soleil, allergie au pollen...",
     "submit": "Commencer la planification",
-    "submitting": "L'IA planifie...",
+    "submitting": "Planification en cours...",
     "history": {
       "eyebrow": "Récemment enregistrés",
       "title": "Historique des plans",
@@ -739,7 +739,7 @@
       "generatingPlan": "Génération de l'itinéraire...",
       "planCode": "CODE DU PLAN {code}",
       "preparing": "Veuillez patienter, nous préparons votre voyage...",
-      "workingTogether": "Nos agents IA collaborent pour créer votre itinéraire...",
+      "workingTogether": "Nous préparons votre itinéraire...",
       "donePrepare": "Terminé ! Préparez-vous au départ...",
       "done": "Terminé !"
     },
@@ -994,9 +994,9 @@
     "noTripPlanDesc": "Aucun plan de voyage disponible, veuillez en créer un d'abord",
     "backCreateTrip": "Retour à l'accueil pour créer un voyage",
     "chat": {
-      "toggle": "IA en ligne",
+      "toggle": "En ligne",
       "title": "Questions-réponses sur l'itinéraire",
-      "welcome": "Bonjour ! Je suis YouBan AI. Posez-moi une question sur votre itinéraire, par exemple :",
+      "welcome": "Bonjour ! Je suis YouBan. Posez-moi une question sur votre itinéraire, par exemple :",
       "quickPriceLabel": "Prix des billets",
       "quickSuitabilityLabel": "Adapté aux seniors ?",
       "quickMealLabel": "Coût des repas",
@@ -1010,7 +1010,7 @@
     },
     "agent": {
       "collapse": "Réduire le chat",
-      "title": "Youban AI",
+      "title": "YouBan",
       "subtitle": "Posez-moi une question, ou laissez-moi modifier le voyage",
       "welcome": "Je suis votre concierge de voyage. Posez une question sur le voyage, ou laissez-moi modifier le plan directement, par exemple :",
       "quick1": "Échanger une attraction le jour 2",
@@ -1093,9 +1093,9 @@
       "imageOptionDescription": "Idéal pour le chat et le partage social",
       "pdfOption": "Document PDF",
       "pdfOptionDescription": "Idéal pour sauvegarder, imprimer et les groupes",
-      "pdfFooter": "YouBan · Guide de voyage IA",
+      "pdfFooter": "YouBan · Guide de voyage",
       "pageNumber": "Page {current} sur {total}",
-      "footer": "Généré par YouBan · Moteur de voyage IA",
+      "footer": "Généré par YouBan",
       "title": "Plan de voyage {city}",
       "subtitle": "{start} au {end} · {days} jours",
       "perNight": "/nuit",

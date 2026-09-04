@@ -152,10 +152,10 @@
     "suggestionsTitle": "游伴给你的建议："
   },
   "app": {
-    "title": "游伴 · AI 旅行智能体",
+    "title": "游伴",
     "brand": "游伴",
-    "subBrand": "游伴 · AI 旅行引擎",
-    "badge": "AI 文旅智能体",
+    "subBrand": "游伴 · 旅行规划",
+    "badge": "旅行规划",
     "navigation": {
       "home": "返回首页"
     },
@@ -228,7 +228,7 @@
     "nicknameDivider": "或使用微信扫码登录",
     "loggingIn": "正在登录…",
     "miniFailed": "微信登录失败",
-    "miniAgentLabel": "AI 旅行智能体",
+    "miniAgentLabel": "旅行搭子",
     "miniAgentHint": "告诉我想去哪里，剩下的规划交给我。",
     "miniTitle": "你好，我是游伴",
     "miniDescription": "登录后，我会记住你的旅行偏好，帮你生成行程、预算和地图。",
@@ -261,7 +261,7 @@
   "user": {
     "myMemories": "我的记忆",
     "switchUser": "切换用户",
-    "memoriesTitle": "AI 记住了你的这些偏好",
+    "memoriesTitle": "为你记住的旅行偏好",
     "memoriesEmpty": "陪我聊聊旅行,我会慢慢记住你的喜好",
     "memoryDelete": "删除",
     "memoryDeleted": "已删除",
@@ -633,9 +633,9 @@
     }
   },
   "home": {
-    "heroBadge": "AI 智能行程规划引擎",
+    "heroBadge": "智能行程规划",
     "titleLine": "探索世界的每一种可能",
-    "heroDesc": "告诉我你的目的地与偏好，AI 将为你定制一份独一无二的旅程方案",
+    "heroDesc": "告诉我你的目的地与偏好，我会为你定制一份独一无二的旅程方案",
     "nav": {
       "cta": "开始定制",
       "fogOn": "雾气开启",
@@ -686,7 +686,7 @@
     },
     "specialNeedsPlaceholder": "告诉我你的特殊需求，比如：带老人出行、想看日出、对花粉过敏……",
     "submit": "开始规划旅程",
-    "submitting": "AI 正在规划中…",
+    "submitting": "正在规划中…",
     "history": {
       "eyebrow": "最近保存",
       "title": "历史计划",
@@ -709,7 +709,7 @@
       "generatingPlan": "正在生成行程...",
       "planCode": "计划编号 {code}",
       "preparing": "请稍等，正在为您准备...",
-      "workingTogether": "AI 正在齐心协力为您定制旅程...",
+      "workingTogether": "正在为您定制旅程...",
       "donePrepare": "完成！准备出发...",
       "done": "完成！"
     },
@@ -964,9 +964,9 @@
     "noTripPlanDesc": "暂无旅行计划数据，请先创建行程",
     "backCreateTrip": "返回首页创建行程",
     "chat": {
-      "toggle": "AI 在线",
+      "toggle": "在线",
       "title": "行程智能问答",
-      "welcome": "您好！我是游伴 AI，可以问我关于行程的任何问题，例如：",
+      "welcome": "您好！我是游伴，可以问我关于行程的任何问题，例如：",
       "quickPriceLabel": "票价查询",
       "quickSuitabilityLabel": "适合老人？",
       "quickMealLabel": "餐饮价格",
@@ -980,7 +980,7 @@
     },
     "agent": {
       "collapse": "收起对话",
-      "title": "游伴 AI",
+      "title": "游伴",
       "subtitle": "问我问题,或直接让我改行程",
       "welcome": "我是你的旅行管家,可以回答行程问题,也可以直接帮你修改计划,例如:",
       "quick1": "把第2天的某个景点换成别的",
@@ -1063,9 +1063,9 @@
       "imageOptionDescription": "适合微信和社交平台分享",
       "pdfOption": "PDF 文档",
       "pdfOptionDescription": "适合保存、打印和多人传阅",
-      "pdfFooter": "游伴 · AI 旅行攻略",
+      "pdfFooter": "游伴 · 旅行攻略",
       "pageNumber": "第 {current} / {total} 页",
-      "footer": "由 游伴 · AI 旅行引擎 生成",
+      "footer": "由游伴生成",
       "title": "{city} 旅行计划",
       "subtitle": "{start} 至 {end} · {days} 天行程",
       "perNight": "/晚",

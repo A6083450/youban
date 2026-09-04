@@ -94,7 +94,7 @@ async function loginMiniProgram(): Promise<void> {
 
       <template v-else>
         <view class="sheet-kicker-row">
-          <text class="sheet-kicker-mark">AI</text>
+          <text class="sheet-kicker-mark">游</text>
           <text class="sheet-kicker">{{ t('login.sheetKicker') }}</text>
         </view>
         <view class="sheet-title">
