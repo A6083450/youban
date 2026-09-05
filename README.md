@@ -1,11 +1,11 @@
-# 游伴 AI 旅行助手
+# 游伴
 
 <p align="center">
   <img src="frontend/src/static/brand-logo.svg" alt="游伴 Logo" width="120">
 </p>
 
 <p align="center">
-  <strong>🤖 基于大语言模型的智能旅行规划助手</strong>
+  <strong>智能旅行规划助手 · PC Web、移动 H5 与微信小程序</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <a href="#-应用展示">应用展示</a> •
   <a href="#-快速开始">快速开始</a> •
   <a href="#-技术架构">技术架构</a> •
-  <a href="#-部署指南">部署指南</a>
+  <a href="#-docker-部署">部署指南</a>
 </p>
 
 ---
@@ -48,18 +48,17 @@
 
 ---
 
-## 🆕 本次更新
+## 🆕 2.0.12 更新
 
-- **统一前端**：PC Web、移动 H5 和微信小程序已迁移到同一个 unibest/uni-app 工程，共用业务模型、接口契约和多语言资源。
-- **微信小程序**：行程、地图、今日、预算、天气和分享均由 uni-app 原生页面承载，不再以 WebView 作为主流程。
-- **统一认证**：Web 端生成微信小程序码，扫码后在原生小程序确认页显式授权；同一小程序的 `wx.login` 与 UnionID 关联账号。
-- **账号偏好**：语言、主题和显示偏好按账号保存，Web 与小程序支持中文、英文和法文。
-- **酒店参考价**：可选展示飞猪提供的预估每晚参考价、来源链接和查询时间；无可靠报价时保持待填写。
-- **规划首页**：进行中旅程可以直接回到今日行程。
-- **今日行程**：按实际执行进度打卡、跳过并查看当天回响。
-- **行程总览**：旅行蓝图、路线脉络和代表体验集中展示。
-- **出行衔接**：每日地点支持一键导航，完整行程可导出为日历文件。
-- **生成体验**：使用当前品牌化加载状态，并保留任务恢复与失败重试能力。
+当前源码版本为 **2.0.12**，前端、后端与共享契约版本保持一致；小程序 `versionCode` 为 `212`。源码版本不代表微信审核或正式发布状态。
+
+- **统一品牌与三端体验**：产品名称统一为「游伴」，PC Web、移动 H5 和微信小程序共用业务模型与中英法三语资源。
+- **微信一键登录**：不再要求先选择头像；网页仍通过小程序扫码并显式确认登录，账号设置保留头像修改能力。
+- **登录后继续规划**：小程序未登录时保留待发送的旅行需求，登录成功后继续发送。
+- **完整生成进度**：展示阶段、当前步骤与详细事件，保留任务恢复、失败重试和进度自动跟随。
+- **行程与地图**：完善真机日期、金额和天气展示兼容性，以及地图切换、路线展示和移动端布局。
+- **分享与历史行程**：只读分享页适配小程序顶部安全区，已登录用户可返回自己的行程列表。
+- **开发与部署**：H5 开发通过同源代理处理认证 Cookie；Docker 构建保留类型检查与运行时导入验证，全量测试在构建前单独执行。
 
 ---
 
@@ -79,19 +78,19 @@
   <img src="imgs/pc/requirements-confirmation.png" alt="对话确认" width="800">
 </p>
 
-#### 4. 生成行程 - 清晰展示当前规划进度
+#### 3. 生成行程 - 清晰展示当前规划进度
 
 <p align="center">
   <img src="imgs/pc/generation-progress.png" alt="生成行程" width="800">
 </p>
 
-#### 5. 行程总览 - 从旅行蓝图把握整段旅程
+#### 4. 行程总览 - 从旅行蓝图把握整段旅程
 
 <p align="center">
   <img src="imgs/pc/trip-overview.png" alt="行程总览" width="800">
 </p>
 
-#### 6. 详细日程 - 查看安排、发起导航并加入日历
+#### 5. 详细日程 - 查看安排、发起导航并加入日历
 
 <p align="center">
   <img src="imgs/pc/daily-itinerary.png" alt="详细日程" width="800">
@@ -131,10 +130,10 @@
 - **行程调整** - 随时通过对话修改行程
 
 ### 📲 微信小程序与统一账号
-- **显式头像登录** - 用户主动选择微信头像并完成上传后才进入账号，不按昵称静默合并身份
+- **微信一键登录** - 用户主动点击登录，通过 `wx.login` 建立账号会话，无需先选择头像；头像可在账号设置中修改
 - **Web 小程序码登录** - 网站只展示服务端生成的小程序码；扫码后必须在原生确认页主动确认，个人主体无需网站应用认证
 - **浏览器绑定挑战** - 五分钟单次挑战只允许创建它的浏览器兑换，校验凭据只保存在 HttpOnly Cookie 中
-- **UnionID 统一身份** - 新用户先主动选择微信头像完成注册，再确认网页登录；同一微信账号继续进入同一业务账号
+- **UnionID 统一身份** - 同一小程序的 OpenID 与可用的 UnionID 用于关联业务账号，不按昵称合并身份
 - **会话管理** - 小程序和 Web 会话分别签发，可查看并撤销其他设备会话
 - **公开路由** - 隐私说明与只读分享保持公开，其余个人行程、对话和偏好均要求认证
 - **原生系统能力** - 小程序直接使用原生地图、分享、相册和日历能力；H5 使用浏览器下载、剪贴板与打印能力
@@ -161,7 +160,7 @@
 - **历史记录** - 保存所有行程规划
 - **行程编辑** - 随时修改已规划行程
 - **收藏功能** - 收藏喜欢的行程
-- **导出功能** - 导出行程为图片
+- **导出功能** - Web 支持图片与 PDF，小程序支持保存行程图片
 - **一键导航** - 从每日地点直接发起导航
 - **日历导出** - 将完整行程加入日历
 - **今日反馈** - 记录打卡和跳过后的当天回响
@@ -207,16 +206,16 @@ cd ../backend && bun run browser:skills-fixture
 
 | 技术 | 版本 | 说明 |
 |------|------|------|
-| [unibest](https://github.com/feige996/unibest) | 1.x | PC Web、H5 与小程序的统一工程骨架 |
+| [unibest](https://github.com/feige996/unibest) | 4.4.1 | PC Web、H5 与小程序的统一工程骨架 |
 | [uni-app](https://uniapp.dcloud.net.cn/) | Vue 3 | 跨端页面、生命周期与平台 API |
 | [Vue 3](https://vuejs.org/) | 3.4+ | 页面与组件运行时 |
-| [TypeScript](https://www.typescriptlang.org/) | 5.8+ | 跨端业务与接口契约 |
+| [TypeScript](https://www.typescriptlang.org/) | 5.5.4 | 跨端业务与接口契约 |
 | [Vite](https://vitejs.dev/) | 5.2+ | H5 与小程序构建工具 |
 | [Wot UI](https://wot-ui.cn/) / UnoCSS | - | 跨端组件与样式体系 |
-| [Pinia](https://pinia.vuejs.org/) | 3.x | 跨端状态管理 |
+| [Pinia](https://pinia.vuejs.org/) | 2.0.36 | 跨端状态管理 |
 | [高德地图 JS API](https://lbs.amap.com/) | - | 国内地图服务 |
-| [vue-i18n](https://vue-i18n.intlify.dev/) | 9.14+ | 国际化插件 |
-| [Playwright](https://playwright.dev/) | 1.62+ | 端到端与响应式布局测试 |
+| [vue-i18n](https://vue-i18n.intlify.dev/) | 9.1.9 | 国际化插件 |
+| [Vitest](https://vitest.dev/) | 3.2.4 | 业务逻辑、组件与跨端兼容回归测试 |
 
 ### 后端技术栈
 
@@ -243,7 +242,7 @@ cd ../backend && bun run browser:skills-fixture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        用户浏览器                            │
+│                  用户浏览器 / 微信小程序                     │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
@@ -253,7 +252,7 @@ cd ../backend && bun run browser:skills-fixture
 │  │ 对话界面 │  │ 行程展示 │  │ 地图组件 │  │ 管理后台 │       │
 │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
 └─────────────────────────┬───────────────────────────────────┘
-                          │ HTTP/WebSocket
+                          │ HTTP / SSE / WebSocket
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                 后端 (Bun 1.4 + Elysia)                     │
@@ -279,8 +278,8 @@ cd ../backend && bun run browser:skills-fixture
           ▼               ▼               ▼
     ┌──────────┐   ┌──────────┐   ┌──────────┐
     │ LLM API  │   │ 地图 API │   │ 数据存储  │
-    │ (OpenAI) │   │ (高德/   │   │ (SQLite)  │
-    │          │   │ Google)  │   │          │
+    │ (OpenAI) │   │  (高德)  │   │ (SQLite)  │
+    │          │   │          │   │          │
     └──────────┘   └──────────┘   └──────────┘
 ```
 
@@ -293,7 +292,10 @@ cd ../backend && bun run browser:skills-fixture
 - Bun 1.4+
 - Node.js 20+ 与 pnpm 10+
 - LLM API Key（OpenAI 或兼容 API）
-- 高德地图 API Key（可选，国内地图服务）
+- 高德地图 Web 服务 Key；Web 地图展示另需 JS API Key
+- 真实微信登录需要小程序 AppID、AppSecret 与至少 32 字节的 `AUTH_PEPPER`；仅模拟器联调可使用下文开发模式
+
+除克隆步骤外，以下各终端命令均从仓库根目录开始执行。
 
 ### 1. 克隆项目
 
@@ -321,7 +323,16 @@ OPENAI_MODEL=gpt-4
 # 高德地图 API（必填，用于国内地图服务）
 VITE_AMAP_WEB_JS_KEY=your_amap_web_js_key
 VITE_AMAP_WEB_KEY=your_amap_web_key
+
+# 真实微信登录（服务端配置，不要写入前端）
+WECHAT_APP_ID=your_miniprogram_app_id
+WECHAT_APP_SECRET=your_miniprogram_app_secret
+AUTH_PEPPER=your_random_value_at_least_32_bytes
 ```
+
+`AUTH_PEPPER` 应使用 `openssl rand -hex 32` 生成的随机值替换。自有小程序还需将
+`frontend/env/.env` 中的 `VITE_WX_APPID` 设为同一 AppID。
+后台保存的非空运行时配置优先于环境变量，调整 `.env` 后如未生效，请检查后台设置。
 
 ### 3. 启动后端
 
@@ -331,11 +342,12 @@ pnpm install --frozen-lockfile --ignore-scripts
 
 cd ../../backend
 bun install --frozen-lockfile
-bun run dev
+bun --env-file=../.env run dev
 ```
 
 共享契约以本地包方式同时供前后端使用，因此首次检出或清理依赖后，必须先安装
-`shared/contracts` 自身的运行时依赖。
+`shared/contracts` 自身的运行时依赖。显式加载仓库根目录的 `.env` 后，后端使用示例配置中的
+`7860` 端口；未设置 `PORT` 时默认使用 `8000`。
 
 ### 4. 启动前端
 
@@ -349,22 +361,38 @@ pnpm install --frozen-lockfile
 VITE_SERVER_BASEURL=http://127.0.0.1:7860 pnpm dev:h5
 ```
 
-访问 http://localhost:9000 即可使用。
+访问 http://localhost:9000 即可使用。开发模式已启用 `/api` 同源代理，网页扫码登录及状态轮询
+通过同一浏览器来源携带 Cookie；不要将前端环境变量当作服务端密钥配置。
 
 ### 5. 启动微信小程序
 
-需要在微信开发者工具中调试小程序时，先启动专用本地后端，再从同一工程构建微信目标：
+从同一前端工程构建微信目标：
+
+```bash
+cd frontend
+pnpm dev:mp-weixin
+```
+
+微信开发者工具导入 `frontend/dist/dev/mp-weixin`。仓库默认连接 `https://youban.me`；自有部署需修改
+`frontend/env/.env` 中的 `VITE_SERVER_BASEURL`、`VITE_SERVER_BASEURL__WEIXIN_TRIAL` 和
+`VITE_SERVER_BASEURL__WEIXIN_RELEASE`，并在微信后台配置对应的合法域名。
+
+仅在开发者工具中联调本地后端时，在另一终端启动：
 
 ```bash
 cd backend
-bun run dev:wechat
-
-cd ../frontend
-VITE_SERVER_BASEURL__WEIXIN_DEVELOP=http://127.0.0.1:7860 pnpm dev:mp-weixin
+bun --env-file=../.env run dev:wechat
 ```
 
-微信开发者工具导入 `frontend/dist/dev/mp-weixin`。该模式把本地 `wx.login`
-临时代码映射到固定测试身份，便于模拟器联调；
+随后在开发者工具的 AppService 控制台设置地址并重新编译：
+
+```javascript
+wx.setStorageSync('youban.v2.api-base-url', 'http://127.0.0.1:7860')
+```
+
+本地模式无需 AppSecret，会把 `wx.login` 临时代码映射到固定测试身份，不能用于验收真实账号隔离或网页扫码登录。
+调试结束后使用 `wx.removeStorageSync('youban.v2.api-base-url')` 并重新编译恢复默认地址。
+真机忽略该本地缓存覆盖；预览、体验版与正式版均应连接可访问的 HTTPS 服务。
 `production` 环境会拒绝 `YOUBAN_DEV_WECHAT_AUTH=1`。
 
 ### 6. 运行验证
@@ -390,14 +418,13 @@ pnpm build:mp-weixin
 ## 🐳 Docker 部署
 
 `Dockerfile.ts` 是当前生产镜像，构建同源 H5 产物并由 Bun/Elysia 托管。
+镜像构建不再重复运行全量测试，发布前需先完成上方验证。以下命令假设已填写根目录 `.env` 中的真实认证与模型配置。
 
 ```bash
 docker build -f Dockerfile.ts -t youban-trip-planner-ts .
 
 docker run -p 7860:7860 \
-  -e OPENAI_API_KEY=your_key \
-  -e OPENAI_BASE_URL=https://api.openai.com/v1 \
-  -e OPENAI_MODEL=gpt-4 \
+  --env-file .env \
   -v "$PWD/data:/app/data" \
   youban-trip-planner-ts
 ```
@@ -407,7 +434,7 @@ docker run -p 7860:7860 \
 不需要网站应用认证、网站 AppSecret 或 OAuth 回调。完整切换和回滚步骤见
 [`PRODUCTION_CUTOVER.md`](PRODUCTION_CUTOVER.md)。
 
-本地微信小程序开发不需要 AppSecret；开发者工具的启动方式见上方“快速开始”。
+仅固定测试身份的本地开发模式不需要 AppSecret；开发者工具的启动方式见上方“快速开始”。
 
 ---
 
@@ -478,9 +505,8 @@ youban/
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
 | `HOST` | 服务监听地址 | `0.0.0.0` |
-| `PORT` | 服务监听端口 | `7860` |
-| `LOG_LEVEL` | 日志级别 | `INFO` |
-| `DATA_DIR` | 数据存储目录 | `./data` |
+| `PORT` | 服务监听端口；`.env.example` 与 Docker 使用 `7860` | `8000` |
+| `DATA_DIR` | 数据存储目录 | 仓库根目录下的 `data/` |
 
 ### 微信认证配置
 
@@ -511,27 +537,33 @@ youban/
 
 ## 📖 API 文档
 
-启动后端服务后，访问以下地址查看 API 文档：
+按上方 `.env` 的 `7860` 端口启动后，访问以下地址：
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **交互式 API 文档**: http://localhost:7860/docs
+- **OpenAPI JSON**: http://localhost:7860/docs/json
+- **健康检查**: http://localhost:7860/health
+
+统一前端使用 `/api/v2` 前缀；后端仍保留 `/api` 兼容路由，自动生成的 OpenAPI 主要列出这些兼容路径。
+下面列出统一前端使用的端点，完整请求与响应定义见 `shared/contracts`。
 
 ### 主要 API 端点
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/trip/plan` | POST | 生成行程规划 |
-| `/api/trip/parse/stream` | POST | 流式理解旅行需求 |
-| `/api/trip/ws/{task_id}` | WebSocket | 订阅规划进度和最终结果 |
-| `/api/trip/share/{task_id}` | POST | 计划拥有者生成或复用分享码 |
-| `/api/trip/share/{share_code}` | GET | 凭分享码读取只读最终行程 |
-| `/api/chat/ask` | POST | 针对已有计划问答 |
-| `/api/chat/edit/stream` | POST | 流式修改已有计划 |
-| `/api/poi/search` | GET | POI 搜索 |
-| `/api/admin/settings` | GET/PUT | 管理员运行时配置 |
-| `/api/admin/skills` | GET | 查询 Skill 目录、状态与能力 |
-| `/api/admin/skills/upload` | POST | 上传 ZIP 并创建停用候选版本 |
-| `/api/admin/skills/git` | POST | 从受控 HTTPS Git 来源创建停用候选版本 |
+| `/api/v2/auth/wechat/login` | POST | 小程序以 `wx.login` 临时代码登录 |
+| `/api/v2/auth/web/challenges` | POST | 创建浏览器绑定的扫码登录挑战 |
+| `/api/v2/trip/plan` | POST | 生成行程规划 |
+| `/api/v2/trip/parse/stream` | POST | 流式理解旅行需求 |
+| `/api/v2/trip/ws/{task_id}` | WebSocket | 订阅规划进度和最终结果 |
+| `/api/v2/trip/share/{task_id}` | POST | 计划拥有者生成或复用分享码 |
+| `/api/v2/trip/share/{share_code}` | GET | 凭分享码读取只读最终行程 |
+| `/api/v2/chat/ask` | POST | 针对已有计划问答 |
+| `/api/v2/chat/edit/stream` | POST | 流式修改已有计划 |
+| `/api/v2/poi/search` | GET | POI 搜索 |
+| `/api/v2/admin/settings` | GET/PUT | 管理员运行时配置 |
+| `/api/v2/admin/skills` | GET | 查询 Skill 目录、状态与能力 |
+| `/api/v2/admin/skills/upload` | POST | 上传 ZIP 并创建停用候选版本 |
+| `/api/v2/admin/skills/git` | POST | 从受控 HTTPS Git 来源创建停用候选版本 |
 
 ---
 
